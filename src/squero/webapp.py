@@ -264,10 +264,25 @@ class Block(BaseModel):
     end: str
 
 
+class Backtest(BaseModel):
+    """A Weekly profile's Backtest (slice 14.4): the newest week against a profile built
+    from the weeks before it."""
+
+    state: Literal["waiting", "within", "over"]  # waiting: under four stored weeks
+    error: float | None = None  # few + many
+    few: float | None = None  # replica-hours too few, as a share of those needed
+    many: float | None = None
+    hours: int | None = None  # of the newest week replayed
+    replicas: float | None = None  # the too many, on average
+    excess: dict[str, float] | None = None  # those replicas at their Sizings
+    cost: float | None = None  # a month of them, with a priced Contract
+
+
 class Profile(BaseModel):
     """A Workload's Weekly profile (slice 14.2)."""
 
-    state: Literal["ready", "learning", "flat"]
+    # irregular: its Backtest is over the budget, so it has no blocks: the Floor holds
+    state: Literal["ready", "learning", "flat", "irregular"]
     timezone: str
     lead_time: int  # seconds a block that asks more starts early
     history_h: float
@@ -275,6 +290,7 @@ class Profile(BaseModel):
     blocks: list[Block] = []
     triggers: str | None = None  # KEDA: cron triggers to paste into its ScaledObject
     note: str | None = None  # a plain HPA: why there is none
+    backtest: Backtest | None = None
 
 
 class Floor(BaseModel):

@@ -100,11 +100,19 @@ test("autoscaled Workloads show their Floor, its saving and its risks as text", 
     { ...where, workload: "kind/lab/Deployment/api", name: "api", minimum: 4, maximum: 9, state: "ready", history_h: 120, needs_h: 24, floor: 2, replicas: 1.5, saving: { cpu: 0.3, memory: GI }, cost: 12.5,
       profile: { state: "ready", timezone: "Europe/Rome", lead_time: 900, history_h: 600, needs_h: 504, note: null,
         blocks: [{ since: "Mon 08:45", until: "Mon 12:00", replicas: 7, start: "45 8 * * 1", end: "0 12 * * 1" }],
-        triggers: "- type: cron\n  metadata: <i>x</i>" } },
+        triggers: "- type: cron\n  metadata: <i>x</i>",
+        backtest: { state: "within", error: 0.12, few: 0.04, many: 0.08, hours: 168, replicas: 0.4, excess: { cpu: 0.1, memory: GI }, cost: 3.1 } } },
     { ...where, workload: "kind/lab/Deployment/web", name: "web", minimum: 2, maximum: 5, state: "ready", history_h: 48, needs_h: 24, floor: 3, risks: [{ kind: "minimum_below_floor", text: "its minimum of 2 is <b>low</b>" }],
       profile: { state: "flat", timezone: "UTC", lead_time: 900, history_h: 600, needs_h: 504, blocks: [], triggers: null, note: null } },
     { ...where, workload: "kind/lab/Deployment/new", name: "new", minimum: 2, maximum: 5, state: "learning", history_h: 3, needs_h: 24 },
     { ...where, workload: "kind/lab/Deployment/queue", name: "queue", minimum: 1, maximum: 5, state: "none", why: "it scales to zero: left alone" },
+    { ...where, workload: "kind/lab/Deployment/odd", name: "odd", hpa: "keda-hpa-odd", minimum: 2, maximum: 5, state: "ready", history_h: 168, needs_h: 24, floor: 2,
+      profile: { state: "irregular", timezone: "UTC", lead_time: 900, history_h: 672, needs_h: 504, blocks: [], triggers: null, note: null,
+        backtest: { state: "over", error: 0.34, few: 0.21, many: 0.13, hours: 168, replicas: 0.4, excess: { cpu: 0.1, memory: GI }, cost: 3.1 } } },
+    { ...where, workload: "kind/lab/Deployment/young", name: "young", minimum: 2, maximum: 5, state: "ready", history_h: 168, needs_h: 24, floor: 2,
+      profile: { state: "ready", timezone: "UTC", lead_time: 0, history_h: 504, needs_h: 504, triggers: null, note: null,
+        blocks: [{ since: "Tue 08:00", until: "Tue 12:00", replicas: 4, start: "0 8 * * 2", end: "0 12 * * 2" }],
+        backtest: { state: "waiting" } } },
     { ...where, workload: "kind/other/Deployment/far", namespace: "other", name: "far", minimum: 1, maximum: 5, state: "none", why: "elsewhere" },
   ];
   const floors_total = { workloads: 1, replicas: 1.5, saving: { cpu: 0.3, memory: GI }, cost: 12.5 };
@@ -116,7 +124,7 @@ test("autoscaled Workloads show their Floor, its saving and its risks as text", 
   const { container: page } = render(<App />);
   await screen.findByText("Autoscaled Workloads");
   const lines = [...page.querySelectorAll(".floors > ul > li")].map((li) => li.textContent);
-  expect(lines).toHaveLength(4); // the other namespace's is filtered out with the Workloads
+  expect(lines).toHaveLength(6); // the other namespace's is filtered out with the Workloads
   expect(lines[0]).toContain("Deployment/api kind/lab: Floor 2; its HPA h has a minimum of 4 and a maximum of 9");
   expect(lines[0]).toContain("1.5 replicas fewer on average, 12.50 EUR/month");
   expect(lines[0]).toContain("(production: the lowest 10% of 120 h of Needs)");
@@ -131,6 +139,14 @@ test("autoscaled Workloads show their Floor, its saving and its risks as text", 
   expect(page.querySelector(".floors pre i")).toBeNull();
   expect(lines[1]).toContain("No weekly pattern: its Floor holds all week.");
   expect(lines[2]).not.toContain("Weekly profile");
+  // slice 14.4: the Backtest beside the profile, or in its place over the budget
+  expect(lines[0]).toContain("Backtest: off by 12% last week (too few 4%, too many 8%: 3.10 EUR/month).");
+  expect(lines[4]).toContain("Load isn't weekly enough: off by 34% last week (too few 21%, too many 13%); it keeps its Floor.");
+  expect(lines[4]).not.toContain("Weekly profile");
+  expect(lines[4]).not.toContain("EUR");
+  expect(lines[5]).toContain("Tue 08:00 to Tue 12:00: 4 replicas");
+  expect(lines[5]).toContain("Not backtested yet (needs four weeks).");
+  expect(lines[1]).not.toContain("acktest");
   expect(page.querySelector(".floors .total")?.textContent).toContain("Floors: 1 can lower their HPA minimum, 1.5 replicas fewer on average: 12.50 EUR/month");
 });
 

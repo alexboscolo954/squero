@@ -170,8 +170,12 @@ The minimum replicas the Hub computes for a Workload with an autoscaler: a low p
 _Avoid_: minReplicas (that is the HPA's own setting), baseline
 
 **Weekly profile**:
-A Workload's Floors by hour of the week: for each hour, the median of that hour's Need across the stored weeks (three at least), never below its Floor, shown as blocks of hours in the Contract's `sizing.timezone`, each starting `sizing.lead_time` early. For a KEDA Workload each block comes as a `cron` trigger to paste; an HPA has no schedule of its own.
+A Workload's Floors by hour of the week: for each hour, the median of that hour's Need across the stored weeks (three at least), never below its Floor, shown as blocks of hours in the Contract's `sizing.timezone`, each starting `sizing.lead_time` early, and checked by its Backtest. For a KEDA Workload each block comes as a `cron` trigger to paste; an HPA has no schedule of its own.
 _Avoid_: schedule (the Hub schedules nothing), forecast
+
+**Backtest**:
+The check of a Weekly profile against a week it has not seen: the newest stored week replayed hour by hour against a profile built from the weeks before it (three at least, so four stored weeks in all). In each hour the Workload needed the larger of its Floor and its Need rounded up; the error is the replica-hours the profile was off by, too few plus too many, as a share of the replica-hours needed. Within the budget (20%) the profile shows with its error and what the too many would cost; over it the Workload shows "load isn't weekly enough" and keeps only its Floor. Before four weeks the profile shows as not backtested yet.
+_Avoid_: forecast accuracy, validation
 
 **Sizing**:
 The CPU and memory requests the Hub computes for one container of a Workload from its usage under a Sizing policy, with the risks it can't fix (a limit too low, throttling or OOM kills hiding real demand). Limits are kept. A container with less *history* than its policy needs (a day under production) is still *learning* and has none; its history is the time its cluster's Prometheus has usage for, from the container's first sample to its last in the policy's window, so a gap in Prometheus counts for nothing and a CronJob between its runs still counts. A Sizing whose history falls under what its policy needs (after a long gap) is learning again. Read-only unless the Operator approves it or the Workload is under Automation. A Sizing that would change a request an HPA divides by (a `Utilization` target on cpu or memory) is *held by its HPA*: the Actuator leaves that request alone, since changing it would change the replica count, until the HPA's target is an `AverageValue`, which the Hub gives as the same threshold in absolute terms. Its Waste still counts.

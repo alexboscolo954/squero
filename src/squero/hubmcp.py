@@ -201,8 +201,10 @@ def build(
         request its HPA divides by, which the Actuator leaves alone, with the manifest
         change that frees it. floors: for each Workload with an HPA, the minimum
         replicas its stored Needs support, against the HPA's minimum today, and its
-        Weekly profile (blocks of hours that need more, KEDA cron triggers). risky:
-        only Workloads with a risk (an OOM kill, throttling, restarts)."""
+        Weekly profile (blocks of hours that need more, KEDA cron triggers) with its
+        Backtest: how far off it was last week, or that the load isn't weekly enough
+        for one. risky: only Workloads with a risk (an OOM kill, throttling,
+        restarts)."""
         c = resolve(contract)
 
         async def work() -> dict[str, Any]:
@@ -237,7 +239,7 @@ def build(
                 "workloads": [_workload(x, approved) for x in found[:top]],
                 # slice 14.1b: each autoscaled Workload's Floor against its HPA's minimum
                 "floors": [
-                    "\n".join([floor_text(shown, w.currency), *profile_lines(shown)])
+                    "\n".join([floor_text(shown, w.currency), *profile_lines(shown, w.currency)])
                     for f in w.floors
                     for shown in [f.model_dump(exclude_none=True)]
                     if wanted in (None, f.cluster) and space in (None, f.namespace)

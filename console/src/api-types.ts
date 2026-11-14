@@ -516,6 +516,34 @@ export interface components {
             kill_switch: boolean;
         };
         /**
+         * Backtest
+         * @description A Weekly profile's Backtest (slice 14.4): the newest week against a profile built
+         *     from the weeks before it.
+         */
+        Backtest: {
+            /** Cost */
+            cost?: number | null;
+            /** Error */
+            error?: number | null;
+            /** Excess */
+            excess?: {
+                [key: string]: number;
+            } | null;
+            /** Few */
+            few?: number | null;
+            /** Hours */
+            hours?: number | null;
+            /** Many */
+            many?: number | null;
+            /** Replicas */
+            replicas?: number | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "waiting" | "within" | "over";
+        };
+        /**
          * Bill
          * @description A billed cluster's cloud bill beside its estimate; `note` says why there is none.
          */
@@ -1182,6 +1210,7 @@ export interface components {
          * @description A Workload's Weekly profile (slice 14.2).
          */
         Profile: {
+            backtest?: components["schemas"]["Backtest"] | null;
             /**
              * Blocks
              * @default []
@@ -1199,7 +1228,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "ready" | "learning" | "flat";
+            state: "ready" | "learning" | "flat" | "irregular";
             /** Timezone */
             timezone: string;
             /** Triggers */

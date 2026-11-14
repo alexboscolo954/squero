@@ -241,6 +241,14 @@ function AgendaPanel({ contract }: { contract: string }) {
   );
 }
 
+// A Weekly profile's Backtest (slice 14.4) in words, left open for what its too many cost.
+function off(b: { few?: number | null; many?: number | null }): string {
+  const few = Math.round((b.few ?? 0) * 100);
+  const many = Math.round((b.many ?? 0) * 100);
+  // the total as the sum of its parts as shown, so the line adds up
+  return `off by ${few + many}% last week (too few ${few}%, too many ${many}%`;
+}
+
 // Workloads with an autoscaler (slice 14.1b): each one's Floor against its HPA's minimum
 // today, a saving when the Floor is lower, a risk when it is higher.
 function Floors({ data, cluster, namespace }: { data: Workloads; cluster: string; namespace: string }) {
@@ -302,6 +310,11 @@ function Floors({ data, cluster, namespace }: { data: Workloads; cluster: string
               </div>
             )}
             {f.profile?.state === "flat" && <div className="hint">No weekly pattern: its Floor holds all week.</div>}
+            {f.profile?.state === "irregular" && f.profile.backtest && (
+              <div className="hint">
+                Load isn't weekly enough: {off(f.profile.backtest)}); it keeps its Floor.
+              </div>
+            )}
             {f.profile?.state === "ready" && (
               <div className="profile">
                 Weekly profile ({f.profile.timezone}
@@ -313,6 +326,21 @@ function Floors({ data, cluster, namespace }: { data: Workloads; cluster: string
                     </li>
                   ))}
                 </ul>
+                {f.profile.backtest?.state === "waiting" && (
+                  <div className="hint">Not backtested yet (needs four weeks).</div>
+                )}
+                {f.profile.backtest?.state === "within" && (
+                  <div className="hint">
+                    Backtest: {off(f.profile.backtest)}
+                    {!!f.profile.backtest.many &&
+                      `: ${
+                        f.profile.backtest.cost != null && data.currency
+                          ? money(f.profile.backtest.cost, data.currency)
+                          : `${cores(f.profile.backtest.excess?.cpu ?? 0)}, ${gib(f.profile.backtest.excess?.memory ?? 0)}`
+                      }`}
+                    ).
+                  </div>
+                )}
                 {f.profile.note && <div className="hint">{f.profile.note}</div>}
                 {f.profile.triggers && (
                   <details>

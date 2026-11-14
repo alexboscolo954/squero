@@ -315,6 +315,7 @@ def test_a_profile_reads_as_lines_under_its_floor() -> None:
     assert sizing.profile_lines(f) == [
         "  Weekly profile (UTC, each rise 15 min early):",
         "    Mon 08:45 to Mon 12:00: 7 replicas",
+        "    not backtested yet (needs four weeks)",  # slice 14.4
         "    an HPA has no schedule of its own: something else has to hold these replicas "
         "(KEDA's cron trigger does)",
     ]
@@ -324,7 +325,7 @@ def test_a_profile_reads_as_lines_under_its_floor() -> None:
         lines[0] == "  Weekly profile (UTC):"
         and lines[1] == "    Mon 08:00 to Mon 09:00: 3 replicas"
     )
-    assert lines[8:11] == [
+    assert lines[9:12] == [
         "    # ScaledObject shop/api (KEDA): cron triggers, beside its others.",
         "    # Each holds at least that many replicas in its window; the most asked for wins.",
         "    - type: cron",
@@ -370,7 +371,10 @@ def test_the_workloads_route_gives_each_floors_profile(
         "end": "0 12 * * 1",
     }
     assert api["profile"]["triggers"] == keda["profile"]["triggers"]
-    assert web["profile"] == {**young["profile"], "blocks": [], "triggers": None, "note": None}
+    assert web["profile"] == {
+        **young["profile"],
+        **{"blocks": [], "triggers": None, "note": None, "backtest": None},
+    }
     assert (
         webapp.Floor.model_validate({**floor_with("api", stored(hours=10)), "at": NOW}).profile
         is None

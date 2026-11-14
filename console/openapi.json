@@ -146,6 +146,105 @@
         "title": "AutomationPage",
         "type": "object"
       },
+      "Backtest": {
+        "description": "A Weekly profile's Backtest (slice 14.4): the newest week against a profile built\nfrom the weeks before it.",
+        "properties": {
+          "cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "excess": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excess"
+          },
+          "few": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Few"
+          },
+          "hours": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hours"
+          },
+          "many": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Many"
+          },
+          "replicas": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replicas"
+          },
+          "state": {
+            "enum": [
+              "waiting",
+              "within",
+              "over"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "Backtest",
+        "type": "object"
+      },
       "Bill": {
         "description": "A billed cluster's cloud bill beside its estimate; `note` says why there is none.",
         "properties": {
@@ -2259,6 +2358,16 @@
       "Profile": {
         "description": "A Workload's Weekly profile (slice 14.2).",
         "properties": {
+          "backtest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Backtest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "blocks": {
             "default": [],
             "items": {
@@ -2294,7 +2403,8 @@
             "enum": [
               "ready",
               "learning",
-              "flat"
+              "flat",
+              "irregular"
             ],
             "title": "State",
             "type": "string"

@@ -275,13 +275,19 @@ def test_sizings_list_each_autoscaled_workloads_floor_masked_and_filtered(
     other = {**floor, "workload": "test/other/Deployment/far", "namespace": "other", "name": "far"}
     weekly = {"state": "learning", "timezone": "UTC", "lead_time": 900}
     other["profile"] = {**weekly, "history_h": 100.0, "needs_h": 504.0}  # slice 14.2
+    test = {"state": "over", "error": 0.34, "few": 0.21, "many": 0.13, "hours": 168}
+    test |= {"replicas": 0.4, "excess": {"cpu": 0.04, "memory": 2.0**20}}
+    odd = {**weekly, "state": "irregular", "history_h": 672.0, "needs_h": 504.0}  # slice 14.4
+    odd |= {"blocks": [], "backtest": test}
     seed_run(database_url, "acme", row("api"))
 
     async def go() -> None:
         async with connect(database_url) as pool:
             store = Store(pool)
             await store.save_floors("acme", "test", NOW, [floor, other])
-            await store.save_floors("bank", "test", NOW, [{**floor, "floor": 9}])
+            await store.save_floors(
+                "bank", "test", NOW, [{**floor, "floor": 9, "hpa": "keda-hpa-api", "profile": odd}]
+            )
             far = {**floor, "workload": "edge/shop/Deployment/api", "cluster": "edge", "floor": 7}
             await store.save_floors("bank", "edge", NOW, [far])
 
@@ -289,6 +295,7 @@ def test_sizings_list_each_autoscaled_workloads_floor_masked_and_filtered(
     with hub(settings, fake_cluster, database_url, clusters_of_bank=True) as c:
         every = call(c, "sizings", contract="acme")
         edge = call(c, "sizings", contract="bank", cluster="edge")["floors"]
+        (irregular,) = call(c, "sizings", contract="bank", cluster="test")["floors"]
         in_shop = call(c, "sizings", contract="acme", namespace=mask("shop"))
         elsewhere = call(c, "sizings", contract="acme", cluster="test", namespace="nowhere")
     line = (
@@ -300,6 +307,43 @@ def test_sizings_list_each_autoscaled_workloads_floor_masked_and_filtered(
     (far,) = [f for f in every["floors"] if f != line]
     assert far.splitlines()[1] == "  Weekly profile learning (100 h of 504 h of Needs)"
     assert len(edge) == 1 and "Floor 7 " in edge[0]  # one cluster of the Contract's two
+    assert irregular.splitlines()[1:] == [  # over its Backtest's budget: no blocks, no triggers
+        "  load isn't weekly enough: off by 34% last week (too few 21%, too many 13%); "
+        "it keeps its Floor"
+    ]
+    assert "load isn't weekly" not in json.dumps(every)
+
+
+def test_sizings_give_a_profiles_backtest_with_what_its_too_many_cost(
+    settings: Settings, fake_cluster: Any, database_url: str
+) -> None:
+    """Slice 14.4: within its budget a Weekly profile comes with its Backtest, the too
+    many in the Contract's currency."""
+    test = {"state": "within", "error": 0.12, "few": 0.04, "many": 0.08, "hours": 168}
+    test |= {"replicas": 0.4, "excess": {"cpu": 0.5, "memory": 2.0**30}}
+    block = {"since": "Mon 09:00", "until": "Mon 12:00", "replicas": 7}
+    weekly = {"state": "ready", "timezone": "UTC", "lead_time": 0, "history_h": 672.0}
+    weekly |= {"needs_h": 504.0, "backtest": test}
+    weekly |= {"blocks": [{**block, "start": "0 9 * * 1", "end": "0 12 * * 1"}]}
+    floor = {"workload": "test/shop/Deployment/api", "cluster": "test", "namespace": "shop"}
+    floor |= {"kind": "Deployment", "name": "api", "hpa": "api", "policy": "production"}
+    floor |= {"percentile": 0.1, "minimum": 2.0, "maximum": 9.0, "risks": [], "state": "ready"}
+    floor |= {"history_h": 168.0, "needs_h": 24.0, "floor": 2, "profile": weekly}
+    seed_run(database_url, "acme", row("api"))
+
+    async def go() -> None:
+        async with connect(database_url) as pool:
+            await Store(pool).save_floors("acme", "test", NOW, [floor])
+
+    asyncio.run(go())
+    prices = {"prices": {"currency": "EUR", "cpu": 0.04, "memory": 0.005}}
+    with hub(settings, fake_cluster, database_url, acme_extra=prices) as c:
+        (shown,) = call(c, "sizings", contract="acme")["floors"]
+    assert shown.splitlines()[1:] == [
+        "  Weekly profile (UTC):",
+        "    Mon 09:00 to Mon 12:00: 7 replicas",
+        "    backtest: off by 12% last week (too few 4%, too many 8%: 18.25 EUR/month)",
+    ]
 
 
 def test_sizings_filter_by_cluster(

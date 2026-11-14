@@ -163,7 +163,7 @@ A **Floor** is the minimum replicas the Hub computes for a Workload with an HPA,
 
 ## Weekly profiles
 
-A Workload with a Floor also gets a **Weekly profile**: its Floors by hour of the week, for load that follows the week. It is shown under the Floor in the console, in `squero sizing show` and in the Hub MCP's `sizings`, and it is stored with the Floor by each hourly run.
+A Workload with a Floor also gets a **Weekly profile**: its Floors by hour of the week, for load that follows the week. It is shown under the Floor in the console, in `squero sizing show` and in the Hub MCP's `sizings`, and it is stored with the Floor by each hourly run, with its **Backtest**.
 
 - **Each hour of the week** is the median of that hour's Need across the weeks stored, rounded up, never below the Floor. With three weeks, one odd week changes nothing. An hour of the week stored in fewer than three weeks (a gap in Prometheus at that hour in the others) is at the Floor, since one week would decide it; a block can be split there.
 - **Three weeks first.** The Workload's own complete stored hours count, over the 8 weeks Needs are kept; under 504 of them the profile is learning.
@@ -189,7 +189,12 @@ A Workload with a Floor also gets a **Weekly profile**: its Floors by hour of th
 
   One trigger per block, each with a single weekday (Sunday is 0): KEDA's docs don't say that the weekday field takes lists or ranges.
 - **A plain HPA** has no schedule of its own. It gets the profile with a note saying so: something else has to hold those replicas. The Hub writes nothing and generates no CronJobs.
-- **Limits.** In a zone with daylight saving the hours of the two weeks around a change are an hour off against the rest. There is no backtest yet (slice 14.4): the profile says what the last weeks' median was, not how well it would have held.
+- **Backtest.** A profile is checked against a week it has not seen: the newest week (the 168 complete hours before the run) is replayed hour by hour against a profile built from the weeks kept before it, three to seven of them. It needs four stored weeks: 504 stored hours before the newest week and at least half of that week (84 hours); until then the profile shows with `not backtested yet (needs four weeks)`.
+  - **Needed.** In an hour the Workload needed the larger of its Floor and its Need rounded up, which is what its HPA would run with the Floor as its minimum. So a profile at its Floor in a quiet hour is right, and the profile is judged only on what it adds above the Floor.
+  - **Error.** The replica-hours the profile held too few plus those it held too many, as a share of the replica-hours needed. An hour off by less than a tenth of what it needed counts for nothing, like the HPA's own tolerance (with whole replicas that only applies from 11 replicas up). An hour never stored is skipped. The lead time plays no part: the replay is by the hour.
+  - **Within the budget** (20%, fixed for now; exactly 20% is within) the profile shows with both parts and what the too many would cost a month, at the Sizings like the Floor's saving: `backtest: off by 12% last week (too few 4%, too many 8%: 3.10 EUR/month)`. That cost is not in the Floors' total: nothing holds those replicas until the profile is applied.
+  - **Over the budget** the Workload shows `load isn't weekly enough: off by 34% last week (too few 21%, too many 13%); it keeps its Floor`. Its blocks and its `cron` triggers are not stored and not shown anywhere; the Floor and its saving stand.
+- **Limits.** In a zone with daylight saving the hours of the two weeks around a change are an hour off against the rest. The Backtest replays one week, so one unusual newest week (a holiday) fails a good profile until the next week replaces it, and it says how the weeks before predicted the newest one, not how the profile shown (which includes that week) will do next week. The Floor used on both sides is today's.
 
 ## Sizings held by an HPA
 

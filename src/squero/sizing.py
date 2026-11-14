@@ -455,20 +455,27 @@ def floors(
                 low = weighted_percentile([(now, n) for n in values], q, now)
                 floor = max(math.ceil(low - 1e-9), min(FLOOR_MIN, int(minimum)))
                 f |= {"state": "ready", "floor": floor}
+                pod = {"cpu": 0.0, "memory": 0.0}  # one replica, at its Sizings
+                for r in containers:
+                    for res in pod:
+                        sized = r.get(res) if r["state"] == "ready" else None
+                        asks = (r.get("requests") or {}).get(res) or 0.0
+                        pod[res] += sized["target"] if sized else asks
                 own = needs.get(cluster, {}).get(key, {})
                 weekly = profile(own, floor, c.sizing.timezone, c.sizing.lead_time, now)
                 if weekly["state"] == "ready":
-                    weekly |= scheduled(f, weekly)
+                    test = backtest(own, floor, c.sizing.timezone, now)
+                    if test["state"] == "over":  # no blocks or triggers for any view to show
+                        weekly |= {"state": "irregular", "blocks": []}
+                    else:
+                        weekly |= scheduled(f, weekly)
+                    if "replicas" in test:
+                        test["excess"] = {res: test["replicas"] * v for res, v in pod.items()}
+                    weekly["backtest"] = test
                 f["profile"] = weekly
                 up = [math.ceil(n - 1e-9) for n in values]
                 if floor < minimum:
                     held = sum(max(0.0, minimum - max(floor, n)) for n in up) / len(up)
-                    pod = {"cpu": 0.0, "memory": 0.0}
-                    for r in containers:
-                        for res in pod:
-                            sized = r.get(res) if r["state"] == "ready" else None
-                            asks = (r.get("requests") or {}).get(res) or 0.0
-                            pod[res] += sized["target"] if sized else asks
                     f["replicas"] = round(held, 2)
                     f["saving"] = {res: held * v for res, v in pod.items()}
                 elif floor > minimum:
@@ -500,6 +507,26 @@ def _when(minute: int) -> tuple[str, str]:
     return f"{DAYS[day]} {hour:02d}:{m:02d}", f"{m} {hour} * * {(day + 1) % 7}"
 
 
+def _slot(hour: float, zone: zoneinfo.ZoneInfo) -> int:
+    """The hour of the week there (Monday 00:00 is 0) a stored hour starts in."""
+    local = datetime.fromtimestamp(hour, zone)
+    return local.weekday() * 24 + local.hour
+
+
+def _slots(known: dict[float, float], floor: int, zone: zoneinfo.ZoneInfo) -> list[int]:
+    """What each hour of the week asks, going by `known` (hourly Needs): the median of
+    that hour's Needs, rounded up, never below `floor`."""
+    by: dict[int, list[float]] = {}
+    for hour, need in known.items():
+        by.setdefault(_slot(hour, zone), []).append(need)
+    return [
+        max(floor, math.ceil(statistics.median(by[s]) - 1e-9))
+        if len(by.get(s, [])) >= PROFILE_WEEKS  # fewer: one odd week would decide it
+        else floor
+        for s in range(168)
+    ]
+
+
 def profile(
     needs: dict[float, float], floor: int, timezone: str, lead: int, now: float
 ) -> dict[str, Any]:
@@ -520,18 +547,9 @@ def profile(
     if len(known) < PROFILE_WEEKS * 168:
         return {**out, "state": "learning"}
     zone = zoneinfo.ZoneInfo(timezone)
-    by: dict[int, list[float]] = {}
-    past = 0  # minutes past the hour a stored hour starts at there (30 in Asia/Kolkata)
-    for hour, need in known.items():
-        local = datetime.fromtimestamp(hour, zone)
-        past = local.minute
-        by.setdefault(local.weekday() * 24 + local.hour, []).append(need)
-    slots = [
-        max(floor, math.ceil(statistics.median(by[s]) - 1e-9))
-        if len(by.get(s, [])) >= PROFILE_WEEKS  # fewer: one odd week would decide it
-        else floor
-        for s in range(168)
-    ]
+    # minutes past the hour a stored hour starts at there (30 in Asia/Kolkata)
+    past = datetime.fromtimestamp(max(known), zone).minute
+    slots = _slots(known, floor, zone)
     if len(set(slots)) == 1:
         return {**out, "state": "flat", "blocks": []}
     first = next(s for s in range(168) if slots[s] != slots[s - 1])  # where a run starts
@@ -553,6 +571,44 @@ def profile(
     return {**out, "state": "ready", "blocks": [b for _, b in sorted(blocks, key=lambda x: x[0])]}
 
 
+BACKTEST_BUDGET = 0.20  # the error a Weekly profile may have and still be shown
+BACKTEST_HOURS = 84  # stored hours of the newest week a verdict needs: half of it
+
+
+def backtest(needs: dict[float, float], floor: int, timezone: str, now: float) -> dict[str, Any]:
+    """A Weekly profile's Backtest (slice 14.4): the newest week (the 168 complete hours
+    before `now`) replayed hour by hour against a profile built from the weeks kept
+    before it. `waiting` under 3 weeks of stored hours before that week, or under half
+    of that week stored.
+
+    In an hour the Workload needed the larger of its Floor and its Need rounded up (what
+    its HPA would run with the Floor as its minimum), so the profile is judged on what
+    it adds above the Floor. `few` and `many`: the replica-hours it held too few and too
+    many, as shares of the replica-hours needed; `error` their sum, `over` the budget
+    above 20%, else `within`. An hour off by under a tenth of what it needed counts for
+    nothing: the HPA's own tolerance. An hour never stored is skipped, and the lead time
+    plays no part. `replicas`: the too many, averaged over the hours replayed."""
+    end = now - now % 3600
+    start = end - WEEK
+    before = {h: n for h, n in needs.items() if now - NEEDS_FOR <= h and h + 3600 <= start}
+    week = {h: n for h, n in needs.items() if start <= h and h + 3600 <= end}
+    if len(before) < PROFILE_WEEKS * 168 or len(week) < BACKTEST_HOURS:
+        return {"state": "waiting"}
+    zone = zoneinfo.ZoneInfo(timezone)
+    slots = _slots(before, floor, zone)
+    needed = few = many = 0
+    for hour, need in week.items():
+        want = max(floor, math.ceil(need - 1e-9))
+        gap = slots[_slot(hour, zone)] - want
+        needed += want
+        if abs(gap) * 10 >= want:  # a tenth of what it needed, in whole numbers
+            few, many = few + max(0, -gap), many + max(0, gap)
+    error = (few + many) / needed
+    out = {"state": "over" if error > BACKTEST_BUDGET else "within", "error": error}
+    out |= {"few": few / needed, "many": many / needed}
+    return out | {"hours": len(week), "replicas": many / len(week)}
+
+
 def scheduled(f: dict[str, Any], p: dict[str, Any]) -> dict[str, Any]:
     """How a ready Weekly profile gets applied: for KEDA's HPA (`keda-hpa-<name>`), a
     `cron` trigger per block for its ScaledObject, as text to paste; else a note, an HPA
@@ -572,11 +628,20 @@ def scheduled(f: dict[str, Any], p: dict[str, Any]) -> dict[str, Any]:
     return {"triggers": "\n".join(lines)}
 
 
-def profile_lines(f: dict[str, Any]) -> list[str]:
-    """A Floor's Weekly profile as indented lines under its own (floor_text)."""
+def profile_lines(f: dict[str, Any], currency: str | None = None) -> list[str]:
+    """A Floor's Weekly profile, with its Backtest, as indented lines under its own
+    (floor_text)."""
     p = f.get("profile")
     if not p:
         return []
+    test = p.get("backtest") or {}
+    off = ""
+    if "error" in test:
+        few, many = round(test["few"] * 100), round(test["many"] * 100)
+        # the total as the sum of its parts as shown, so the line adds up
+        off = f"off by {few + many}% last week (too few {few}%, too many {many}%"
+    if p["state"] == "irregular":
+        return [f"  load isn't weekly enough: {off}); it keeps its Floor"]
     if p["state"] == "learning":
         return [f"  Weekly profile learning ({p['history_h']:g} h of {p['needs_h']:g} h of Needs)"]
     if p["state"] == "flat":
@@ -584,6 +649,12 @@ def profile_lines(f: dict[str, Any]) -> list[str]:
     early = f", each rise {p['lead_time'] // 60} min early" if p["lead_time"] else ""
     lines = [f"  Weekly profile ({p['timezone']}{early}):"]
     lines += [f"    {b['since']} to {b['until']}: {b['replicas']} replicas" for b in p["blocks"]]
+    if test.get("state") == "waiting":
+        lines.append("    not backtested yet (needs four weeks)")
+    elif off:
+        priced = currency and test.get("cost") is not None
+        worth = money(test["cost"], currency) if priced and currency else quantities(test["excess"])
+        lines.append(f"    backtest: {off}{f': {worth}' if test['many'] else ''})")
     if p.get("note"):
         lines.append(f"    {p['note']}")
     if p.get("triggers"):
@@ -594,7 +665,8 @@ def profile_lines(f: dict[str, Any]) -> list[str]:
 def floors_report(found: list[dict[str, Any]], contract: Contract) -> dict[str, Any]:
     """Stored Floors as the console, `sizings` and the digest show them: each saving's
     monthly cost with a priced Contract, and their total (the Workloads that can lower
-    their HPA's minimum)."""
+    their HPA's minimum); a Backtest's too many priced the same way, outside the total
+    (nothing holds them until the profile is applied)."""
     priced = contract.prices is not None
     total: dict[str, Any] = {"workloads": 0, "replicas": 0.0, "saving": {"cpu": 0.0, "memory": 0.0}}
     if priced:
@@ -602,16 +674,19 @@ def floors_report(found: list[dict[str, Any]], contract: Contract) -> dict[str, 
     out = []
     for f in found:
         f = dict(f)
+        p = contract.price(f["cluster"]) if priced else None
         if saving := f.get("saving"):
             total["workloads"] += 1
             total["replicas"] += f["replicas"]
             for res in ("cpu", "memory"):
                 total["saving"][res] += saving[res]
-            if priced:
-                p = contract.price(f["cluster"])
-                assert p is not None  # the Contract's prices back every cluster
+            if p:
                 f["cost"] = monthly(p, **saving)
                 total["cost"] += f["cost"]
+        test = (f.get("profile") or {}).get("backtest") or {}
+        if p and test.get("excess"):
+            priced_test = {**test, "cost": monthly(p, **test["excess"])}
+            f["profile"] = {**f["profile"], "backtest": priced_test}
         out.append(f)
     return {"floors": out, "floors_total": total}
 
