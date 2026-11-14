@@ -832,7 +832,11 @@ test("Checks show each one's last Run and Open failure, and Deploy verifications
 test("Nodes shows each node's Room, the Contract's pods by name and the rest as a sum", async () => {
   history.replaceState(null, "", "/app/?view=nodes");
   const node = { type: "", taints: [], cordoned: false, daemonsets: { cpu: 0.1, memory: GI / 4 }, pods: 4, bound: 1 };
-  const blocked = { state: "blocked", why: null, blockers: [{ namespace: "shop", pod: "db-0", reasons: ["PodDisruptionBudget <i>db</i> allows no disruption", "local storage (data)"] }] };
+  const blocked = { state: "blocked", why: null, blockers: [{ namespace: "shop", pod: "db-0", workload: "StatefulSet/db", reasons: ["PodDisruptionBudget <i>db</i> allows no disruption", "local storage (data)"],
+    changes: [
+      { reason: "PodDisruptionBudget <i>db</i> allows no disruption", change: "check first that its pods are healthy", manifest: null },
+      { reason: "local storage (data)", change: "name every one of them in the annotation below", manifest: "# data is lost\nspec:\n  template: <u>x</u>" },
+    ] }] };
   answer({
     "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]],
     "/api/v1/contracts/demo-shop/nodes": [
@@ -841,7 +845,7 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
         currency: "EUR",
         clusters: [
           { cluster: "kind", at: 1_700_000_000, autoscaler: "karpenter", problem: null, largest: { cpu: 7.5, memory: 30 * GI },
-            rules: "Karpenter's rules", reported: 1_700_000_600, judged: { clear: 1, blocked: 1, unknown: 1 },
+            rules: "Karpenter's rules", reported: 1_700_000_600, settings: ["NodePool spec.disruption.budgets (10% of nodes by default)"], judged: { clear: 1, blocked: 1, unknown: 1 },
             could_go: { now: { nodes: ["n2"], cpu: 4, memory: 16 * GI, cost: 120 }, after: { nodes: ["n2", "n<b>4</b>"], cpu: 8, memory: 32 * GI, cost: null } },
             nodes: [
               { ...node, node: "n2", verdict: { state: "clear", why: null, blockers: [] }, allocatable: { cpu: 4, memory: 16 * GI }, requests: { cpu: 0, memory: 0 },
@@ -869,7 +873,16 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
   const verdicts = [...(kind?.querySelectorAll("tbody tr") ?? [])].map((tr) => tr.lastElementChild?.textContent);
   expect(verdicts[0]).toBe("yes: nothing on it blocks");
   expect(verdicts[1]).toBe("unknown: 2 pods not visible");
-  expect(verdicts[2]).toBe("blockedshop/db-0: PodDisruptionBudget <i>db</i> allows no disruption; local storage (data)");
+  expect(verdicts[2]).toContain("blockedshop/db-0: PodDisruptionBudget <i>db</i> allows no disruption; local storage (data)");
+  // slice 15.6: the change that removes each Blocker, with a manifest only where there is one
+  const changes = [...(kind?.querySelectorAll("details.change") ?? [])];
+  expect(changes).toHaveLength(2);
+  expect(changes[0]?.textContent).toBe("To remove it: PodDisruptionBudget <i>db</i> allows no disruptioncheck first that its pods are healthy.");
+  expect(changes[0]?.querySelector("pre")).toBeNull();
+  expect(changes[1]?.querySelector("pre")?.textContent).toBe("# data is lost\nspec:\n  template: <u>x</u>");
+  expect(page.querySelector("section.nodes u")).toBeNull();
+  expect(kind?.querySelector("details.settings")?.textContent).toContain("NodePool spec.disruption.budgets (10% of nodes by default)");
+  expect(edge?.querySelector("details.settings")).toBeNull();
   expect(page.querySelector("section.nodes i")).toBeNull();
   expect(edge?.textContent).toContain("its Actuator's last report of Blockers: never.");
   // slice 15.4: the nodes that could go, now and after the Sizings, as a figure of its own

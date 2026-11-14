@@ -31,6 +31,16 @@ export function NodesPage({ contract }: { contract: string }) {
             Whether a node could be removed goes by {c.rules}; its Actuator's last report of Blockers:{" "}
             {when(c.reported)}.
           </p>
+          {(c.settings ?? []).length > 0 && (
+            <details className="settings">
+              <summary>Its autoscaler's own settings to check (the Hub can't read them)</summary>
+              <ul>
+                {(c.settings ?? []).map((s) => (
+                  <li key={s}>{s}</li>
+                ))}
+              </ul>
+            </details>
+          )}
           {c.could_go && (
             <p className="could-go">
               {(["now", "after"] as const).map((which) => {
@@ -113,6 +123,13 @@ export function NodesPage({ contract }: { contract: string }) {
                             {(n.verdict.blockers ?? []).map((b) => (
                               <li key={`${b.namespace}/${b.pod}`}>
                                 {b.namespace}/{b.pod}: {b.reasons.join("; ")}
+                                {(b.changes ?? []).map((c, i) => (
+                                  <details key={i} className="change">
+                                    <summary>To remove it: {c.reason}</summary>
+                                    <div className="hint">{c.change}.</div>
+                                    {c.manifest && <pre>{c.manifest}</pre>}
+                                  </details>
+                                ))}
                               </li>
                             ))}
                           </ul>

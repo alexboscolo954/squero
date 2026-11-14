@@ -125,9 +125,10 @@ def _listed(volumes: list[str]) -> str:
     return f"{len(volumes)} {'volume' if len(volumes) == 1 else 'volumes'}"
 
 
-def reasons(p: dict[str, Any], autoscaler: str | None, now: float = 0.0) -> list[str]:
-    """Why a pod with these facts keeps its node at `now`, under who removes nodes
-    there; none: it doesn't. From each one's own documentation:
+def _found(p: dict[str, Any], autoscaler: str | None, now: float) -> list[tuple[str, str]]:
+    """What makes a pod with these facts keep its node at `now`, under who removes
+    nodes there, each as (which rule, in words); none: it doesn't. From each one's own
+    documentation:
 
     - all three: a PodDisruptionBudget covering it that allows no disruption (with
       several, all must allow one).
@@ -145,35 +146,232 @@ def reasons(p: dict[str, Any], autoscaler: str | None, now: float = 0.0) -> list
     noted = p.get("annotations") or {}
     budget = p.get("budget")
     if budget is not None and not p.get("allowed"):
-        out.append(f"PodDisruptionBudget {budget} allows no disruption")
+        out.append(("budget", f"PodDisruptionBudget {budget} allows no disruption"))
     kind = p.get("kind") or ""
-    alone = "no controller" if not kind else _custom(kind)
+    alone = ("no_controller", "no controller") if not kind else ("custom", _custom(kind))
     if autoscaler == "karpenter":
         value = noted.get(DO_NOT_DISRUPT, "")
         lasts, started = go_duration(value), p.get("started")
         if value == "true":
-            out.append(f"annotated {DO_NOT_DISRUPT}: true")
+            out.append(("do_not_disrupt", f"annotated {DO_NOT_DISRUPT}: true"))
         elif lasts is not None and (started is None or now < started + lasts):
-            out.append(f"annotated {DO_NOT_DISRUPT}: {value}, for that long after it started")
+            said = f"annotated {DO_NOT_DISRUPT}: {value}, for that long after it started"
+            out.append(("do_not_disrupt_for", said))
     elif autoscaler == "cluster-autoscaler":
         if noted.get(SAFE) == "false":
-            out.append(f"annotated {SAFE}: false")
+            out.append(("safe_false", f"annotated {SAFE}: false"))
         elif noted.get(SAFE) != "true":  # "true" lifts the rules below, not a budget
             if kind not in BUILT_IN:
                 out.append(alone)
-            on_disk = set(p.get("empty_dir") or []) - set(p.get("in_memory") or [])
             safe = {v.strip() for v in noted.get(SAFE_VOLUMES, "").split(",")}
-            kept = sorted((on_disk | set(p.get("host_path") or [])) - safe)
+            kept = sorted(set(_local(p)) - safe)
             if kept:
-                out.append(f"local storage ({_listed(kept)})")
+                out.append(("local_storage", f"local storage ({_listed(kept)})"))
             if p["namespace"] == "kube-system" and budget is None:
-                out.append("a kube-system pod with no PodDisruptionBudget")
+                out.append(("kube_system", "a kube-system pod with no PodDisruptionBudget"))
     else:  # a person, with kubectl drain and no force flags
         if kind not in BUILT_IN:
             out.append(alone)
         if p.get("empty_dir"):
-            out.append(f"emptyDir data ({_listed(sorted(p['empty_dir']))})")
+            out.append(("emptydir", f"emptyDir data ({_listed(sorted(p['empty_dir']))})"))
     return out
+
+
+def _local(p: dict[str, Any]) -> list[str]:
+    """A pod's local volumes as Cluster Autoscaler counts them: its hostPaths and its
+    emptyDirs that aren't in memory."""
+    on_disk = set(p.get("empty_dir") or []) - set(p.get("in_memory") or [])
+    return sorted(on_disk | set(p.get("host_path") or []))
+
+
+def reasons(p: dict[str, Any], autoscaler: str | None, now: float = 0.0) -> list[str]:
+    """Why a pod with these facts keeps its node at `now`, in words (`_found`)."""
+    return [text for _, text in _found(p, autoscaler, now)]
+
+
+# --- the change that removes a Blocker (slice 15.6) ------------------------------------
+
+# The autoscaler's own settings that decide the same thing for the whole cluster: named
+# for the Operator to check, never compared (they live in kube-system or in objects of
+# no namespace, which the Hub doesn't read). Defaults as their documentation gave them
+# when looked up (2026-11-12): a cluster may run others.
+SETTINGS: dict[str | None, list[str]] = {
+    "cluster-autoscaler": [
+        "--skip-nodes-with-local-storage (true by default): false lets it remove a node "
+        "whose pods have local storage, and their data with it",
+        "--skip-nodes-with-system-pods (true by default): false lets it remove a node "
+        "holding kube-system pods no PodDisruptionBudget covers",
+        "--skip-nodes-with-custom-controller-pods (true by default): false lets it evict "
+        "pods of custom controllers",
+        "--scale-down-utilization-threshold (0.5 by default): a node whose pods ask more "
+        "than that share of it is not considered for removal",
+    ],
+    "karpenter": [
+        "NodePool spec.disruption.consolidationPolicy (WhenEmptyOrUnderutilized by "
+        "default): WhenEmpty removes only empty nodes",
+        "NodePool spec.disruption.consolidateAfter (0s by default): how long a node "
+        "waits before it is consolidated",
+        "NodePool spec.disruption.budgets (10% of nodes by default): how many nodes may "
+        "be disrupted at once",
+    ],
+    None: [],
+}
+PLACEHOLDER = "REPLACE-WITH-A-LABEL-OF-THE-POD"  # a label no pod has: it selects none
+
+
+def _pod(p: dict[str, Any]) -> str:
+    """A pod named for a manifest's comment, when its namespace and name are shaped
+    like names: without a report they are Prometheus' labels, and a comment that a
+    newline ends is no longer a comment."""
+    if NAME.fullmatch(p["namespace"]) and NAME.fullmatch(p["pod"]):
+        return f"pod {p['namespace']}/{p['pod']}"
+    return "this pod"
+
+
+def _annotation(p: dict[str, Any], w: dict[str, str] | None, key: str, value: str, why: str) -> str:
+    """A manifest fragment that sets one annotation where the pod gets its annotations
+    from: its Workload's pod template when the Hub knows a Workload of a kind with one,
+    else the pod itself. `why`: what it costs, said in the fragment, which travels
+    without the page around it. Names not shaped like names are left out, not quoted."""
+    placed = NAME.fullmatch(p["namespace"])  # a Workload is named with its namespace
+    known = w and w["kind"] != "Pod" and KIND.fullmatch(w["kind"]) and NAME.fullmatch(w["name"])
+    known = known and placed
+    builtin = known and w and w["kind"] in (*BUILT_IN, "Deployment", "DaemonSet", "CronJob")
+    pod = _pod(p)
+    lines = [f"# {why}"]
+    if builtin and w:
+        lines.append(f"# On the pod template of {w['kind']} {p['namespace']}/{w['name']}:")
+        nest = ["spec:", "  template:", "    metadata:", "      annotations:"]
+        # what changing a template does is part of what it costs
+        if w["kind"] == "CronJob":
+            nest = ["spec:", "  jobTemplate:", "    spec:", "      template:"]
+            nest += ["        metadata:", "          annotations:"]
+            lines.append("# It reaches the Jobs started after it, not the ones running.")
+        elif w["kind"] == "Job":
+            lines.append(
+                "# A Job's template can't be changed once created: set it where it is made."
+            )
+        else:
+            lines.append("# Changing a pod template restarts every pod of it, one rollout.")
+    else:
+        where = f"{w['kind']} {p['namespace']}/{w['name']} sets" if known and w else None
+        lines.append(
+            f"# On {pod}, wherever {where} its pods' annotations:"
+            if where
+            else f"# On {pod} itself: the Hub knows no template it comes from."
+        )
+        nest = ["metadata:", "  annotations:"]
+    indent = " " * (len(nest[-1]) - len(nest[-1].lstrip()) + 2)
+    return "\n".join([*lines, *nest, f'{indent}{key}: "{value}"'])
+
+
+def changes(
+    p: dict[str, Any], autoscaler: str | None, now: float = 0.0, w: dict[str, str] | None = None
+) -> list[dict[str, Any]]:
+    """For each reason a pod keeps its node (`_found`), the change that removes it:
+    `change` in words, with what it costs, and a `manifest` to copy where the change
+    adds something. Words only where it would undo something set on purpose (a budget
+    allowing no disruption, which may also be a pod that is down right now; an
+    annotation that says "don't"): the Operator decides that with the client. Under
+    `kubectl drain`'s rules the change is a flag of the drain, said with what it
+    deletes. `w`: the pod's Workload, where the Hub's read resolved one."""
+    out = []
+    pod = _pod(p)
+    for rule, text in _found(p, autoscaler, now):
+        manifest = None
+        if rule == "budget":
+            change = (
+                "check first that its pods are healthy: a budget also allows no "
+                "disruption while one of them is down. Then give its Workload more "
+                f"replicas than PodDisruptionBudget {p['budget']} requires, or let that "
+                "budget allow one disruption, so one of its pods may be down while a "
+                "node is removed"
+            )
+        elif rule == "safe_false":
+            change = (
+                f"remove the annotation {SAFE} from its pod template if its pods may "
+                "be evicted: someone set it on purpose"
+            )
+        elif rule == "do_not_disrupt":
+            change = (
+                f"remove the annotation {DO_NOT_DISRUPT} from its pod template if its "
+                "pods may be disrupted: someone set it on purpose"
+            )
+        elif rule == "do_not_disrupt_for":
+            change = "it ends by itself, that long after the pod started; nothing to change"
+        elif rule == "no_controller" and autoscaler == "cluster-autoscaler":
+            change = (
+                "run it under a Deployment, StatefulSet or Job, which brings an evicted "
+                "pod back; or, if losing it is acceptable, the annotation below lets "
+                "Cluster Autoscaler evict it"
+            )
+            why = f"{pod} has no controller: once evicted it is gone for good."
+            manifest = _annotation(p, None, SAFE, "true", why)
+        elif rule == "no_controller":
+            change = (
+                "run it under a Deployment, StatefulSet or Job, which brings an evicted "
+                "pod back; `kubectl drain --force` deletes it, and nothing does"
+            )
+        elif rule == "custom" and autoscaler == "cluster-autoscaler":
+            change = (
+                "if its controller brings an evicted pod back, the annotation below "
+                "lets Cluster Autoscaler evict it (its "
+                "--skip-nodes-with-custom-controller-pods=false does so for all such pods)"
+            )
+            why = f"{pod} is a custom controller's: only if that controller recreates it."
+            manifest = _annotation(p, w, SAFE, "true", why)
+        elif rule == "custom":
+            change = (
+                "`kubectl drain --force` evicts it; whether it comes back is up to its controller"
+            )
+        elif rule == "local_storage":
+            every = _local(p)
+            named = all(NAME.fullmatch(v) for v in every)
+            value = ",".join(every) if named else "REPLACE-WITH-EVERY-LOCAL-VOLUME"
+            change = (
+                "if the data in its local volumes may be lost when the pod moves, name "
+                "every one of them in the annotation below (Cluster Autoscaler's "
+                "--skip-nodes-with-local-storage=false does so for all pods)"
+            )
+            why = f"{pod}: the data in these local volumes is lost whenever it is replaced."
+            manifest = _annotation(p, w, SAFE_VOLUMES, value, why)
+        elif rule == "emptydir":
+            change = (
+                "`kubectl drain --delete-emptydir-data` removes the node anyway: the "
+                "data in its emptyDir volumes is deleted with the pod"
+            )
+        else:  # kube_system
+            name = w["name"] if w and w["kind"] != "Pod" and NAME.fullmatch(w["name"]) else p["pod"]
+            name = name if NAME.fullmatch(name) else "REPLACE-WITH-A-NAME"
+            change = (
+                "give it a PodDisruptionBudget, as below, with its selector set to the "
+                "pod's labels, which the Hub doesn't read (Cluster Autoscaler's "
+                "--skip-nodes-with-system-pods=false does so for all kube-system pods)"
+            )
+            manifest = "\n".join(
+                [
+                    f"# {pod}: Cluster Autoscaler removes no node holding a kube-system pod",
+                    "# that no PodDisruptionBudget covers. Replace the selector with the pod's",
+                    "# own labels: as it stands it selects no pod, and changes nothing.",
+                    "apiVersion: policy/v1",
+                    "kind: PodDisruptionBudget",
+                    "metadata:",
+                    f"  name: {name}",
+                    "  namespace: kube-system",
+                    "spec:",
+                    "  maxUnavailable: 1",
+                    "  selector:",
+                    "    matchLabels:",
+                    f"      {PLACEHOLDER}: REPLACE-WITH-ITS-VALUE",
+                ]
+            )
+        out.append({"reason": text, "change": change, "manifest": manifest})
+    return out
+
+
+def _named(w: dict[str, str] | None) -> str | None:
+    """A pod's Workload as `Deployment/web`, to group its replicas by; None: not known."""
+    return f"{w['kind']}/{w['name']}" if w else None
 
 
 def seen(
@@ -198,8 +396,16 @@ def seen(
             kind = p.get("kind")
             if kind is None or kind in BUILT_IN:  # None: read before 15.1c, not known
                 continue
-            said = "no controller" if not kind else _custom(kind)
-            found.append({"namespace": p["namespace"], "pod": p["pod"], "reasons": [said + unless]})
+            w = p.get("workload")
+            facts = {"namespace": p["namespace"], "pod": p["pod"], "kind": kind}
+            change = changes(facts, autoscaler, 0.0, w)[0]  # its controller: all that is seen
+            change["reason"] += unless
+            found.append(
+                {
+                    **{"namespace": p["namespace"], "pod": p["pod"], "workload": _named(w)},
+                    **{"reasons": [change["reason"]], "changes": [change]},
+                }
+            )
     if found:
         return {"state": "blocked", "why": None, "blockers": found}
     spaces = {p["namespace"] for p in own}
@@ -235,13 +441,20 @@ def verdicts(
             out[n["node"]] = seen(n, read, cluster.autoscaler, gap or "")
             continue
         found = []
+        whose = {(p["namespace"], p["pod"]): p.get("workload") for p in n["own"]}
         for p in report["pods"]:
             # a namespace the Contract has since left is no longer its own to show
             if p["node"] != n["node"] or p["namespace"] not in cluster.namespaces:
                 continue
-            said = reasons(p, cluster.autoscaler, now)
-            if said:
-                found.append({"namespace": p["namespace"], "pod": p["pod"], "reasons": said})
+            w = whose.get((p["namespace"], p["pod"]))
+            made = changes(p, cluster.autoscaler, now, w)
+            if made:
+                found.append(
+                    {
+                        **{"namespace": p["namespace"], "pod": p["pod"], "workload": _named(w)},
+                        **{"reasons": [c["reason"] for c in made], "changes": made},
+                    }
+                )
         own = [p for p in n["own"] if not p.get("bound")]
         unread = sorted({p["namespace"] for p in own} - set(report["namespaces"]))
         why = None  # of unknown: asked only where nothing is known to block

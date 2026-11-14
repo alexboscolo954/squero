@@ -440,8 +440,46 @@
         "title": "Block",
         "type": "object"
       },
+      "BlockerChange": {
+        "description": "The change that removes a Blocker (slice 15.6).",
+        "properties": {
+          "change": {
+            "title": "Change",
+            "type": "string"
+          },
+          "manifest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "change"
+        ],
+        "title": "BlockerChange",
+        "type": "object"
+      },
       "BlockingPod": {
         "properties": {
+          "changes": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/BlockerChange"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
           "namespace": {
             "title": "Namespace",
             "type": "string"
@@ -456,6 +494,17 @@
             },
             "title": "Reasons",
             "type": "array"
+          },
+          "workload": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workload"
           }
         },
         "required": [
@@ -794,6 +843,14 @@
           "rules": {
             "title": "Rules",
             "type": "string"
+          },
+          "settings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Settings",
+            "type": "array"
           }
         },
         "required": [

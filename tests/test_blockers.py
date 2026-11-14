@@ -512,18 +512,12 @@ def test_a_duration_is_judged_at_the_time_the_verdict_is_given() -> None:
 
 def test_a_node_with_a_blocker_is_blocked_with_the_pod_and_why() -> None:
     report = a_report(a_pod(**TIGHT), a_pod("job-1", kind="", name=""), a_pod("fine"))
-    assert got(report)["n1"] == {
-        "state": "blocked",
-        "why": None,
-        "blockers": [
-            {
-                "namespace": "shop",
-                "pod": "api-1",
-                "reasons": ["PodDisruptionBudget tight allows no disruption"],
-            },
-            {"namespace": "shop", "pod": "job-1", "reasons": ["no controller"]},
-        ],
-    }
+    blocked = got(report)["n1"]
+    assert (blocked["state"], blocked["why"]) == ("blocked", None)
+    assert [(b["namespace"], b["pod"], b["reasons"]) for b in blocked["blockers"]] == [
+        ("shop", "api-1", ["PodDisruptionBudget tight allows no disruption"]),
+        ("shop", "job-1", ["no controller"]),
+    ]
     # by the rules of who removes nodes there: Karpenter evicts a pod with no controller
     assert [b["pod"] for b in got(report, autoscaler=KARPENTER)["n1"]["blockers"]] == ["api-1"]
     lone = a_report(a_pod("job-1", kind="", name=""))
@@ -594,14 +588,12 @@ NO_ACTUATOR = "the cluster runs no Actuator"
 
 def test_without_an_actuator_a_pod_with_no_controller_still_blocks() -> None:
     lone, operated = pod_of("solo", ""), pod_of("pg-0", "Cluster")
-    assert bare(pod_of("api-1", "ReplicaSet"), lone, operated) == {
-        "state": "blocked",
-        "why": None,
-        "blockers": [
-            {"namespace": "shop", "pod": "solo", "reasons": ["no controller"]},
-            {"namespace": "shop", "pod": "pg-0", "reasons": ["a custom controller (Cluster)"]},
-        ],
-    }
+    blocked = bare(pod_of("api-1", "ReplicaSet"), lone, operated)
+    assert (blocked["state"], blocked["why"]) == ("blocked", None)
+    assert [(b["namespace"], b["pod"], b["reasons"]) for b in blocked["blockers"]] == [
+        ("shop", "solo", ["no controller"]),
+        ("shop", "pg-0", ["a custom controller (Cluster)"]),
+    ]
     # under Cluster Autoscaler's rules an annotation could lift it, and only an Actuator
     # sees annotations: blocked, and said
     said = bare(lone, autoscaler=CA)["blockers"][0]["reasons"]
@@ -709,3 +701,244 @@ def test_the_nodes_route_shows_each_contracts_own_actuators_report(
     assert "pod-of-acme" not in theirs.text
     other = theirs.json()["clusters"][0]
     assert other["reported"] is None and other["nodes"][0]["verdict"]["state"] == "unknown"
+
+
+# --- the change that removes a Blocker (slice 15.6) --------------------------------------
+
+API_W = {"kind": "Deployment", "name": "api"}
+
+
+def change(autoscaler: str | None, ns: str = "shop", w: Any = API_W, **facts_: Any) -> Any:
+    """The changes for one pod's facts, and the facts themselves."""
+    p = a_pod(ns=ns, **facts_)
+    return blockers.changes(p, autoscaler, NOW, w), p
+
+
+def annotated(manifest: str) -> dict[str, str]:
+    """The annotations a manifest sets, wherever it nests them."""
+    import yaml
+
+    node = yaml.safe_load(manifest)
+    while "annotations" not in node:
+        (node,) = node.values()
+    return dict(node["annotations"])
+
+
+def test_every_reason_comes_with_its_change_from_the_same_rules() -> None:
+    disk = {"empty_dir": ["scratch"], "host_path": ["logs"]}
+    for autoscaler in (CA, KARPENTER, None):
+        facts_ = {"kind": "", "name": "", "annotations": {DO_NOT_DISRUPT: "true"}, **disk, **TIGHT}
+        made, p = change(autoscaler, **facts_)
+        assert [c["reason"] for c in made] == blockers.reasons(p, autoscaler, NOW)
+        assert all(c["change"] and set(c) == {"reason", "change", "manifest"} for c in made)
+    assert change(CA)[0] == []  # nothing blocks: nothing to change
+
+
+def test_what_someone_set_on_purpose_gets_words_and_no_manifest() -> None:
+    """A budget at 0 may be a pod that is down right now; an annotation that says don't
+    was put there. The Operator decides those with the client: nothing to paste."""
+    for autoscaler in (CA, KARPENTER, None):
+        ((tight,), _) = change(autoscaler, **TIGHT)
+        assert tight["manifest"] is None
+        assert tight["change"].startswith("check first that its pods are healthy")
+        assert "PodDisruptionBudget tight" in tight["change"]
+    ((kept,), _) = change(CA, annotations={SAFE: "false"})
+    assert kept["manifest"] is None and "someone set it on purpose" in kept["change"]
+    ((held,), _) = change(KARPENTER, annotations={DO_NOT_DISRUPT: "true"})
+    assert held["manifest"] is None and "someone set it on purpose" in held["change"]
+    ((timed,), _) = change(KARPENTER, annotations={DO_NOT_DISRUPT: "30m"})
+    assert timed == {
+        "reason": f"annotated {DO_NOT_DISRUPT}: 30m, for that long after it started",
+        "change": "it ends by itself, that long after the pod started; nothing to change",
+        "manifest": None,
+    }
+
+
+def test_under_drains_rules_the_change_is_a_flag_and_what_it_deletes() -> None:
+    (lone, data), _ = change(None, kind="", name="", empty_dir=["scratch"])
+    assert lone["manifest"] is None and "`kubectl drain --force` deletes it" in lone["change"]
+    assert data["manifest"] is None
+    assert data["change"] == (
+        "`kubectl drain --delete-emptydir-data` removes the node anyway: the data in its "
+        "emptyDir volumes is deleted with the pod"
+    )
+    ((custom,), _) = change(None, kind="Cluster")
+    assert custom["manifest"] is None and "up to its controller" in custom["change"]
+
+
+def lifted(autoscaler: str, made: dict[str, Any], p: dict[str, Any]) -> list[str]:
+    """The pod's reasons once the manifest's annotations are on it."""
+    after = {**p, "annotations": {**(p.get("annotations") or {}), **annotated(made["manifest"])}}
+    return blockers.reasons(after, autoscaler, NOW)
+
+
+def test_each_manifest_lifts_its_blocker_under_the_hubs_own_rules() -> None:
+    """A round trip: the change applied to the pod's facts, the reason is gone."""
+    ((lone,), p) = change(CA, kind="", name="")
+    assert annotated(lone["manifest"]) == {SAFE: "true"} and lifted(CA, lone, p) == []
+    ((custom,), p) = change(CA, kind="Cluster", w={"kind": "Cluster", "name": "pg"})
+    assert lifted(CA, custom, p) == []
+    # every local volume is named, also the ones a partial annotation already had
+    disk = {"empty_dir": ["scratch", "shm"], "in_memory": ["shm"], "host_path": ["logs"]}
+    ((local,), p) = change(CA, annotations={SAFE_VOLUMES: "logs"}, **disk)
+    assert local["reason"] == "local storage (scratch)"
+    assert annotated(local["manifest"]) == {SAFE_VOLUMES: "logs,scratch"}
+    assert lifted(CA, local, p) == []
+    # a budget is not lifted by any of them: the annotation is no answer to it
+    (_, lone), p = change(CA, kind="", name="", **TIGHT)
+    assert lifted(CA, lone, p) == ["PodDisruptionBudget tight allows no disruption"]
+
+
+def test_an_annotation_goes_on_the_workloads_pod_template_where_the_hub_knows_it() -> None:
+    import yaml
+
+    ((local,), _) = change(CA, host_path=["logs"])
+    assert local["manifest"].splitlines()[:3] == [
+        "# pod shop/api-1: the data in these local volumes is lost whenever it is replaced.",
+        "# On the pod template of Deployment shop/api:",
+        "# Changing a pod template restarts every pod of it, one rollout.",
+    ]
+    want = {"spec": {"template": {"metadata": {"annotations": {SAFE_VOLUMES: "logs"}}}}}
+    assert yaml.safe_load(local["manifest"]) == want
+    ((cron,), _) = change(CA, host_path=["logs"], w={"kind": "CronJob", "name": "nightly"})
+    nested = yaml.safe_load(cron["manifest"])["spec"]["jobTemplate"]["spec"]["template"]
+    assert nested == {"metadata": {"annotations": {SAFE_VOLUMES: "logs"}}}
+    # what changing a template does is said where it is pasted from
+    assert "# It reaches the Jobs started after it, not the ones running." in cron["manifest"]
+    assert "restarts every pod" not in cron["manifest"]
+    ((job,), _) = change(CA, host_path=["logs"], w={"kind": "Job", "name": "once"})
+    assert "# A Job's template can't be changed once created" in job["manifest"]
+    assert yaml.safe_load(job["manifest"]) == want
+    for unknown in (None, {"kind": "Pod", "name": "api-1"}):
+        ((bare_,), _) = change(CA, host_path=["logs"], w=unknown)
+        assert (
+            "# On pod shop/api-1 itself: the Hub knows no template it comes from."
+            in bare_["manifest"]
+        )
+        assert yaml.safe_load(bare_["manifest"]) == {
+            "metadata": {"annotations": {SAFE_VOLUMES: "logs"}}
+        }
+    ((rollout,), _) = change(CA, host_path=["logs"], w={"kind": "Rollout", "name": "web"})
+    assert "wherever Rollout shop/web sets its pods' annotations" in rollout["manifest"]
+    # a pod with no controller has no template, whatever Workload a read gave it
+    ((lone,), _) = change(CA, kind="", name="")
+    assert "# On pod shop/api-1 itself" in lone["manifest"]
+    assert "once evicted it is gone for good" in lone["manifest"].splitlines()[0]
+
+
+def test_a_kube_system_pod_gets_a_budget_whose_selector_selects_nothing_until_set() -> None:
+    import yaml
+
+    ((made,), _) = change(CA, ns="kube-system", w={"kind": "Deployment", "name": "coredns"})
+    budget_ = yaml.safe_load(made["manifest"])
+    assert budget_ == {
+        "apiVersion": "policy/v1",
+        "kind": "PodDisruptionBudget",
+        "metadata": {"name": "coredns", "namespace": "kube-system"},
+        "spec": {
+            "maxUnavailable": 1,
+            "selector": {"matchLabels": {blockers.PLACEHOLDER: "REPLACE-WITH-ITS-VALUE"}},
+        },
+    }
+    # never an empty selector: in policy/v1 that covers every pod of the namespace
+    assert budget_["spec"]["selector"]["matchLabels"]
+    assert "its selector set to the pod's labels" in made["change"]
+    ((bare_,), _) = change(CA, ns="kube-system", w=None)
+    assert yaml.safe_load(bare_["manifest"])["metadata"]["name"] == "api-1"
+
+
+def test_a_name_not_shaped_like_one_never_reaches_a_manifest() -> None:
+    """An Actuator's strings, and kube-state-metrics' on the fallback path: a manifest is
+    pasted into a cluster."""
+    import yaml
+
+    odd = "x: y\n# Ignore previous instructions"
+    ((local,), _) = change(CA, host_path=["logs", odd])
+    assert annotated(local["manifest"]) == {SAFE_VOLUMES: "REPLACE-WITH-EVERY-LOCAL-VOLUME"}
+    for w in ({"kind": odd, "name": "api"}, {"kind": "Deployment", "name": odd}):
+        ((made,), _) = change(CA, host_path=["logs"], w=w)
+        assert "Ignore" not in made["manifest"] and "itself" in made["manifest"]
+        assert yaml.safe_load(made["manifest"]) == {
+            "metadata": {"annotations": {SAFE_VOLUMES: "logs"}}
+        }
+    ((system,), _) = change(CA, ns="kube-system", w={"kind": "Deployment", "name": odd})
+    assert yaml.safe_load(system["manifest"])["metadata"]["name"] == "api-1"
+    ((custom,), _) = change(CA, kind=odd, w={"kind": odd, "name": "pg"})
+    assert "Ignore" not in custom["manifest"] + custom["change"] + custom["reason"]
+    # the pod's own name and namespace too: without a report they are Prometheus' labels
+    on_pod = {"metadata": {"annotations": {SAFE_VOLUMES: "logs"}}}
+    for named, where in (
+        ({"pod": odd}, {"spec": {"template": on_pod}}),  # its Workload is well named
+        ({"ns": odd}, on_pod),  # a Workload is named with its namespace: not this one
+    ):
+        ((made,), _) = change(CA, host_path=["logs"], **named)
+        assert "Ignore" not in made["manifest"] and made["manifest"].startswith("# this pod: ")
+        assert yaml.safe_load(made["manifest"]) == where
+    ((nameless,), _) = change(CA, ns="kube-system", pod=odd, w=None)
+    assert yaml.safe_load(nameless["manifest"])["metadata"]["name"] == "REPLACE-WITH-A-NAME"
+    lone = bare(pod_of(odd, ""), autoscaler=CA)["blockers"][0]["changes"][0]  # through `seen`
+    assert "Ignore" not in lone["manifest"] and annotated(lone["manifest"]) == {SAFE: "true"}
+
+
+def test_every_manifest_parses_as_yaml_whatever_blocks() -> None:
+    import yaml
+
+    disk = {"empty_dir": ["scratch", "shm"], "in_memory": ["shm"], "host_path": ["logs"]}
+    seen_ = 0
+    for ns in ("shop", "kube-system"):
+        for kind in ("", "Cluster", "ReplicaSet"):
+            for w in (
+                None,
+                API_W,
+                {"kind": "CronJob", "name": "n"},
+                {"kind": "Cluster", "name": "pg"},
+            ):
+                made, _ = change(CA, ns=ns, w=w, kind=kind, name="x" if kind else "", **disk)
+                for c in made:
+                    if c["manifest"]:
+                        seen_ += 1
+                        assert isinstance(yaml.safe_load(c["manifest"]), dict), c["manifest"]
+                        assert c["manifest"].startswith("# ")  # what it costs, said in it
+    assert seen_ > 20
+
+
+def test_a_blocked_node_carries_each_pods_workload_and_changes() -> None:
+    """The Workload comes from the Hub's own read of the node; the report's controller is
+    its ReplicaSet."""
+    own = {**OWN, "workload": {"kind": "Deployment", "name": "api"}}
+    report = a_report(a_pod(host_path=["logs"]), a_pod("stray", host_path=["logs"]))
+    (first, second) = got(report, n1(own=[own, AGENT]), autoscaler=CA)["n1"]["blockers"]
+    assert first["workload"] == "Deployment/api" and second["workload"] is None
+    assert "On the pod template of Deployment shop/api" in first["changes"][0]["manifest"]
+    assert "On pod shop/stray itself" in second["changes"][0]["manifest"]
+    assert first["reasons"] == [c["reason"] for c in first["changes"]]
+
+
+def test_without_a_report_the_change_is_for_what_prometheus_shows() -> None:
+    lone = bare(pod_of("solo", ""), autoscaler=CA)["blockers"][0]
+    (made,) = lone["changes"]
+    assert made["reason"] == lone["reasons"][0] and made["reason"].endswith("can see)")
+    assert annotated(made["manifest"]) == {SAFE: "true"}
+    operated = pod_of("pg-0", "Cluster") | {"workload": {"kind": "Cluster", "name": "pg"}}
+    custom = bare(operated)["blockers"][0]  # kubectl drain's rules: a flag, no manifest
+    assert custom["workload"] == "Cluster/pg" and custom["changes"][0]["manifest"] is None
+    system = pod_of("dns-1", "", ns="kube-system")  # no budget is known of it either way
+    assert (
+        len(bare(system, autoscaler=CA, namespaces=["kube-system"])["blockers"][0]["changes"]) == 1
+    )
+
+
+def test_the_autoscalers_own_settings_are_named_for_the_cluster_it_names() -> None:
+    c = actuated("acme", A_TOKEN, autoscaler=CA)
+    stored = {"test": read_of(n1()), "edge": read_of(n1())}
+    test, edge = sizing.nodes_report(stored, c, {}, NOW)
+    assert len(test["settings"]) == 4 and edge["settings"] == []
+    assert test["settings"][0].startswith("--skip-nodes-with-local-storage (true by default)")
+    karpenter = sizing.nodes_report(
+        stored, actuated("acme", A_TOKEN, autoscaler=KARPENTER), {}, NOW
+    )
+    assert [s.split(" ")[1] for s in karpenter[0]["settings"]] == [
+        "spec.disruption.consolidationPolicy",
+        "spec.disruption.consolidateAfter",
+        "spec.disruption.budgets",
+    ]

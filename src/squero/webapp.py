@@ -351,10 +351,20 @@ class NodePod(BaseModel):
     workload: dict[str, str] | None = None  # kind and name, where its owners resolve
 
 
+class BlockerChange(BaseModel):
+    """The change that removes a Blocker (slice 15.6)."""
+
+    reason: str
+    change: str  # what to change, and what it costs
+    manifest: str | None = None  # to copy, where the change adds something
+
+
 class BlockingPod(BaseModel):
     namespace: str
     pod: str
+    workload: str | None = None  # `Deployment/web`, where its owners resolve
     reasons: list[str]
+    changes: list[BlockerChange] = []
 
 
 class Removal(BaseModel):
@@ -413,6 +423,7 @@ class ClusterNodes(BaseModel):
     at: float  # the run that read them
     autoscaler: str | None = None  # as the Contract names it
     rules: str  # whose rules its nodes' verdicts go by
+    settings: list[str] = []  # the autoscaler's own settings to check: named, not read
     reported: float | None = None  # when the Hub got its Actuator's last report
     could_go: Scenarios | None = None  # None: its read can't say
     judged: dict[str, int] = {}  # how many nodes got each verdict

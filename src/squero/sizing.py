@@ -397,6 +397,7 @@ def nodes_report(
             {
                 **{"cluster": cl.name, "at": read["at"], "autoscaler": cl.autoscaler},
                 **{"rules": blockers.RULES[cl.autoscaler]},
+                **{"settings": blockers.SETTINGS[cl.autoscaler]},  # slice 15.6
                 **{"reported": report["received"] if report else None},
                 **{"could_go": went, "judged": judged},
                 **{"problem": read.get("problem"), "largest": largest_room(read), "nodes": nodes},

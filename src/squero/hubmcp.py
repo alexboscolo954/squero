@@ -101,32 +101,51 @@ def _resource(res: str, r: webapp.Resource | None) -> dict[str, Any] | None:
     return out
 
 
-MAX_BLOCKERS = 5  # a node's blocking pods named to the model; the rest counted
+MAX_BLOCKERS = 5  # a node's Blockers given to the model, one per Workload; the rest counted
+MAX_PODS = 3  # of one Blocker's pods named
 ORDER = {"blocked": 0, "unknown": 1, "clear": 2}
+
+
+def _blockers(found: list[webapp.BlockingPod]) -> list[dict[str, Any]]:
+    """A node's blocking pods, one entry for the pods of a Workload that block for the
+    same reasons (its replicas would repeat one change), each with the change that
+    removes it (slice 15.6): what to change, and a manifest where there is one."""
+    grouped: dict[tuple[str, tuple[str, ...]], list[webapp.BlockingPod]] = {}
+    for b in found:
+        whose = f"{b.namespace}/{b.workload}" if b.workload else f"{b.namespace}/{b.pod}"
+        grouped.setdefault((whose, tuple(b.reasons)), []).append(b)
+    out = []
+    for (whose, said), pods in grouped.items():
+        names = [f"{b.namespace}/{b.pod}" for b in pods]
+        entry: dict[str, Any] = {"of": whose, "pods": names[:MAX_PODS]}
+        entry |= {"more_pods": max(0, len(names) - MAX_PODS), "reasons": [s[:300] for s in said]}
+        entry["changes"] = [{"change": c.change, "manifest": c.manifest} for c in pods[0].changes]
+        out.append(entry)
+    return out
 
 
 def _nodes(cl: webapp.ClusterNodes, top: int) -> dict[str, Any]:
     """A cluster's nodes for the `nodes` tool (slice 15.4): blocked first, `top` of them,
-    each with its Room and its verdict in a few capped strings. The pods' names and the
-    reasons came from the cluster's Actuator: capped here, redacted and masked with the
-    rest on the way out."""
+    each with its Room and its verdict. The pods' names and the reasons came from the
+    cluster's Actuator: capped here, redacted and masked with the rest on the way out."""
     listed = sorted(cl.nodes, key=lambda n: (ORDER[n.verdict.state], n.node))
     nodes = []
     for n in listed[:top]:
-        pods = [f"{b.namespace}/{b.pod}: {'; '.join(b.reasons)}"[:300] for b in n.verdict.blockers]
+        blockers = _blockers(n.verdict.blockers)
         nodes.append(
             {
                 **{"node": n.node, "type": n.type, "taints": n.taints, "cordoned": n.cordoned},
                 **{"room": n.room, "pods": n.pods, "own_pods": n.mine.pods},
                 **{"not_visible_pods": n.others.pods, "could_be_removed": n.verdict.state},
-                **{"why": n.verdict.why, "blockers": pods[:MAX_BLOCKERS]},
-                **{"more_blockers": max(0, len(pods) - MAX_BLOCKERS)},
+                **{"why": n.verdict.why, "blockers": blockers[:MAX_BLOCKERS]},
+                **{"more_blockers": max(0, len(blockers) - MAX_BLOCKERS)},
             }
         )
     went = cl.could_go.model_dump(mode="json") if cl.could_go else None
     return {
         **{"cluster": cl.cluster, "as_of": _date(cl.at), "problem": cl.problem},
         **{"autoscaler": cl.autoscaler, "rules": cl.rules, "reported": _date(cl.reported)},
+        **{"autoscaler_settings_to_check": cl.settings},
         **{"judged": cl.judged, "could_go": went, "largest_room": cl.largest},
         **{"nodes": nodes, "more_nodes": max(0, len(listed) - top)},
     }
@@ -433,8 +452,16 @@ def build(
         blocked ones first, `top` of them, each with its room (allocatable less every
         pod's requests; cpu in cores, memory in bytes), its pods (own_pods are the
         Contract's; not_visible_pods are outside its namespaces, never named) and
-        could_be_removed: blocked, with the pods that block it and why, by `rules`;
-        clear; or unknown, with why. Nothing here removes a node."""
+        could_be_removed: blocked, with its blockers by `rules`; clear; or unknown,
+        with why. Each blocker is one Workload's pods (`of`), why they keep the node,
+        and the changes that would remove it: what to change and what it costs, with a
+        manifest to copy where the change adds something (it belongs in the client's
+        own manifests: no tool here writes it anywhere; for a Contract that masks,
+        the names in it are placeholders here and real on the console's Nodes page);
+        words only where it would undo something the client set on purpose.
+        autoscaler_settings_to_check: the autoscaler's own settings that decide the
+        same for the whole cluster, with their documented defaults; the Hub can't read
+        the cluster's. Nothing here removes a node or changes a cluster."""
         c = resolve(contract)
 
         async def work() -> dict[str, Any]:

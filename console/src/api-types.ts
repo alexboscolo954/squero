@@ -619,14 +619,33 @@ export interface components {
             /** Until */
             until: string;
         };
+        /**
+         * BlockerChange
+         * @description The change that removes a Blocker (slice 15.6).
+         */
+        BlockerChange: {
+            /** Change */
+            change: string;
+            /** Manifest */
+            manifest?: string | null;
+            /** Reason */
+            reason: string;
+        };
         /** BlockingPod */
         BlockingPod: {
+            /**
+             * Changes
+             * @default []
+             */
+            changes: components["schemas"]["BlockerChange"][];
             /** Namespace */
             namespace: string;
             /** Pod */
             pod: string;
             /** Reasons */
             reasons: string[];
+            /** Workload */
+            workload?: string | null;
         };
         /**
          * Brief
@@ -736,6 +755,11 @@ export interface components {
             reported?: number | null;
             /** Rules */
             rules: string;
+            /**
+             * Settings
+             * @default []
+             */
+            settings: string[];
         };
         /** ClusterStatus */
         ClusterStatus: {
