@@ -683,6 +683,68 @@
         "title": "Checks",
         "type": "object"
       },
+      "ClusterNodes": {
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "number"
+          },
+          "autoscaler": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoscaler"
+          },
+          "cluster": {
+            "title": "Cluster",
+            "type": "string"
+          },
+          "largest": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Largest"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/Node"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          }
+        },
+        "required": [
+          "cluster",
+          "at",
+          "nodes"
+        ],
+        "title": "ClusterNodes",
+        "type": "object"
+      },
       "ClusterStatus": {
         "properties": {
           "at": {
@@ -2260,6 +2322,135 @@
         "title": "KillSwitch",
         "type": "object"
       },
+      "Node": {
+        "description": "A node and its Room (slice 15.1a).",
+        "properties": {
+          "allocatable": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Allocatable",
+            "type": "object"
+          },
+          "cordoned": {
+            "title": "Cordoned",
+            "type": "boolean"
+          },
+          "daemonsets": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Daemonsets",
+            "type": "object"
+          },
+          "mine": {
+            "$ref": "#/components/schemas/Share"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          },
+          "others": {
+            "$ref": "#/components/schemas/Share"
+          },
+          "own": {
+            "items": {
+              "$ref": "#/components/schemas/NodePod"
+            },
+            "title": "Own",
+            "type": "array"
+          },
+          "pods": {
+            "title": "Pods",
+            "type": "integer"
+          },
+          "requests": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Requests",
+            "type": "object"
+          },
+          "room": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Room",
+            "type": "object"
+          },
+          "taints": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Taints",
+            "type": "array"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node",
+          "type",
+          "taints",
+          "cordoned",
+          "allocatable",
+          "requests",
+          "daemonsets",
+          "pods",
+          "room",
+          "mine",
+          "others",
+          "own"
+        ],
+        "title": "Node",
+        "type": "object"
+      },
+      "NodePod": {
+        "properties": {
+          "cpu": {
+            "title": "Cpu",
+            "type": "number"
+          },
+          "memory": {
+            "title": "Memory",
+            "type": "number"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "pod": {
+            "title": "Pod",
+            "type": "string"
+          }
+        },
+        "required": [
+          "namespace",
+          "pod",
+          "cpu",
+          "memory"
+        ],
+        "title": "NodePod",
+        "type": "object"
+      },
+      "Nodes": {
+        "properties": {
+          "clusters": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterNodes"
+            },
+            "title": "Clusters",
+            "type": "array"
+          }
+        },
+        "required": [
+          "clusters"
+        ],
+        "title": "Nodes",
+        "type": "object"
+      },
       "Point": {
         "properties": {
           "at": {
@@ -2676,6 +2867,30 @@
           "week"
         ],
         "title": "SavingsCost",
+        "type": "object"
+      },
+      "Share": {
+        "description": "Some of a node's pods and what they ask together.",
+        "properties": {
+          "cpu": {
+            "title": "Cpu",
+            "type": "number"
+          },
+          "memory": {
+            "title": "Memory",
+            "type": "number"
+          },
+          "pods": {
+            "title": "Pods",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pods",
+          "cpu",
+          "memory"
+        ],
+        "title": "Share",
         "type": "object"
       },
       "SpentCost": {
@@ -3969,6 +4184,45 @@
           }
         },
         "summary": "Turn On"
+      }
+    },
+    "/api/v1/contracts/{contract_id}/nodes": {
+      "get": {
+        "operationId": "nodes_api_v1_contracts__contract_id__nodes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "contract_id",
+            "required": true,
+            "schema": {
+              "title": "Contract Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Nodes"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Nodes"
       }
     },
     "/api/v1/contracts/{contract_id}/questions": {

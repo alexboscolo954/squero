@@ -119,6 +119,9 @@ class Cluster(Strict):
     prometheus_labels: dict[Annotated[str, Field(pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")], str] = {}
     prices: ClusterPrices | None = None  # else the Contract's
     provider: Literal["aws", "azure", "gcp"] | None = None  # else read from kube_node_info
+    # What removes this cluster's nodes (slice 15.1a): named, never guessed from which
+    # metrics exist, since their rules differ. Shown with its nodes; none by default.
+    autoscaler: Literal["cluster-autoscaler", "karpenter"] | None = None
     billing: Billing | None = None  # else no bill to reconcile with
     # Reached through a Relay inside the client's network (slice 3.1), which holds this
     # cluster's credentials and dials the Hub with this secret's value: the Hub never

@@ -107,6 +107,10 @@ export type Checks = Schemas["Checks"];
 export type HealthPage = Schemas["HealthPage"];
 export const checks = (contract: string) =>
   get<Checks>(`/contracts/${encodeURIComponent(contract)}/checks`);
+export type Nodes = Schemas["Nodes"];
+/** Each cluster's nodes and their Room, as the latest hourly run read them (slice 15.1a). */
+export const nodes = (contract: string) =>
+  get<Nodes>(`/contracts/${encodeURIComponent(contract)}/nodes`);
 /** Checks the Contract's integrations now, through its own tools. */
 export const health = (contract: string) =>
   get<HealthPage>(`/contracts/${encodeURIComponent(contract)}/health`);

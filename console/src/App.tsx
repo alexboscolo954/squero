@@ -16,6 +16,7 @@ import { TeachingsPage } from "./Teachings";
 import { AutomationPage } from "./Automation";
 import { ChecksPage, HealthPage } from "./Checks";
 import { ContractsPage } from "./Contracts";
+import { NodesPage } from "./Nodes";
 import { amount, change, cores, cpu, gib, memory, money, rank, when } from "./format";
 
 /** Where each cluster's price comes from, for a Contract priced from cloud list prices. */
@@ -148,6 +149,7 @@ export default function App() {
         {shown && view === "automation" && <AutomationPage contract={shown} />}
         {shown && view === "checks" && <ChecksPage contract={shown} />}
         {shown && view === "health" && <HealthPage contract={shown} />}
+        {shown && view === "nodes" && <NodesPage contract={shown} />}
         {allocation && costView && <CostPage data={allocation} bills={bills} setBy={setBy} compare={compare} setCompare={setCompare} />}
       </main>
     </>
@@ -168,6 +170,7 @@ function Header({ here, current }: { here: string; current: (v: string) => "page
         <a href={`/app/?${here}&view=health`} aria-current={current("health")}>Health</a>
         <a href={`/app/?${here}`} aria-current={current("")}>Workloads</a>
         <a href={`/app/?${here}&view=cost`} aria-current={current("cost")}>Cost</a>
+        <a href={`/app/?${here}&view=nodes`} aria-current={current("nodes")}>Nodes</a>
         <a href={`/app/?${here}&view=automation`} aria-current={current("automation")}>Automation</a>
         <a href="/app/?view=token" aria-current={current("token")}>Approver token</a>
       </nav>

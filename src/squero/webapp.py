@@ -340,6 +340,51 @@ class Workloads(BaseModel):
     floors_total: FloorsTotal | None = None
 
 
+class NodePod(BaseModel):
+    namespace: str
+    pod: str
+    cpu: float
+    memory: float
+
+
+class Share(BaseModel):
+    """Some of a node's pods and what they ask together."""
+
+    pods: int
+    cpu: float
+    memory: float
+
+
+class Node(BaseModel):
+    """A node and its Room (slice 15.1a)."""
+
+    node: str
+    type: str  # its instance type, "" when the label is not allowlisted
+    taints: list[str]  # key=value:effect
+    cordoned: bool
+    allocatable: dict[str, float]
+    requests: dict[str, float]  # of every Running or Pending pod on it
+    daemonsets: dict[str, float]  # of those, its DaemonSets' pods
+    pods: int
+    room: dict[str, float]  # allocatable less requests
+    mine: Share  # the Contract's pods
+    others: Share  # not visible: pods outside its namespaces, never named
+    own: list[NodePod]
+
+
+class ClusterNodes(BaseModel):
+    cluster: str
+    at: float  # the run that read them
+    autoscaler: str | None = None  # as the Contract names it
+    problem: str | None = None  # why there are none
+    largest: dict[str, float] | None = None  # the Room after DaemonSets that caps Sizings
+    nodes: list[Node]
+
+
+class Nodes(BaseModel):
+    clusters: list[ClusterNodes]
+
+
 class Point(BaseModel):
     at: float
     pods: float | None = None
@@ -861,6 +906,12 @@ def router(
     @api.get("/contracts/{contract_id}/workloads")
     async def workloads(contract_id: str) -> Workloads:
         return await workloads_of(store(), contract(contract_id), now())
+
+    @api.get("/contracts/{contract_id}/nodes")
+    async def nodes(contract_id: str) -> Nodes:
+        c = contract(contract_id)
+        read = await store().latest_rooms(c.id, {cl.name for cl in c.clusters})
+        return Nodes.model_validate({"clusters": sizing.nodes_report(read, c)})
 
     @api.get("/contracts/{contract_id}/cost")
     async def cost(

@@ -829,6 +829,48 @@ test("Checks show each one's last Run and Open failure, and Deploy verifications
   expect(screen.getByText("Deployment/api 4")).toBeTruthy();
 });
 
+test("Nodes shows each node's Room, the Contract's pods by name and the rest as a sum", async () => {
+  history.replaceState(null, "", "/app/?view=nodes");
+  const node = { type: "", taints: [], cordoned: false, daemonsets: { cpu: 0.1, memory: GI / 4 }, pods: 4 };
+  answer({
+    "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]],
+    "/api/v1/contracts/demo-shop/nodes": [
+      200,
+      {
+        clusters: [
+          { cluster: "kind", at: 1_700_000_000, autoscaler: "karpenter", problem: null, largest: { cpu: 7.5, memory: 30 * GI },
+            nodes: [
+              { ...node, node: "n1", type: "m5.xlarge", taints: ["gpu=<b>true</b>:NoSchedule"], cordoned: true,
+                allocatable: { cpu: 4, memory: 16 * GI }, requests: { cpu: 1.85, memory: 6 * GI }, room: { cpu: 2.15, memory: 10 * GI },
+                mine: { pods: 2, cpu: 1.5, memory: 5 * GI }, others: { pods: 2, cpu: 0.35, memory: GI },
+                own: [{ namespace: "shop", pod: "api-1", cpu: 0.5, memory: GI }, { namespace: "shop", pod: "db-0", cpu: 1, memory: 4 * GI }] },
+            ] },
+          { cluster: "edge", at: 1_700_000_000, autoscaler: null, largest: null, nodes: [],
+            problem: "the store is shared with another Contract and has no cluster labels: node series would cross Contracts" },
+        ],
+      },
+    ],
+  });
+  const { container: page } = render(<App />);
+  await screen.findByText("demo-shop: Nodes");
+  const [kind, edge] = [...page.querySelectorAll("section.nodes")];
+  expect(kind?.textContent).toContain("Read 2023-11-14 22:13 UTC. Autoscaler: karpenter.");
+  expect(kind?.textContent).toContain("No Sizing asks more than 7.50 cores, 30.00 GiB: the largest Room after DaemonSets.");
+  const cells = [...(kind?.querySelectorAll("tbody td") ?? [])].map((td) => td.textContent);
+  expect(cells[0]).toContain("n1 m5.xlarge cordoned gpu=<b>true</b>:NoSchedule");
+  expect(page.querySelector("section.nodes b")).toBeNull();
+  expect(cells[1]).toBe("4.00 cores, 16.00 GiB");
+  expect(cells[2]).toContain("2 pods: 1.50 cores, 5.00 GiB");
+  expect(cells[2]).toContain("shop/api-1: 0.50 cores, 1.00 GiB");
+  expect(cells[3]).toBe("2 pods: 0.35 cores, 1.00 GiB");
+  expect(cells[4]).toBe("0.10 cores, 0.25 GiB");
+  expect(cells[5]).toBe("2.15 cores, 10.00 GiB");
+  expect(edge?.textContent).toContain("Autoscaler: none named in the Contract.");
+  expect(edge?.textContent).toContain("node series would cross Contracts");
+  expect(edge?.querySelector("table")).toBeNull();
+  expect(screen.getByText("Nodes", { selector: "nav a" }).getAttribute("aria-current")).toBe("page");
+});
+
 test("Health shows each integration now, the error as text, spend against the budget, secrets by name", async () => {
   history.replaceState(null, "", "/app/?view=health");
   answer({

@@ -148,7 +148,7 @@ examples/          Example inputs.
 Use the terms in `CONTEXT.md` exactly and do not invent synonyms: Contract, Operator,
 Integration, Hub, Alert, Alert group, Investigation, Triage, Question, Check, Report,
 Evidence, Runbook, Category, Recommendation, Proposed action, Approval decision, Executed
-action, Teaching, Workload, Sizing, Sizing policy, Waste, Automation, Actuator, Actuation, Revert, Reflex, Step-up, Startup boost, Burst, OOM kill, Need, Floor, Weekly profile, Backtest,
+action, Teaching, Workload, Sizing, Sizing policy, Waste, Automation, Actuator, Actuation, Revert, Reflex, Step-up, Startup boost, Burst, OOM kill, Need, Floor, Weekly profile, Backtest, Room,
 List price, Bill, Savings, Scenario, Expectation. A *Sizing* is machine output for a
 Workload; a *Recommendation* is human advice in a Report, so do not mix them.
 

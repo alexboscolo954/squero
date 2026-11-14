@@ -176,7 +176,7 @@ def sizing_show(contract_id: str, as_json: bool) -> int:
     # the Needs too, as far back as they are kept, for the Floors (slice 14.1b)
     collected, status = collect_usage(c, c.sizing.windows(), None if as_json else {})
     now = time.time()
-    out = sizing.rows(c, collected.by_window, now, collected.scaled)
+    out = sizing.rows(c, collected.by_window, now, collected.scaled, collected.rooms)
     if as_json:
         print(json.dumps(out, indent=2))
         return status

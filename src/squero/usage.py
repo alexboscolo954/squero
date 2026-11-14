@@ -534,6 +534,104 @@ def node_hours(prom: Prom, t: Target, start: float, end: float) -> tuple[float, 
     return vcpu, memory / 2**30, sampled
 
 
+SHARED_STORE = (
+    "the store is shared with another Contract and has no cluster labels: node series "
+    "would cross Contracts"
+)
+POD_REQUESTS = "kube_pod_container_resource_requests"
+
+
+def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
+    """The cluster's nodes with what their Room is made of (slice 15.1a), from
+    kube-state-metrics as it is at `at`: per node its allocatable, taints, whether it is
+    cordoned, its instance type where the label is allowlisted, and the requests of the
+    pods on it, Running or Pending (a finished pod holds nothing; init containers are
+    left out).
+
+    Node series carry no namespace, and a node's Room needs every pod on it: `requests`,
+    `daemonsets` (its DaemonSets' pods' share) and `pods` are summed by Prometheus over
+    all namespaces, scoped by the cluster's labels only, so a pod outside the Contract's
+    namespaces reaches the Hub as part of a sum and a count per node, never by name.
+    `own`: the Contract's pods there, each with its requests, read in its namespaces.
+    `problem` when no node is read; the caller refuses a store shared with another
+    Contract that has no cluster labels (`SHARED_STORE`), as for list prices."""
+    scoped = [f"{k}={_string(v)}" for k, v in sorted(t.labels.items())]
+
+    def of(metric: str, *extra: str) -> str:
+        return f"{metric}{{{','.join([*scoped, *extra])}}}"
+
+    def per_node(series: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
+        out: dict[str, dict[str, float]] = {}
+        for s in series:
+            m = s["metric"]
+            by = out.setdefault(label(m, "node"), {})
+            by[m.get("resource", "")] = by.get(m.get("resource", ""), 0.0) + float(s["value"][1])
+        return out
+
+    both = 'resource=~"cpu|memory"'
+    by = "by (node, exported_node, resource)"
+    # kube-state-metrics puts the pod's uid on every pod series: a join that needs no
+    # namespace or pod label, whichever way those were scraped
+    phase = of("kube_pod_status_phase", 'phase=~"Pending|Running"')
+    live = f"* on (uid) group_left() max by (uid) ({phase} == 1)"
+    daemons = of("kube_pod_info", 'created_by_kind="DaemonSet"')
+    of_daemons = f"* on (uid) group_left() max by (uid) ({daemons})"
+    allocatable = per_node(prom.instant(of("kube_node_status_allocatable", both), at))
+    requests = per_node(prom.instant(f"sum {by} ({of(POD_REQUESTS, both)} {live})", at))
+    daemonsets = per_node(
+        prom.instant(f"sum {by} ({of(POD_REQUESTS, both)} {of_daemons} {live})", at)
+    )
+    pods = {
+        label(s["metric"], "node"): int(float(s["value"][1]))
+        for s in prom.instant(f"count by (node, exported_node) ({of('kube_pod_info')} {live})", at)
+    }
+    # the Contract's pods by node, from kube_pod_info so one asking nothing is still its
+    # own; only its live pods are listed, so a finished one's requests go unused
+    asks: dict[tuple[str, str], dict[str, float]] = {}
+    for s in prom.instant(selector(POD_REQUESTS, t, both), at):
+        m = s["metric"]
+        pod = asks.setdefault((label(m, "namespace"), label(m, "pod")), {})
+        pod[m.get("resource", "")] = pod.get(m.get("resource", ""), 0.0) + float(s["value"][1])
+    own: dict[str, list[dict[str, Any]]] = {}
+    for s in prom.instant(f"{selector('kube_pod_info', t)} {live}", at):
+        m = s["metric"]
+        who = (label(m, "namespace"), label(m, "pod"))
+        mine = {"cpu": 0.0, "memory": 0.0} | asks.get(who, {})
+        own.setdefault(label(m, "node"), []).append({"namespace": who[0], "pod": who[1], **mine})
+    taints: dict[str, list[str]] = {}
+    for s in prom.instant(of("kube_node_spec_taint"), at):
+        m = s["metric"]
+        value = f"={m['value']}" if m.get("value") else ""
+        taints.setdefault(label(m, "node"), []).append(
+            f"{m.get('key', '')}{value}:{m.get('effect', '')}"
+        )
+    cordoned = {
+        label(s["metric"], "node")
+        for s in prom.instant(of("kube_node_spec_unschedulable") + " == 1", at)
+    }
+    labels = {
+        label(s["metric"], "node"): s["metric"] for s in prom.instant(of("kube_node_labels"), at)
+    }
+    out = []
+    for name in sorted({*allocatable, *requests} - {""}):  # "": a pod on no node yet
+        have = labels.get(name, {})
+        out.append(
+            {
+                "node": name,
+                "type": next((have[k] for k in TYPE_LABELS if have.get(k)), ""),
+                "taints": sorted(taints.get(name, [])),
+                "cordoned": name in cordoned,
+                "allocatable": allocatable.get(name, {}),
+                "requests": {"cpu": 0.0, "memory": 0.0} | requests.get(name, {}),
+                "daemonsets": {"cpu": 0.0, "memory": 0.0} | daemonsets.get(name, {}),
+                "pods": pods.get(name, 0),
+                "own": sorted(own.get(name, []), key=lambda p: (p["namespace"], p["pod"])),
+            }
+        )
+    problem = None if out else "no nodes read: kube_node_status_allocatable is missing"
+    return {"nodes": out, "problem": problem}
+
+
 NEEDS_FOR = 56 * 86400  # Needs are kept, and first read, this far back (slice 14.1a)
 HPA = "kube_horizontalpodautoscaler"
 
@@ -710,6 +808,8 @@ class Collected:
     scaled: dict[str, dict[Workload, list[Divides]]] = field(default_factory=dict)
     # per cluster read, each Workload's HPAs' minimum and maximum (slice 14.1b)
     bounds: dict[str, dict[Workload, list[Bounds]]] = field(default_factory=dict)
+    # per cluster, its nodes and what their Room is made of (slice 15.1a), or why not
+    rooms: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def collect(
@@ -769,13 +869,18 @@ def collect(
             out.bounds[t.cluster] = bounds(prom, t, end, min(max(windows), NEEDS_FOR))
         except UsageError as e:
             log.warning("%s/%s: its HPAs' bounds not read: %s", c.id, t.cluster, e)
+        # Node series carry no namespace: one guard for every read of them
+        crossing = t.cluster in c._shared_stores and not t.labels
+        if crossing:
+            out.rooms[t.cluster] = {"nodes": [], "problem": SHARED_STORE}
+        else:
+            try:
+                out.rooms[t.cluster] = rooms(prom, t, end)
+            except UsageError as e:
+                out.rooms[t.cluster] = {"nodes": [], "problem": str(e)}
         if c.list_prices:
-            if t.cluster in c._shared_stores and not t.labels:
-                out.nodes[t.cluster] = {
-                    "nodes": [],
-                    "problem": "the store is shared with another Contract and has no cluster "
-                    "labels: node series would cross Contracts",
-                }
+            if crossing:
+                out.nodes[t.cluster] = {"nodes": [], "problem": SHARED_STORE}
             else:
                 try:
                     out.nodes[t.cluster] = nodes(prom, t, end, cluster.provider)

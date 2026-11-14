@@ -13,7 +13,7 @@ function verdict(passed: boolean | null | undefined, status: string | null | und
 }
 
 /** Load once per Contract: the Hub's answer, or why it didn't answer. */
-function useLoaded<T>(load: (contract: string) => Promise<T>, contract: string): [T | null, string] {
+export function useLoaded<T>(load: (contract: string) => Promise<T>, contract: string): [T | null, string] {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {

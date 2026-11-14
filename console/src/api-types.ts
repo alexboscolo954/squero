@@ -205,6 +205,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/contracts/{contract_id}/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Nodes */
+        get: operations["nodes_api_v1_contracts__contract_id__nodes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/contracts/{contract_id}/questions": {
         parameters: {
             query?: never;
@@ -681,6 +698,23 @@ export interface components {
             checks: components["schemas"]["CheckSchedule"][];
             /** Deploys */
             deploys: components["schemas"]["DeployCheck"][];
+        };
+        /** ClusterNodes */
+        ClusterNodes: {
+            /** At */
+            at: number;
+            /** Autoscaler */
+            autoscaler?: string | null;
+            /** Cluster */
+            cluster: string;
+            /** Largest */
+            largest?: {
+                [key: string]: number;
+            } | null;
+            /** Nodes */
+            nodes: components["schemas"]["Node"][];
+            /** Problem */
+            problem?: string | null;
         };
         /** ClusterStatus */
         ClusterStatus: {
@@ -1176,6 +1210,58 @@ export interface components {
             /** Since */
             since?: number | null;
         };
+        /**
+         * Node
+         * @description A node and its Room (slice 15.1a).
+         */
+        Node: {
+            /** Allocatable */
+            allocatable: {
+                [key: string]: number;
+            };
+            /** Cordoned */
+            cordoned: boolean;
+            /** Daemonsets */
+            daemonsets: {
+                [key: string]: number;
+            };
+            mine: components["schemas"]["Share"];
+            /** Node */
+            node: string;
+            others: components["schemas"]["Share"];
+            /** Own */
+            own: components["schemas"]["NodePod"][];
+            /** Pods */
+            pods: number;
+            /** Requests */
+            requests: {
+                [key: string]: number;
+            };
+            /** Room */
+            room: {
+                [key: string]: number;
+            };
+            /** Taints */
+            taints: string[];
+            /** Type */
+            type: string;
+        };
+        /** NodePod */
+        NodePod: {
+            /** Cpu */
+            cpu: number;
+            /** Memory */
+            memory: number;
+            /** Namespace */
+            namespace: string;
+            /** Pod */
+            pod: string;
+        };
+        /** Nodes */
+        Nodes: {
+            /** Clusters */
+            clusters: components["schemas"]["ClusterNodes"][];
+        };
         /** Point */
         Point: {
             /** At */
@@ -1315,6 +1401,18 @@ export interface components {
             rate: number;
             /** Week */
             week: number;
+        };
+        /**
+         * Share
+         * @description Some of a node's pods and what they ask together.
+         */
+        Share: {
+            /** Cpu */
+            cpu: number;
+            /** Memory */
+            memory: number;
+            /** Pods */
+            pods: number;
         };
         /** SpentCost */
         SpentCost: {
@@ -1973,6 +2071,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KillSwitch"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nodes_api_v1_contracts__contract_id__nodes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                contract_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Nodes"];
                 };
             };
             /** @description Validation Error */

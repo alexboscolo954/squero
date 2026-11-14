@@ -612,6 +612,28 @@ class Store:
             (contract_id, cluster, at, Jsonb(facts)),
         )
 
+    async def save_rooms(
+        self, contract_id: str, cluster: str, at: float, rooms: dict[str, Any]
+    ) -> None:
+        """A cluster's nodes and what their Room is made of, as the latest run read them
+        (slice 15.1a), replacing the last."""
+        await self._exec(
+            "insert into cluster_rooms (contract_id, cluster, at, rooms) values (%s, %s, %s, %s) "
+            "on conflict (contract_id, cluster) do update set at = excluded.at, "
+            "rooms = excluded.rooms",
+            (contract_id, cluster, at, Jsonb(rooms)),
+        )
+
+    async def latest_rooms(self, contract_id: str, clusters: set[str]) -> dict[str, dict[str, Any]]:
+        """Each of the Contract's `clusters` (its clusters now) with its latest read of
+        its nodes: `at`, `nodes`, `problem`."""
+        rows = await self._all(
+            "select cluster, at, rooms from cluster_rooms "
+            "where contract_id = %s and cluster = any(%s)",
+            (contract_id, sorted(clusters)),
+        )
+        return {r["cluster"]: {"at": r["at"], **r["rooms"]} for r in rows}
+
     async def latest_nodes(self, contract_id: str) -> dict[str, dict[str, Any]]:
         """Each cluster's latest node facts: `at`, `nodes`, `problem`."""
         rows = await self._all(

@@ -820,7 +820,11 @@ async def test_hourly_usage_reads_a_relay_cluster_through_the_hubs_relays() -> N
     assert offline.clusters["edge"].startswith("Relay offline: cluster 'edge'")  # type: ignore[union-attr]
     assert read.clusters == {"edge": None} and asked  # read, through the Relay
     probe = 'count(kube_pod_owner{exported_namespace!=""})'  # how ksm is scraped, as Direct
-    assert all('namespace=~"shop"' in q for q in asked if q != probe)  # its namespaces only
+    wide = [q for q in asked if q != probe and 'namespace=~"shop"' not in q]
+    # its namespaces only, but for a node's Room (slice 15.1a): node series, which carry
+    # none, and pods outside them only as Prometheus sums and counts them per node
+    per_node = ("kube_node_", "sum by (node, exported_node", "count by (node, exported_node")
+    assert wide and all(q.startswith(per_node) for q in wide)
 
 
 @pytest.mark.anyio

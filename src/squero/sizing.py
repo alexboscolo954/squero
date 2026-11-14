@@ -54,6 +54,7 @@ RiskKind = Literal[
     "limit_below_need",
     "capped_by_policy",
     "request_unset",
+    "needs_larger_node",  # slice 15.1a
 ]
 DERIVED = ("under_requested", "request_unset")  # the action says it: `sizing show` omits them
 
@@ -103,6 +104,12 @@ def _round_up(resource: str, value: float) -> float:
     return float(math.ceil(round(value / 2**20, 6)) * 2**20)
 
 
+def _round_down(resource: str, value: float) -> float:
+    if resource == "cpu":
+        return math.floor(round(value * 1000, 6)) / 1000
+    return float(math.floor(round(value / 2**20, 6)) * 2**20)
+
+
 def show(resource: str, value: float) -> str:
     return f"{value * 1000:.0f}m" if resource == "cpu" else f"{value / 2**20:.0f}Mi"
 
@@ -114,9 +121,12 @@ def _resource(
     risks: list[Risk],
     hold: Risk | None,
     policy: Policy,
+    room: float | None = None,
 ) -> Resource:
-    """headroom, floor, max, limit, rounding, then the change threshold. `hold`: why
-    this resource may not be lowered (its usage hides the real demand)."""
+    """headroom, floor, max, limit, the largest node's Room, rounding, then the change
+    threshold. `hold`: why this resource may not be lowered (its usage hides the real
+    demand). `room` (slice 15.1a): the most any node of its cluster has after its
+    DaemonSets; it only ever stops a raise, never below the request it has now."""
     p = policy.cpu if resource == "cpu" else policy.memory
     target = max(basis * (1 + p.headroom), p.floor)
     if p.max is not None and target > p.max:
@@ -138,8 +148,24 @@ def _resource(
             )
         )
         target = limit
-    target = _round_up(resource, target)
     current = u.requests.get(resource)
+    if room is not None:
+        # rounded down, so the rounding up below stays within it; a request above it
+        # (its node cordoned, or gone from this read) is no reason to lower one
+        most = _round_down(resource, room)
+        room = max(most, current or 0.0)
+        if target > room:
+            needs = f"it needs {show(resource, _round_up(resource, target))}, so a larger node"
+            text = (
+                f"{resource} kept at {show(resource, room)}, though no node has room for "
+                f"more than {show(resource, most)} after its DaemonSets: {needs}"
+                if room > most
+                else f"{resource} capped at {show(resource, room)}, the most a node has "
+                f"room for after its DaemonSets: {needs}"
+            )
+            risks.append(Risk("needs_larger_node", text))
+            target = room
+    target = _round_up(resource, target)
     if current is None:
         return Resource(None, target, "set", basis)
     if abs(target - current) < max(policy.threshold * current, MIN_CHANGE[resource]):
@@ -151,11 +177,17 @@ def _resource(
 
 
 def size(
-    u: ContainerUsage, now: float, policy: Policy = PRODUCTION, history: float | None = None
+    u: ContainerUsage,
+    now: float,
+    policy: Policy = PRODUCTION,
+    history: float | None = None,
+    room: dict[str, float] | None = None,
 ) -> Sizing:
     """The Sizing for one container, or `learning` under the policy's history:
     `history` as its cluster covers it (slice 9.7), else the container's own span, a
-    container on its own having no cluster to tell a gap by."""
+    container on its own having no cluster to tell a gap by. `room`: its cluster's
+    largest Room after DaemonSets (largest_room), which caps it; none, no cap."""
+    room = room or {}
     times = [t for t, _ in u.cpu + u.memory]
     if history is None:
         history = max(times) - min(times) if times else 0.0
@@ -177,7 +209,7 @@ def size(
             Risk("throttled", "CPU kept: throttling hides how much it needs") if throttled else None
         )
         basis = weighted_percentile(u.cpu, policy.cpu.percentile, now, policy.half_life)
-        s.cpu = _resource("cpu", basis, u, s.risks, hold, policy)
+        s.cpu = _resource("cpu", basis, u, s.risks, hold, policy, room.get("cpu"))
     if u.memory:
         hold = None
         if u.oom_killed_pods:
@@ -190,7 +222,7 @@ def size(
             )
             hold = Risk("oom_killed", "memory kept: OOM kills hide how much it needs")
         peak = max(v for _, v in u.memory)
-        s.memory = _resource("memory", peak, u, s.risks, hold, policy)
+        s.memory = _resource("memory", peak, u, s.risks, hold, policy, room.get("memory"))
     return s
 
 
@@ -280,16 +312,74 @@ def held(
     return None
 
 
+def largest_room(found: dict[str, Any] | None) -> dict[str, float] | None:
+    """The most a pod could ask of any node of a cluster (slice 15.1a): per resource,
+    the largest Room after its DaemonSets among the nodes not cordoned, tainted ones
+    included (a Workload's tolerations can't be seen: too generous changes nothing, too
+    strict would shrink a correct Sizing). None, so no cap, for a cluster not read, one
+    with a problem, or a read missing a node's allocatable: half a read is no ceiling."""
+    nodes = (found or {}).get("nodes") or []
+    if not found or found.get("problem"):
+        return None
+    if any(res not in n["allocatable"] for n in nodes for res in ("cpu", "memory")):
+        return None
+    open_ = [n for n in nodes if not n["cordoned"]]
+    if not open_:
+        return None
+    return {
+        res: max(n["allocatable"][res] - n["daemonsets"].get(res, 0.0) for n in open_)
+        for res in ("cpu", "memory")
+    }
+
+
+def nodes_report(found: dict[str, dict[str, Any]], c: Contract) -> list[dict[str, Any]]:
+    """Stored nodes as the console shows them (slice 15.1a), per cluster of the Contract
+    that has a read: each node's Room (its allocatable less every pod's requests), split
+    into the Contract's own pods (`mine`) and the rest (`others`: not visible, a count
+    and a sum, nothing else of them is ever read), the cluster's largest Room after
+    DaemonSets, which caps its Sizings, and the autoscaler the Contract names."""
+    out = []
+    for cl in c.clusters:
+        read = found.get(cl.name)
+        if read is None:
+            continue
+        nodes = []
+        for n in read["nodes"]:
+            mine = {res: sum(p[res] for p in n["own"]) for res in ("cpu", "memory")}
+            rest = {res: max(0.0, n["requests"][res] - mine[res]) for res in mine}
+            room = {res: v - n["requests"][res] for res, v in n["allocatable"].items()}
+            nodes.append(
+                {
+                    **n,
+                    "room": room,
+                    "mine": {"pods": len(n["own"]), **mine},
+                    "others": {"pods": max(0, n["pods"] - len(n["own"])), **rest},
+                }
+            )
+        out.append(
+            {
+                **{"cluster": cl.name, "at": read["at"], "autoscaler": cl.autoscaler},
+                **{"problem": read.get("problem"), "largest": largest_room(read), "nodes": nodes},
+            }
+        )
+    return out
+
+
 def rows(
     c: Contract,
     by_window: dict[int, list[tuple[str, ContainerUsage]]],
     now: float,
     scaled: dict[str, dict[Workload, list[Divides]]] | None = None,
+    rooms: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Every container's Sizing under its policy, as `sizing show`, the stored runs and
     `sizing waste` see it, sorted by name. `off` gives an excluded row. `scaled`: per
     cluster, the HPA targets that divide by a request (slice 14.3): a Sizing that would
-    change such a request is `held`."""
+    change such a request is `held`. `rooms`: per cluster, its nodes (usage.rooms): no
+    Sizing asks more than the largest Room after DaemonSets there, a DaemonSet's own
+    aside (that Room already leaves its requests out), and a Workload whose containers
+    together ask more says so on each of them."""
+    caps = {cluster: largest_room(found) for cluster, found in (rooms or {}).items()}
     out: dict[str, dict[str, Any]] = {}
     asked: dict[tuple[str, Workload], dict[str, dict[str, float]]] = {}  # per container
     for found in by_window.values():
@@ -331,7 +421,9 @@ def rows(
                 since = now - c.actuator.reflexes.burst.expires
                 peak = max((v for at, v in u.cpu if at >= since), default=None)
                 row["burst"] = {"throttled": u.throttled_recent, "peak": peak}
-            s = size(u, now, policy, history(u, covered[cluster], usage.step_for(window)))
+            cap = None if w.kind == "DaemonSet" else caps.get(cluster)
+            covers = history(u, covered[cluster], usage.step_for(window))
+            s = size(u, now, policy, covers, cap)
             row |= {
                 "state": s.state,
                 "history_h": round(s.history_s / 3600, 1),
@@ -372,6 +464,26 @@ def rows(
                 row["waste"] = waste
             row["risks"] = [r._asdict() for r in risks]
             out[row["workload"]] = row
+    together: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+    for row in out.values():
+        if row["kind"] != "DaemonSet" and caps.get(row["cluster"]):
+            key = (row["cluster"], row["namespace"], row["kind"], row["name"])
+            together.setdefault(key, []).append(row)
+    for (cluster, *_), containers in together.items():
+        for resource, most in (caps[cluster] or {}).items():
+            asks = sum(
+                r[resource]["target"] if r.get(resource) else (r["requests"].get(resource) or 0.0)
+                for r in containers
+            )
+            if len(containers) > 1 and asks > most + 1e-9:
+                text = (
+                    f"its pod's containers ask {show(resource, asks)} of {resource} "
+                    f"together, more than the {show(resource, _round_down(resource, most))} "
+                    "a node has room for after its DaemonSets: it needs a larger node"
+                )
+                for r in containers:
+                    if r["state"] == "ready":  # a risk of its Sizing: one learning has none
+                        r["risks"].append({"kind": "needs_larger_node", "text": text})
     return [out[k] for k in sorted(out)]
 
 
@@ -1060,8 +1172,10 @@ async def store_run(
     # Each cluster's last good run, read before this one finishes (it would compare
     # with itself)
     before, status = await store.latest_sizings(c.id, set(found.clusters))
-    now = rows(c, found.by_window, at, found.scaled)
+    now = rows(c, found.by_window, at, found.scaled, found.rooms)
     await store.finish_sizing_run(run_id, c.id, found.clusters, now)
+    for cluster, read in found.rooms.items():  # slice 15.1a
+        await store.save_rooms(c.id, cluster, at, read)
     for cluster, facts in found.nodes.items():
         await store.save_nodes(c.id, cluster, at, facts)
     for cluster, needs in found.needs.items():
