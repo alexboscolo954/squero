@@ -21,7 +21,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: relay
-          image: ghcr.io/alexboscolo954/squero:0.49.0
+          image: ghcr.io/alexboscolo954/squero:0.50.0
           args: [relay]
           env:
             - {name: HOME, value: /tmp}   # read-only root fs
