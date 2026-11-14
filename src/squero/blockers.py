@@ -289,13 +289,14 @@ def changes(
             )
         elif rule == "safe_false":
             change = (
-                f"remove the annotation {SAFE} from its pod template if its pods may "
-                "be evicted: someone set it on purpose"
+                f"remove the annotation {SAFE} where it is set (its Workload's pod "
+                "template, or the pod itself) if it may be evicted: someone set it on purpose"
             )
         elif rule == "do_not_disrupt":
             change = (
-                f"remove the annotation {DO_NOT_DISRUPT} from its pod template if its "
-                "pods may be disrupted: someone set it on purpose"
+                f"remove the annotation {DO_NOT_DISRUPT} where it is set (its Workload's "
+                "pod template, or the pod itself) if it may be disrupted: someone set it "
+                "on purpose"
             )
         elif rule == "do_not_disrupt_for":
             change = "it ends by itself, that long after the pod started; nothing to change"
