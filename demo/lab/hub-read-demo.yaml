@@ -1,0 +1,35 @@
+# The Hub's read-only access to the Triage demo and to demo-bank's namespace on the lab
+# cluster, after demo/lab/hub-read.yaml. demo-shop's account (`squero`) gains `demo` and
+# `orders`; the GitOps stand-ins' namespaces come from deploy/gitops/rbac-gitops.yaml.
+# demo-bank gets an account of its own (`squero-bank`), bound in `bank` only, with its own
+# token: one Contract's kubeconfig can never read the other's namespaces.
+#   kubectl --context kind-lab apply -f demo/lab/hub-read-demo.yaml -f deploy/gitops/rbac-gitops.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: squero-read, namespace: demo}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: squero-read}
+subjects: [{kind: ServiceAccount, name: squero, namespace: squero}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: squero-read, namespace: orders}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: squero-read}
+subjects: [{kind: ServiceAccount, name: squero, namespace: squero}]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: squero-bank, namespace: squero}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: squero-read, namespace: bank}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: squero-read}
+subjects: [{kind: ServiceAccount, name: squero-bank, namespace: squero}]
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: squero-bank-token
+  namespace: squero
+  annotations: {kubernetes.io/service-account.name: squero-bank}
+type: kubernetes.io/service-account-token

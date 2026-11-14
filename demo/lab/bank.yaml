@@ -1,0 +1,31 @@
+# A second Contract's Workload on the lab cluster (demo-bank): steady and over-requested,
+# in its own namespace, so two Contracts share one cluster and one Prometheus, which is
+# what isolation is for. The namespace comes with the Triage demo (demo/apps.yaml).
+#   kubectl --context kind-lab apply -f demo/lab/bank.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: ledger, namespace: bank}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: ledger}
+  template:
+    metadata:
+      labels: {app: ledger, team: payments}
+    spec:
+      containers:
+      - name: app
+        image: python:3.12-alpine
+        command: [python, -u, -c]
+        args:
+        - |
+          import time
+          held = bytearray(32 * 2**20)
+          while True:  # about 15m of a core, and 32 MiB kept resident
+              start = time.monotonic()
+              while time.monotonic() - start < 0.015:
+                  pass
+              held[::4096] = b"x" * len(held[::4096])
+              time.sleep(0.985)
+        resources:
+          requests: {cpu: 50m, memory: 128Mi}
