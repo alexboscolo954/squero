@@ -628,6 +628,21 @@ function ContainerDetail({ contract, c }: { contract: string; c: Container }) {
         CPU {c.cpu?.action ?? "-"} {cpu(c.cpu?.current)} → {cpu(c.cpu?.target)}; memory{" "}
         {c.memory?.action ?? "-"} {memory(c.memory?.current)} → {memory(c.memory?.target)}
       </p>
+      {(c.groups ?? []).length > 0 && (
+        <details className="types">
+          <summary>By instance type ({c.groups!.length}): the one Sizing above is what is applied to every pod</summary>
+          <ul>
+            {c.groups!.map((g) => (
+              <li key={g.type}>
+                {g.type || "nodes with no instance type"} ({g.pods} pods):{" "}
+                {g.state === "learning"
+                  ? `learning (${g.history_h} h of usage)`
+                  : `CPU ${g.cpu?.action ?? "-"} ${cpu(g.cpu?.current)} → ${cpu(g.cpu?.target)}; memory ${g.memory?.action ?? "-"} ${memory(g.memory?.current)} → ${memory(g.memory?.target)}`}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       {(
         [
           ["CPU", c.cpu?.held],

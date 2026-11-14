@@ -205,6 +205,8 @@ def sizing_show(contract_id: str, as_json: bool) -> int:
         texts = [r["text"] for r in row["risks"] if r["kind"] not in sizing.DERIVED]
         risks = f" | risk: {'; '.join(texts)}" if texts else ""
         print(f"{head}: {', '.join(parts)}{short}{risks}")
+        for line in sizing.group_lines(row):  # slice 15.3a
+            print(line)
     needs = {
         cluster: {(w.namespace, w.kind, w.name): hours for w, hours in found.items()}
         for cluster, found in collected.needs.items()

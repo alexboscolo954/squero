@@ -991,6 +991,14 @@
               }
             ]
           },
+          "groups": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/TypeSizing"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
           "history_h": {
             "anyOf": [
               {
@@ -3569,6 +3577,94 @@
           "answer"
         ],
         "title": "Turn",
+        "type": "object"
+      },
+      "TypeResource": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "basis": {
+            "title": "Basis",
+            "type": "number"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current"
+          },
+          "target": {
+            "title": "Target",
+            "type": "number"
+          }
+        },
+        "required": [
+          "action",
+          "current",
+          "target",
+          "basis"
+        ],
+        "title": "TypeResource",
+        "type": "object"
+      },
+      "TypeSizing": {
+        "description": "A DaemonSet container's Sizing on nodes of one instance type (slice 15.3a).",
+        "properties": {
+          "cpu": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TypeResource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "history_h": {
+            "title": "History H",
+            "type": "number"
+          },
+          "memory": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TypeResource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pods": {
+            "title": "Pods",
+            "type": "number"
+          },
+          "state": {
+            "enum": [
+              "ready",
+              "learning"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "pods",
+          "state",
+          "history_h"
+        ],
+        "title": "TypeSizing",
         "type": "object"
       },
       "Usage": {

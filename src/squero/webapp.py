@@ -100,6 +100,24 @@ class Cost(BaseModel):
     requests: float  # every request, ready or not
 
 
+class TypeResource(BaseModel):
+    action: str
+    current: float | None  # the request of its own pods
+    target: float
+    basis: float
+
+
+class TypeSizing(BaseModel):
+    """A DaemonSet container's Sizing on nodes of one instance type (slice 15.3a)."""
+
+    type: str  # "" for nodes without the label
+    pods: float
+    state: Literal["ready", "learning"]
+    history_h: float
+    cpu: TypeResource | None = None
+    memory: TypeResource | None = None
+
+
 class Container(BaseModel):
     workload: str
     cluster: str
@@ -116,6 +134,7 @@ class Container(BaseModel):
     memory: Resource | None = None
     waste: Waste | None = None
     risks: list[Risk] = []
+    groups: list[TypeSizing] = []  # by instance type, where an Actuator could apply them
 
 
 class Workload(BaseModel):

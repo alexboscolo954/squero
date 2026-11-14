@@ -21,6 +21,7 @@ const container = {
   memory: { action: "lower", current: GI, target: 96 * 2 ** 20, basis: 80 * 2 ** 20 },
   waste: { cpu: 2.655, memory: 2.7 * GI },
   risks: [{ kind: "oom_killed", text: '<img src=x onerror="alert(1)">' }],
+  groups: [] as NonNullable<import("./api").Container["groups"]>, // slice 15.3a: per instance type
 };
 
 function workload(name: string, cpu: number, memory: number, risks = container.risks) {
@@ -92,6 +93,33 @@ test("a request its HPA divides by shows as held, with the change that frees it 
   expect(page.querySelector("pre")?.textContent).toBe(change);
   expect(page.querySelector("pre b")).toBeNull();
   expect(screen.queryByText(/Memory is held/)).toBeNull();
+});
+
+test("a DaemonSet's container lists its Sizing per instance type under the one that is applied", async () => {
+  const agent = workload("agent", 1, 0, []);
+  const typed = { action: "lower", current: 0.5, target: 0.06, basis: 0.05 };
+  agent.containers[0].groups = [
+    { type: "", pods: 1, state: "learning", history_h: 1 },
+    { type: "m5.<b>large</b>", pods: 2, state: "ready", history_h: 48, cpu: typed, memory: { ...typed, current: 256 * 2 ** 20, target: 77 * 2 ** 20 } },
+  ];
+  answer({
+    "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]],
+    "/api/v1/contracts/demo-shop/workloads": [200, { ...DATA, workloads: [agent, workload("plain", 0.5, 0, [])] }],
+    "/api/v1/contracts/demo-shop/history": [200, { points: [] }],
+  });
+  const { container: page } = render(<App />);
+  fireEvent.click(await screen.findByText("Deployment/agent"));
+  const types = page.querySelector("details.types");
+  expect(types?.querySelector("summary")?.textContent).toBe("By instance type (2): the one Sizing above is what is applied to every pod");
+  const lines = [...(types?.querySelectorAll("li") ?? [])].map((li) => li.textContent);
+  expect(lines).toEqual([
+    "nodes with no instance type (1 pods): learning (1 h of usage)",
+    "m5.<b>large</b> (2 pods): CPU lower 500m → 60m; memory lower 256Mi → 77Mi",
+  ]);
+  expect(page.querySelector("details.types b")).toBeNull();
+  fireEvent.click(screen.getByText("Deployment/plain"));
+  await screen.findByText(/CPU lower 1000m/);
+  expect(page.querySelector("details.types")).toBeNull(); // a container without groups shows none
 });
 
 test("autoscaled Workloads show their Floor, its saving and its risks as text", async () => {

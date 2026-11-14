@@ -278,6 +278,10 @@ class ContainerUsage:
     running: list[float] = field(default_factory=list)  # a time per Running pod per step
     labels: dict[str, str] = field(default_factory=dict)  # the allocation's, newest pod's
     live: bool = False  # requests or limits read from pods seen in the last 5 minutes
+    # slice 15.3a, a DaemonSet's on a cluster that runs an Actuator: the same container
+    # by its pods' nodes' instance type ("" for nodes without the label), each with its
+    # own pods' samples and requests; empty with fewer than two types
+    groups: dict[str, "ContainerUsage"] = field(default_factory=dict)
 
 
 @dataclass
@@ -295,13 +299,17 @@ def usage(
     fallback: Callable[[], dict[tuple[str, str], Workload]] | None = None,
     labels: Sequence[str] = (),
     recent: bool = False,
+    types: dict[tuple[str, str], str] | None = None,
 ) -> Usage:
     """Every container's pooled usage over the window, and the pods whose Workload
     nobody knows. `fallback` (the Kubernetes API) is asked once, only when a pod with
     usage isn't in kube-state-metrics; kube-state-metrics wins where both know a pod.
     A fallback that fails leaves those pods unknown, never the rest unread. `labels`:
     the pod label keys each Workload gets from kube_pod_labels, its newest pod's.
-    `recent`: also each container's throttling over the last hour (slice 13.3a)."""
+    `recent`: also each container's throttling over the last hour (slice 13.3a).
+    `types` (pod_types, slice 15.3a): each pod's node's instance type; given, a
+    DaemonSet's container is also kept per type (`groups`), from the pods whose node is
+    known, and only when they are of two types or more."""
     end = end or time.time()
     start, step = end - window_s, step_for(window_s)
     window = f"{window_s}s"
@@ -337,6 +345,11 @@ def usage(
             r = rows.setdefault((w, container), ContainerUsage(w, container))
             r.pods.add(label(m, "pod"))
             getattr(r, into).extend((float(at), float(v)) for at, v in s["values"])
+            kind = None if types is None else types.get((label(m, "namespace"), label(m, "pod")))
+            if kind is not None and w.kind == "DaemonSet":  # None: its node isn't known
+                g = r.groups.setdefault(kind, ContainerUsage(w, container))
+                g.pods.add(label(m, "pod"))
+                getattr(g, into).extend((float(at), float(v)) for at, v in s["values"])
     for metric, into in (
         ("kube_pod_container_resource_requests", "requests"),
         ("kube_pod_container_resource_limits", "limits"),
@@ -351,15 +364,17 @@ def usage(
                 res = m.get("resource")
                 if res not in ("cpu", "memory") or not (hit := _known(rows, owners, m)):
                     continue
-                if span == window and (id(hit), res) in live:
-                    continue
-                if span != window:
-                    live.add((id(hit), res))
-                    hit.live = True
-                # ponytail: the largest across those pods; mid-rollout that is the old
-                # or the new value, whichever is bigger, until the old pods are gone
-                current = getattr(hit, into)
-                current[res] = max(current.get(res, 0.0), float(s["value"][1]))
+                kind = (types or {}).get((label(m, "namespace"), label(m, "pod")))
+                for one in (hit, hit.groups.get(kind) if kind is not None else None):
+                    if one is None or (span == window and (id(one), res) in live):
+                        continue  # a group's requests are its own pods', as the row's are
+                    if span != window:
+                        live.add((id(one), res))
+                        one.live = True
+                    # ponytail: the largest across those pods; mid-rollout that is the
+                    # old or the new value, whichever is bigger, until the old pods are gone
+                    current = getattr(one, into)
+                    current[res] = max(current.get(res, 0.0), float(s["value"][1]))
     oom = selector("kube_pod_container_status_last_terminated_reason", t, 'reason="OOMKilled"')
     for s in at_end(f"max_over_time({oom}[{window}])"):
         if float(s["value"][1]) > 0 and (hit := _known(rows, owners, s["metric"])):
@@ -391,6 +406,12 @@ def usage(
         running[pod].update(float(at) for at, v in s["values"] if float(v) > 0)
     for (w, _), r in rows.items():
         r.running = sorted(at for pod in r.pods for at in running.get((w.namespace, pod), ()))
+        if len(r.groups) < 2:  # one type: the pooled Sizing is that one's
+            r.groups = {}
+        for g in r.groups.values():
+            # what hides the container's real demand hides every group's
+            g.throttled, g.oom_killed_pods = r.throttled, r.oom_killed_pods
+            g.running = sorted(at for pod in g.pods for at in running.get((w.namespace, pod), ()))
     if labels:
         newest = _newest_labels(at_end, t, window, owners, labels)
         for (w, _), r in rows.items():
@@ -456,6 +477,27 @@ def _sum_by_row(
 
 
 TYPE_LABELS = ("label_node_kubernetes_io_instance_type", "label_beta_kubernetes_io_instance_type")
+
+
+def pod_types(prom: Prom, t: Target, window_s: int, end: float) -> dict[tuple[str, str], str]:
+    """(namespace, pod) -> the instance type of the node it ran on, over the window, for
+    the Contract's pods (slice 15.3a): "" for a node without the label (not allowlisted
+    in kube-state-metrics, or bare metal). A pod whose node isn't found is left out:
+    not known is no type. Node series carry no namespace: the caller keeps the guard
+    of every node read."""
+    scoped = ",".join(f"{k}={_string(v)}" for k, v in sorted(t.labels.items()))
+    kinds = {}
+    for s in prom.instant(f"last_over_time(kube_node_labels{{{scoped}}}[{window_s}s])", end):
+        m = s["metric"]
+        kinds[label(m, "node")] = next((m[k] for k in TYPE_LABELS if m.get(k)), "")
+    out = {}
+    for s in prom.instant(f"last_over_time({selector('kube_pod_info', t)}[{window_s}s])", end):
+        m = s["metric"]
+        if label(m, "node") in kinds:
+            out[(label(m, "namespace"), label(m, "pod"))] = kinds[label(m, "node")]
+    return out
+
+
 REGION_LABELS = (
     "label_topology_kubernetes_io_region",
     "label_failure_domain_beta_kubernetes_io_region",
@@ -906,13 +948,22 @@ def collect(
         recent = c.actuator.reflexes.burst is not None  # slice 13.3a
         # A Relay's cluster has no Kubernetes API here: its Workloads come from metrics.
         fallback = from_api if t.relay is None else None
+        # Node series carry no namespace: one guard for every read of them
+        crossing = t.cluster in c._shared_stores and not t.labels
         try:
             t, missing = check(prom, t, end)
             # ponytail: each window queried in full (a 7d and a 14d policy read the 14d
             # range twice), so a policy's OOM kills, throttling and step are its own
-            by_window = {
-                w: usage(prom, t, w, end, fallback, c.allocation.labels, recent) for w in windows
-            }
+            by_window = {}
+            for w in windows:
+                kinds = None
+                # slice 15.3a: only an Actuator can size a DaemonSet's pods per node
+                if cluster.actuator_token_secret and not crossing:
+                    try:
+                        kinds = pod_types(prom, t, w, end)
+                    except UsageError as e:
+                        log.warning("%s/%s: its nodes' types not read: %s", c.id, t.cluster, e)
+                by_window[w] = usage(prom, t, w, end, fallback, c.allocation.labels, recent, kinds)
         except UsageError as e:
             out.clusters[t.cluster] = str(e)
             continue
@@ -933,8 +984,6 @@ def collect(
             out.bounds[t.cluster] = bounds(prom, t, end, min(max(windows), NEEDS_FOR))
         except UsageError as e:
             log.warning("%s/%s: its HPAs' bounds not read: %s", c.id, t.cluster, e)
-        # Node series carry no namespace: one guard for every read of them
-        crossing = t.cluster in c._shared_stores and not t.labels
         if crossing:
             out.rooms[t.cluster] = {"nodes": [], "problem": SHARED_STORE}
         else:

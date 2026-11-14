@@ -796,6 +796,11 @@ export interface components {
             /** Container */
             container: string;
             cpu?: components["schemas"]["Resource"] | null;
+            /**
+             * Groups
+             * @default []
+             */
+            groups: components["schemas"]["TypeSizing"][];
             /** History H */
             history_h?: number | null;
             /** Kind */
@@ -1679,6 +1684,36 @@ export interface components {
             at: number;
             /** Question */
             question: string;
+        };
+        /** TypeResource */
+        TypeResource: {
+            /** Action */
+            action: string;
+            /** Basis */
+            basis: number;
+            /** Current */
+            current: number | null;
+            /** Target */
+            target: number;
+        };
+        /**
+         * TypeSizing
+         * @description A DaemonSet container's Sizing on nodes of one instance type (slice 15.3a).
+         */
+        TypeSizing: {
+            cpu?: components["schemas"]["TypeResource"] | null;
+            /** History H */
+            history_h: number;
+            memory?: components["schemas"]["TypeResource"] | null;
+            /** Pods */
+            pods: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ready" | "learning";
+            /** Type */
+            type: string;
         };
         /** Usage */
         Usage: {

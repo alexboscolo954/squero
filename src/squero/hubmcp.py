@@ -38,7 +38,7 @@ from squero.contracts import Contract
 from squero.models import Investigation
 from squero.observability import AuditMiddleware
 from squero.servers.sizing import allowed, workload
-from squero.sizing import floor_text, profile_lines, show
+from squero.sizing import floor_text, group_lines, profile_lines, show
 from squero.store import Store
 
 READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)
@@ -99,6 +99,18 @@ def _resource(res: str, r: webapp.Resource | None) -> dict[str, Any] | None:
     if r.held:  # slice 14.3
         out["held"] = r.held.change or f"by its HPA {r.held.hpa}"
     return out
+
+
+MAX_TYPES = 10  # of a DaemonSet's instance types given to the model; the rest counted
+
+
+def _by_type(c: webapp.Container) -> dict[str, Any]:
+    """A DaemonSet container's Sizings per instance type (slice 15.3a), as lines, or
+    nothing: the busiest types first would need usage, so by name, capped."""
+    if not c.groups:
+        return {}
+    lines = group_lines({"groups": [g.model_dump() for g in c.groups[:MAX_TYPES]]})
+    return {"by_instance_type": lines, "more_types": max(0, len(c.groups) - MAX_TYPES)}
 
 
 MAX_BLOCKERS = 5  # a node's Blockers given to the model, one per Workload; the rest counted
@@ -167,6 +179,7 @@ def _workload(w: webapp.Workload, approved: dict[str, Any]) -> dict[str, Any]:
                 "memory": _resource("memory", c.memory),
             }
             | ({"approved": approved[c.workload]} if c.workload in approved else {})
+            | _by_type(c)
             for c in w.containers
         ],
     }
@@ -249,7 +262,9 @@ def build(
         itself when the Contract has no prices), from the Hub's latest Sizing run: each
         one's requests now and its Sizing per container, its waste and risks. held: a
         request its HPA divides by, which the Actuator leaves alone, with the manifest
-        change that frees it. floors: for each Workload with an HPA, the minimum
+        change that frees it. by_instance_type: a DaemonSet's container sized for its
+        pods on nodes of each instance type, beside its one Sizing for all of them,
+        which is the one applied. floors: for each Workload with an HPA, the minimum
         replicas its stored Needs support, against the HPA's minimum today, and its
         Weekly profile (blocks of hours that need more, KEDA cron triggers) with its
         Backtest: how far off it was last week, or that the load isn't weekly enough

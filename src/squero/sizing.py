@@ -55,6 +55,7 @@ RiskKind = Literal[
     "capped_by_policy",
     "request_unset",
     "needs_larger_node",  # slice 15.1a
+    "type_needs_more_cpu",  # slice 15.3a
 ]
 DERIVED = ("under_requested", "request_unset")  # the action says it: `sizing show` omits them
 
@@ -343,6 +344,72 @@ def _worth(names: list[str], read: dict[str, Any], p: ClusterPrices | None) -> d
     return {"nodes": names, **held, "cost": monthly(p, **held) if p else None}
 
 
+def _sized_type(
+    kind: str,
+    g: ContainerUsage,
+    now: float,
+    policy: Policy,
+    covered: list[float],
+    steps: list[float],
+    window: int,
+) -> dict[str, Any]:
+    """A DaemonSet container's Sizing for its pods on nodes of one instance type (slice
+    15.3a), from those pods' own usage and requests, under the container's policy and
+    with its history counted the same way; `learning` under it. Beside the row's pooled
+    Sizing, which stays the one applied and the one Waste counts against until an
+    Actuator applies groups (15.3b). No cap by the largest Room, as for the row."""
+    s = size(g, now, policy, history(g, covered, usage.step_for(window)))
+    out: dict[str, Any] = {"type": kind, "pods": round(avg_pods(g, steps), 1), "state": s.state}
+    out |= {"history_h": round(s.history_s / 3600, 1), "requests": dict(g.requests)}
+    for name, res in (("cpu", s.cpu), ("memory", s.memory)):
+        if res is not None:
+            out[name] = {"action": res.action, "current": res.current, "target": res.target}
+            out[name]["basis"] = res.basis
+    return out
+
+
+def _short_of(row: dict[str, Any], policy: Policy) -> dict[str, str] | None:
+    """The risk of a DaemonSet's one CPU Sizing sitting below what its pods on some
+    instance type need (slice 15.3a): CPU is a percentile over every pod's samples, so a
+    busy minority of nodes falls above it, and the one Sizing would ask too little for
+    them. By more than a change the policy would make, for types with a Sizing of their
+    own. Memory, a peak, fits the busiest by construction."""
+    pooled = (row.get("cpu") or {}).get("target")
+    if pooled is None:
+        return None
+    least = max(policy.threshold * pooled, MIN_CHANGE["cpu"])
+    short = [
+        f"{g['type'] or 'nodes with no instance type'} ({show('cpu', g['cpu']['target'])})"
+        for g in row["groups"]
+        if g["state"] == "ready" and "cpu" in g and g["cpu"]["target"] - pooled > least + 1e-9
+    ]
+    if not short:
+        return None
+    more = f" and {len(short) - 3} more" if len(short) > 3 else ""
+    text = (
+        f"its one cpu Sizing of {show('cpu', pooled)} for every node is below what its "
+        f"pods need on {', '.join(short[:3])}{more}"
+    )
+    return {"kind": "type_needs_more_cpu", "text": text}
+
+
+def group_lines(row: dict[str, Any]) -> list[str]:
+    """A row's groups as indented lines under it, for `sizing show` and the Hub MCP."""
+    lines = []
+    for g in row.get("groups") or []:
+        head = f"  on {g['type'] or 'nodes with no instance type'} ({g['pods']:g} pods)"
+        if g["state"] != "ready":
+            lines.append(f"{head}: learning ({g['history_h']:g} h of usage)")
+            continue
+        parts = []
+        for res in ("cpu", "memory"):
+            if r := g.get(res):
+                now_ = "unset" if r["current"] is None else show(res, r["current"])
+                parts.append(f"{res} {r['action']} {now_} -> {show(res, r['target'])}")
+        lines.append(f"{head}: {', '.join(parts)}")
+    return lines
+
+
 def nodes_report(
     found: dict[str, dict[str, Any]],
     c: Contract,
@@ -504,6 +571,13 @@ def rows(
             if s.state == "ready":
                 row["waste"] = waste
             row["risks"] = [r._asdict() for r in risks]
+            if u.groups:  # slice 15.3a: a DaemonSet's, per instance type
+                row["groups"] = [
+                    _sized_type(kind, g, now, policy, covered[cluster], steps[cluster], window)
+                    for kind, g in sorted(u.groups.items())
+                ]
+                if short := _short_of(row, policy):
+                    row["risks"].append(short)
             out[row["workload"]] = row
     together: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
     for row in out.values():

@@ -234,6 +234,26 @@ Each hourly run also reads the cluster's nodes from kube-state-metrics and store
       autoscaler: karpenter   # or cluster-autoscaler; left out: none
   ```
 
+### A DaemonSet's Sizing per instance type
+
+A DaemonSet runs one pod on every node, and one request has to do for all of them: a log collector idles on a small node and works on a large one. The Hub pools a container's pods into one Sizing, so for a DaemonSet that Sizing follows the many. Memory is a peak, so the pooled Sizing fits the busiest pod; CPU is a percentile over every pod's samples, so a busy minority (one node in thirty, say) sits above it and the pooled CPU Sizing is far below what that node's pod uses.
+
+On a cluster that runs an Actuator, the Hub also sizes a DaemonSet's container **per instance type**: its pods on nodes of one type get a Sizing of their own, from their own usage and against their own requests, under the container's policy. It shows under the container, in the console ("By instance type"), in `squero sizing show` and in the Hub MCP's `sizings` (`by_instance_type`, ten types at most and the rest counted):
+
+```
+kind/shop/DaemonSet/agent/app [production]: cpu lower 2000m -> 1150m, memory raise 256Mi -> 1080Mi
+  on m5.4xlarge (1 pods): cpu lower 2000m -> 1150m, memory raise 256Mi -> 1080Mi
+  on m5.large (2 pods): cpu lower 500m -> 58m, memory lower 256Mi -> 77Mi
+```
+
+Here one node of three is busy, and the pooled Sizing follows it: the two small nodes' pods would be asked 1150m where 58m does.
+
+- **Which nodes.** By `node.kubernetes.io/instance-type` (the label list prices need, allowlisted in kube-state-metrics), over the Sizing's window, so the pods of nodes since replaced still count. Nodes without the label are one type of their own. With fewer than two types there is nothing to split and nothing shows. A pod whose node isn't found is in no type; it still counts in the pooled Sizing.
+- **Only with an Actuator.** A DaemonSet has one pod template, so nothing but an Actuator resizing each pod in place can give two nodes different requests. On a cluster without one the read isn't made. Nor from a Prometheus another Contract reads without cluster labels: node series carry no namespace.
+- **Each type is sized like a container**: the same policy, a day of its own history (a type newly added is still learning), and what hides the container's real demand (throttling, an OOM kill) keeps every type from being lowered.
+- **A risk on the row.** Where a type with a Sizing of its own needs more CPU than the container's one Sizing gives, by more than a change the policy would make, the row carries the risk `type_needs_more_cpu`: "its one cpu Sizing of 58m for every node is below what its pods need on m5.4xlarge (1150m)". It flags the Sizing that is applied today; it changes nothing about what is applied. Only where types are read, so not on a cluster without an Actuator.
+- **For now it is shown, not applied.** The Actuator still applies the container's one Sizing to every pod, and Waste, Savings and the digest count against that one. Applying each type, and counting Waste by type, come with the next slice (15.3b). Until then the per-type lines say what an Actuator will be able to do, and where the pooled CPU Sizing is too low for a busy type.
+
 ### Blockers: could a node be removed
 
 A **Blocker** is a pod that keeps its node from being removed. The Nodes page gives each node a verdict: **blocked** (with the pods and why), **clear** ("yes: nothing on it blocks") or **unknown** (with why). It is read-only: the Hub evicts nothing for it, and it does not yet say whether a node's pods would fit elsewhere (that comes with the nodes that could go).
