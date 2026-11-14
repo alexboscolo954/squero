@@ -1271,6 +1271,8 @@ export interface components {
             bound: boolean;
             /** Cpu */
             cpu: number;
+            /** Kind */
+            kind?: string | null;
             /** Memory */
             memory: number;
             /** Namespace */

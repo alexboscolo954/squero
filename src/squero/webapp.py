@@ -346,6 +346,7 @@ class NodePod(BaseModel):
     cpu: float
     memory: float
     bound: bool = False  # a DaemonSet's or the node's own static pod: it stays with it
+    kind: str | None = None  # its controller's kind, "" for none (from slice 15.1c)
 
 
 class BlockingPod(BaseModel):

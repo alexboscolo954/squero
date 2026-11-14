@@ -2475,6 +2475,17 @@
             "title": "Cpu",
             "type": "number"
           },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
           "memory": {
             "title": "Memory",
             "type": "number"

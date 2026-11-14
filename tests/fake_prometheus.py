@@ -12,7 +12,8 @@ Three things an instant query does get evaluated (slice 15.1a), since what leave
 Prometheus depends on them: `* on (uid) group_left() max by (uid) (selector [== 1])`
 keeps the series whose `uid` the other selector matches (with a value of 1), a selector
 followed by `== 1` keeps those at 1, and an outer `sum by (...) (` or `count by (...) (`
-returns one series per group with those labels only, as Prometheus does.
+returns one series per group with those labels only, as Prometheus does; `== 0` as
+`== 1` (slice 15.1c).
 """
 
 import re
@@ -76,8 +77,8 @@ class FakePrometheus:
         """`found` after the query's `== 1` on its own selector and its joins on uid."""
         own = SELECTOR.search(promql)
         assert own
-        if promql[own.end() :].startswith(" == 1"):
-            found = [s for s in found if _last(s) == 1]
+        if equal := re.match(r" == (\d+)", promql[own.end() :]):
+            found = [s for s in found if _last(s) == int(equal.group(1))]
         for m in JOIN.finditer(promql):
             uids = {
                 s.get("uid") for s in self.select(m.group(1)) if not m.group(4) or _last(s) == 1

@@ -555,7 +555,10 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
     `own`: the Contract's pods there, each with its requests, read in its namespaces.
     `bound` (slice 15.1b): how many of the node's pods stay with it whoever removes it,
     a DaemonSet's and the node's own static pods, counted over all namespaces like
-    `pods`; each of `own` says whether it is one.
+    `pods`; each of `own` says whether it is one, and its controller's `kind` as
+    kube_pod_info has it ("" for none: slice 15.1c, what blocks without an Actuator).
+    `budgets` (15.1c): the PodDisruptionBudgets of the Contract's namespaces that allow
+    no disruption now; which pods one covers, kube-state-metrics doesn't say.
     `problem` when no node is read; the caller refuses a store shared with another
     Contract that has no cluster labels (`SHARED_STORE`), as for list prices."""
     scoped = [f"{k}={_string(v)}" for k, v in sorted(t.labels.items())]
@@ -606,8 +609,10 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
     for s in prom.instant(f"{selector('kube_pod_info', t)} {live}", at):
         m = s["metric"]
         who = (label(m, "namespace"), label(m, "pod"))
-        mine = {"cpu": 0.0, "memory": 0.0} | asks.get(who, {})
-        mine["bound"] = m.get("created_by_kind") in ("DaemonSet", "Node")
+        mine: dict[str, Any] = {"cpu": 0.0, "memory": 0.0} | asks.get(who, {})
+        by = m.get("created_by_kind")  # absent: not known, which is not "no controller"
+        mine["bound"] = by in ("DaemonSet", "Node")
+        mine["kind"] = "" if by == "<none>" else by
         own.setdefault(label(m, "node"), []).append({"namespace": who[0], "pod": who[1], **mine})
     taints: dict[str, list[str]] = {}
     for s in prom.instant(of("kube_node_spec_taint"), at):
@@ -640,8 +645,17 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
                 "own": sorted(own.get(name, []), key=lambda p: (p["namespace"], p["pod"])),
             }
         )
+    tight = selector("kube_poddisruptionbudget_status_pod_disruptions_allowed", t) + " == 0"
+    budgets = sorted(
+        (label(s["metric"], "namespace"), s["metric"].get("poddisruptionbudget", ""))
+        for s in prom.instant(tight, at)
+    )
     problem = None if out else "no nodes read: kube_node_status_allocatable is missing"
-    return {"nodes": out, "problem": problem}
+    return {
+        "nodes": out,
+        "problem": problem,
+        "budgets": [{"namespace": ns, "budget": name} for ns, name in budgets],
+    }
 
 
 NEEDS_FOR = 56 * 86400  # Needs are kept, and first read, this far back (slice 14.1a)

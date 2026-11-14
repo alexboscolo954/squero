@@ -89,6 +89,9 @@ def cluster() -> FakePrometheus:
 # --- the read --------------------------------------------------------------------------
 
 
+API_1 = {"namespace": "shop", "pod": "api-1", "cpu": 0.5, "memory": 1.0 * GI, "bound": False}
+
+
 def test_each_node_is_read_with_what_its_room_is_made_of() -> None:
     got = read(cluster())
     assert got["problem"] is None
@@ -103,9 +106,10 @@ def test_each_node_is_read_with_what_its_room_is_made_of() -> None:
         "daemonsets": {"cpu": 0.1, "memory": 64.0 * MI},
         "pods": 4,
         "bound": 1,  # slice 15.1b: kube-system's DaemonSet pod stays with the node
-        "own": [
-            {"namespace": "shop", "pod": "api-1", "cpu": 0.5, "memory": 1.0 * GI, "bound": False},
-            {"namespace": "shop", "pod": "db-0", "cpu": 1.0, "memory": 4.0 * GI, "bound": False},
+        "own": [  # each with its controller's kind (slice 15.1c)
+            {**API_1, "kind": "ReplicaSet"},
+            {"namespace": "shop", "pod": "db-0", "cpu": 1.0, "memory": 4.0 * GI}
+            | {"bound": False, "kind": "StatefulSet"},
         ],
     }
     assert (n2["node"], n2["type"], n2["pods"]) == ("n2", "", 1)
@@ -134,7 +138,8 @@ def test_a_pod_outside_the_contracts_namespaces_only_reaches_the_hub_in_a_sum() 
     for q in fake.queries:
         if "kube_pod" in q and 'namespace=~"shop"' not in q:
             assert q.startswith(("sum by (node, exported_node", "count by (node, exported_node")), q
-    assert sum('namespace=~"shop"' in q for q in fake.queries) == 2  # its own pods, by name
+    # its own by name: its pods, their requests, and its budgets at 0 (slice 15.1c)
+    assert sum('namespace=~"shop"' in q for q in fake.queries) == 3
 
 
 def test_only_running_and_pending_pods_hold_requests() -> None:
@@ -176,6 +181,7 @@ def test_a_pod_asking_nothing_is_still_the_contracts_own_and_one_on_no_node_is_n
     pod(fake, "waiting-1", on="", phase="Pending")  # not scheduled yet
     (n1,) = read(fake)["nodes"]
     bare = {"namespace": "shop", "pod": "bare-1", "cpu": 0.0, "memory": 0.0, "bound": False}
+    bare["kind"] = "ReplicaSet"
     assert n1["own"] == [bare]
     assert (n1["pods"], n1["requests"]) == (1, {"cpu": 0.0, "memory": 0.0})
 
@@ -207,6 +213,7 @@ def test_no_node_read_is_a_problem_and_a_cordoned_node_says_so() -> None:
     assert read(FakePrometheus()) == {
         "nodes": [],
         "problem": "no nodes read: kube_node_status_allocatable is missing",
+        "budgets": [],
     }
     fake = FakePrometheus()
     node(fake, "n1")
@@ -220,6 +227,52 @@ def test_no_node_read_is_a_problem_and_a_cordoned_node_says_so() -> None:
     down = FakePrometheus(status=500)
     with pytest.raises(UsageError):
         read(down)
+
+
+def test_each_own_pod_comes_with_its_controllers_kind() -> None:
+    """Slice 15.1c: what a cluster without an Actuator still shows of a Blocker."""
+    fake = FakePrometheus()
+    node(fake, "n1")
+    pod(fake, "api-1")
+    pod(fake, "solo", by="<none>")
+    pod(fake, "pg-0", by="Cluster")
+    pod(fake, "stray", ns="bank", by="<none>")
+    (n1,) = read(fake)["nodes"]
+    assert [(p["pod"], p["kind"]) for p in n1["own"]] == [
+        ("api-1", "ReplicaSet"),
+        ("pg-0", "Cluster"),
+        ("solo", ""),
+    ]
+    # the label absent (an older kube-state-metrics): not known, which is not "none"
+    who = {"namespace": "shop", "pod": "odd", "uid": "uid-odd"}
+    fake.add("kube_pod_info", 1, node="n1", **who)
+    fake.add("kube_pod_status_phase", 1, phase="Running", **who)
+    (n1,) = read(fake)["nodes"]
+    odd = next(p for p in n1["own"] if p["pod"] == "odd")
+    assert (odd["kind"], odd["bound"]) == (None, False)
+
+
+def budget(
+    fake: FakePrometheus, name: str, allowed: float, ns: str = "shop", **labels: str
+) -> None:
+    metric = "kube_poddisruptionbudget_status_pod_disruptions_allowed"
+    fake.add(metric, allowed, namespace=ns, poddisruptionbudget=name, **labels)
+
+
+def test_the_budgets_that_allow_no_disruption_are_read_in_the_contracts_namespaces() -> None:
+    fake = FakePrometheus()
+    node(fake, "n1")
+    budget(fake, "web", 0)
+    budget(fake, "api", 1)
+    budget(fake, "ledger", 0, ns="bank")
+    budget(fake, "elsewhere", 0, cluster="b")
+    got = read(fake)
+    assert got["budgets"] == [
+        {"namespace": "shop", "budget": "elsewhere"},
+        {"namespace": "shop", "budget": "web"},
+    ]
+    a = Target("test", "http://prometheus", None, {"cluster": "a"}, ["shop"])
+    assert read(fake, a)["budgets"] == []  # another cluster's in the same store
 
 
 # --- the largest Room ------------------------------------------------------------------
@@ -586,11 +639,6 @@ def test_the_nodes_route_gives_the_contracts_own_clusters(
     (shown,) = body["clusters"]
     assert (shown["cluster"], shown["at"], shown["autoscaler"]) == ("test", NOW, None)
     assert [n["node"] for n in shown["nodes"]] == ["n1", "n2"]
-    assert shown["nodes"][0]["own"][0] == {
-        "namespace": "shop",
-        "pod": "api-1",
-        "cpu": 0.5,
-        "memory": 1.0 * GI,
-        "bound": False,
-    }
+    assert shown["nodes"][0]["own"][0] == {**API_1, "kind": "ReplicaSet"}
+    assert shown["nodes"][0]["verdict"]["state"] == "unknown"
     assert shown["nodes"][0]["others"]["pods"] == 2 and "theirs" not in json.dumps(body)

@@ -535,7 +535,7 @@ def unknown(why_: str) -> dict[str, Any]:
     return {"state": "unknown", "why": why_, "blockers": []}
 
 
-def test_without_a_fresh_report_every_node_is_unknown() -> None:
+def test_without_a_fresh_report_no_node_is_clear() -> None:
     cluster = actuated("acme", A_TOKEN).clusters
     no_actuator = blockers.verdicts(read_of(n1()), {"received": NOW, **a_report()}, cluster[1], NOW)
     assert no_actuator["n1"] == unknown("the cluster runs no Actuator")
@@ -571,6 +571,83 @@ def test_what_the_hub_was_not_told_is_unknown_never_clear() -> None:
     assert got(a_report(), old)["n1"] == unknown(
         "its pods were read before the Hub counted the ones that stay with a node"
     )
+
+
+# --- without a usable report: what Prometheus shows (slice 15.1c) ------------------------
+
+
+def pod_of(name: str, kind: str | None, ns: str = "shop", bound: bool = False) -> dict[str, Any]:
+    p = {"namespace": ns, "pod": name, "cpu": 0.1, "memory": 1.0, "bound": bound}
+    return p if kind is None else p | {"kind": kind}
+
+
+def bare(*own: dict[str, Any], budgets: list[dict[str, str]] | None = None, **cl: Any) -> Any:
+    """n1's verdict in a cluster that runs no Actuator (`edge`), from its stored read."""
+    cluster = actuated("acme", A_TOKEN).clusters[1].model_copy(update=cl)
+    read = read_of(n1(own=list(own), pods=len(own), bound=sum(p["bound"] for p in own)))
+    read["budgets"] = budgets or []
+    return blockers.verdicts(read, None, cluster, NOW)["n1"]
+
+
+NO_ACTUATOR = "the cluster runs no Actuator"
+
+
+def test_without_an_actuator_a_pod_with_no_controller_still_blocks() -> None:
+    lone, operated = pod_of("solo", ""), pod_of("pg-0", "Cluster")
+    assert bare(pod_of("api-1", "ReplicaSet"), lone, operated) == {
+        "state": "blocked",
+        "why": None,
+        "blockers": [
+            {"namespace": "shop", "pod": "solo", "reasons": ["no controller"]},
+            {"namespace": "shop", "pod": "pg-0", "reasons": ["a custom controller (Cluster)"]},
+        ],
+    }
+    # under Cluster Autoscaler's rules an annotation could lift it, and only an Actuator
+    # sees annotations: blocked, and said
+    said = bare(lone, autoscaler=CA)["blockers"][0]["reasons"]
+    assert said == [
+        "no controller (unless annotated safe-to-evict: true, which only an Actuator can see)"
+    ]
+    # Karpenter's docs name no such rule
+    assert bare(lone, operated, autoscaler=KARPENTER) == unknown(NO_ACTUATOR)
+
+
+def test_without_an_actuator_a_node_is_never_clear() -> None:
+    for kind in ("ReplicaSet", "StatefulSet", "Job", "ReplicationController"):
+        assert bare(pod_of("api-1", kind)) == unknown(NO_ACTUATOR)
+    assert bare() == unknown(NO_ACTUATOR)  # not even an empty one: its volumes go unseen
+    assert bare(pod_of("agent-x", "DaemonSet", bound=True)) == unknown(NO_ACTUATOR)
+    assert bare(pod_of("etcd", "", bound=True)) == unknown(NO_ACTUATOR)  # stays with it
+    assert bare(pod_of("old", None)) == unknown(NO_ACTUATOR)  # read before 15.1c: not known
+
+
+def test_a_budget_at_0_is_named_where_its_namespace_has_pods_on_the_node() -> None:
+    """Prometheus doesn't say which pods a PodDisruptionBudget covers: named, not blamed."""
+    tight = [{"namespace": "shop", "budget": "web"}, {"namespace": "pay", "budget": "api"}]
+    got_ = bare(pod_of("api-1", "ReplicaSet"), budgets=tight)
+    assert got_ == unknown(f"{NO_ACTUATOR}; PodDisruptionBudget web of shop allows no disruption")
+    both = bare(
+        pod_of("api-1", "ReplicaSet"), pod_of("pay-1", "ReplicaSet", ns="pay"), budgets=tight
+    )
+    assert both["why"].endswith("PodDisruptionBudget web of shop, api of pay allows no disruption")
+    assert bare(pod_of("pay-1", "ReplicaSet", ns="pay"), budgets=tight[:1]) == unknown(NO_ACTUATOR)
+    only_bound = bare(pod_of("agent-x", "DaemonSet", bound=True), budgets=tight)
+    assert only_bound == unknown(NO_ACTUATOR)
+    blocked = bare(pod_of("solo", ""), budgets=tight)
+    assert (blocked["state"], blocked["why"]) == ("blocked", None)
+
+
+def test_an_actuator_whose_report_is_missing_or_too_old_falls_back_the_same_way() -> None:
+    lone = n1(own=[pod_of("solo", ""), AGENT], pods=3, bound=2)
+    never = got(None, lone)["n1"]
+    assert never["state"] == "blocked" and never["blockers"][0]["pod"] == "solo"
+    old = got(a_report(), lone, now=NOW + STALE + 1)["n1"]  # a report that said nothing of it
+    assert old["state"] == "blocked"
+    quiet = n1(own=[pod_of("api-1", "ReplicaSet"), AGENT])
+    assert got(None, quiet)["n1"] == unknown("its Actuator has reported no Blockers yet")
+    # a fresh report is believed over Prometheus: it sees the annotation that lifts it
+    lifted = a_report(a_pod("solo", kind="", name="", annotations={SAFE: "true"}))
+    assert got(lifted, lone, autoscaler=CA)["n1"]["state"] == "clear"
 
 
 def test_a_pod_in_a_namespace_the_contract_left_is_not_shown() -> None:

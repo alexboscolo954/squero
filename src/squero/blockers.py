@@ -4,9 +4,11 @@ An Actuator reports, hourly, the facts of the pods in its namespaces that may bl
 node's removal (`Report`): never a conclusion, since which facts block depends on who
 removes nodes there. The Hub applies the rules of the autoscaler the Contract names for
 the cluster (`reasons`), `kubectl drain`'s where it names none, and gives each node a
-verdict (`verdicts`): blocked, clear or unknown. Clear needs positive evidence: every gap
+verdict (`verdicts`): blocked, clear or unknown. Clear needs positive evidence: no gap
 (no Actuator, a report too old or cut short, a namespace it could not read, pods the Hub
-can't see) is unknown. Read-only: nothing is evicted for it."""
+can't see) ever gives it. Without a usable report the Hub goes by what Prometheus shows
+(`seen`, slice 15.1c): a pod with no controller still blocks, the rest is unknown.
+Read-only: nothing is evicted for it."""
 
 import math
 import re
@@ -150,13 +152,51 @@ def reasons(p: dict[str, Any], autoscaler: str | None, now: float = 0.0) -> list
     return out
 
 
+def seen(
+    n: dict[str, Any], read: dict[str, Any], autoscaler: str | None, gap: str
+) -> dict[str, Any]:
+    """A node's verdict without a usable report (slice 15.1c), from what Prometheus
+    shows of the Contract's pods on it: blocked by one with no controller, or a custom
+    one, where that blocks (under Cluster Autoscaler's rules an annotation could lift
+    it, and Prometheus doesn't show annotations: said); else unknown, since its volumes,
+    its annotations and which pods a PodDisruptionBudget covers stay unseen. Never
+    clear. `gap`: why there is no report. A budget of its pods' namespaces that allows
+    no disruption is named with it."""
+    own = [p for p in n["own"] if not p.get("bound")]
+    found = []
+    if autoscaler != "karpenter":  # its docs name no such rule
+        unless = (
+            " (unless annotated safe-to-evict: true, which only an Actuator can see)"
+            if autoscaler == "cluster-autoscaler"
+            else ""
+        )
+        for p in own:
+            kind = p.get("kind")
+            if kind is None or kind in BUILT_IN:  # None: read before 15.1c, not known
+                continue
+            said = "no controller" if not kind else f"a custom controller ({kind})"
+            found.append({"namespace": p["namespace"], "pod": p["pod"], "reasons": [said + unless]})
+    if found:
+        return {"state": "blocked", "why": None, "blockers": found}
+    spaces = {p["namespace"] for p in own}
+    tight = [
+        f"{b['budget']} of {b['namespace']}"
+        for b in read.get("budgets") or []
+        if b["namespace"] in spaces
+    ]
+    if tight:
+        gap += f"; PodDisruptionBudget {', '.join(tight)} allows no disruption"
+    return {"state": "unknown", "why": gap, "blockers": []}
+
+
 def verdicts(
     read: dict[str, Any], report: dict[str, Any] | None, cluster: "Cluster", now: float
 ) -> dict[str, dict[str, Any]]:
     """Each node of a cluster's stored read (usage.rooms) with its verdict: `blocked`
     with the pods that block it and why, `clear`, or `unknown` with why. `report`: its
     Actuator's latest, with the time the Hub `received` it (the clock its age goes by:
-    the Actuator's own is not trusted)."""
+    the Actuator's own is not trusted). Without a usable one (no Actuator, none yet,
+    one too old): what Prometheus shows (`seen`)."""
     gap = None
     if not cluster.actuator_token_secret:
         gap = "the cluster runs no Actuator"
@@ -168,7 +208,7 @@ def verdicts(
     out: dict[str, dict[str, Any]] = {}
     for n in read.get("nodes") or []:
         if gap or report is None:
-            out[n["node"]] = {"state": "unknown", "why": gap, "blockers": []}
+            out[n["node"]] = seen(n, read, cluster.autoscaler, gap or "")
             continue
         found = []
         for p in report["pods"]:
