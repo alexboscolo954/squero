@@ -50,14 +50,23 @@ def pod(
     ns: str = "shop",
     cores: float | None = 0.5,
     memory: float | None = 1.0 * GI,
-    by: str = "ReplicaSet",
+    by: str | None = "ReplicaSet",
     phase: str = "Running",
+    owned: bool = True,
     **labels: str,
 ) -> None:
     """A pod as kube-state-metrics shows it: its info, a series per phase (1 for its
-    own), and its container's requests, all with its uid."""
+    own), its owner and its container's requests, all with its uid. `by`: its
+    controller's kind; None for a pod with none, which kube_pod_info then doesn't label
+    at all while kube_pod_owner says "<none>" (as a real cluster showed). `owned`
+    False: no owner series of it."""
     who = {"namespace": ns, "pod": name, "uid": f"uid-{ns}-{name}", **labels}
-    fake.add("kube_pod_info", 1, node=on, created_by_kind=by, **who)
+    created = {"created_by_kind": by} if by else {}
+    fake.add("kube_pod_info", 1, node=on, **created, **who)
+    if owned:
+        owner = {"owner_kind": by or "<none>", "owner_name": "owner" if by else "<none>"}
+        owner["owner_is_controller"] = "true" if by else "<none>"
+        fake.add("kube_pod_owner", 1, **owner, **who)
     for p in PHASES:
         fake.add("kube_pod_status_phase", 1 if p == phase else 0, phase=p, **who)
     for res, value in (("cpu", cores), ("memory", memory)):
@@ -91,7 +100,8 @@ def cluster() -> FakePrometheus:
 
 API_1 = {"namespace": "shop", "pod": "api-1", "cpu": 0.5, "memory": 1.0 * GI, "bound": False}
 # slice 15.4: each container's own requests, and the pod's Workload where its owners resolve
-ONE = {"containers": [{"name": "app", "cpu": 0.5, "memory": 1.0 * GI}], "workload": None}
+ONE = {"containers": [{"name": "app", "cpu": 0.5, "memory": 1.0 * GI}]}
+ONE["workload"] = {"kind": "ReplicaSet", "name": "owner"}  # a ReplicaSet with no owner series
 
 
 def test_each_node_is_read_with_what_its_room_is_made_of() -> None:
@@ -113,7 +123,8 @@ def test_each_node_is_read_with_what_its_room_is_made_of() -> None:
         "own": [  # each with its controller's kind (slice 15.1c)
             {**API_1, "kind": "ReplicaSet", **ONE},
             {"namespace": "shop", "pod": "db-0", "cpu": 1.0, "memory": 4.0 * GI}
-            | {"bound": False, "kind": "StatefulSet", "workload": None}
+            | {"bound": False, "kind": "StatefulSet"}
+            | {"workload": {"kind": "StatefulSet", "name": "owner"}}
             | {"containers": [{"name": "app", "cpu": 1.0, "memory": 4.0 * GI}]},
         ],
     }
@@ -187,7 +198,8 @@ def test_a_pod_asking_nothing_is_still_the_contracts_own_and_one_on_no_node_is_n
     pod(fake, "waiting-1", on="", phase="Pending")  # not scheduled yet
     (n1,) = read(fake)["nodes"]
     bare = {"namespace": "shop", "pod": "bare-1", "cpu": 0.0, "memory": 0.0, "bound": False}
-    bare |= {"kind": "ReplicaSet", "containers": [], "workload": None}
+    bare |= {"kind": "ReplicaSet", "containers": []}
+    bare["workload"] = {"kind": "ReplicaSet", "name": "owner"}
     assert n1["own"] == [bare]
     assert (n1["pods"], n1["requests"]) == (1, {"cpu": 0.0, "memory": 0.0})
 
@@ -236,26 +248,32 @@ def test_no_node_read_is_a_problem_and_a_cordoned_node_says_so() -> None:
 
 
 def test_each_own_pod_comes_with_its_controllers_kind() -> None:
-    """Slice 15.1c: what a cluster without an Actuator still shows of a Blocker."""
+    """Slice 15.1c: what a cluster without an Actuator still shows of a Blocker. From
+    kube_pod_owner, which says "<none>" outright: kube_pod_info gives a pod with no
+    controller no `created_by_kind` at all, as a real cluster showed."""
     fake = FakePrometheus()
     node(fake, "n1")
     pod(fake, "api-1")
-    pod(fake, "solo", by="<none>")
+    also = {"namespace": "shop", "pod": "api-1", "uid": "uid-shop-api-1"}  # a second owner
+    fake.add("kube_pod_owner", 1, owner_kind="Thing", owner_is_controller="false", **also)
+    pod(fake, "solo", by=None)
     pod(fake, "pg-0", by="Cluster")
-    pod(fake, "stray", ns="bank", by="<none>")
+    pod(fake, "stray", ns="bank", by=None)
+    pod(fake, "odd", owned=False)  # no owner series of it: not known, which is not "none"
+    who = {"namespace": "shop", "pod": "loose", "uid": "uid-shop-loose"}
+    pod(fake, "loose", owned=False)  # an owner that controls nothing: no controller
+    fake.add(
+        "kube_pod_owner", 1, owner_kind="Thing", owner_name="t", owner_is_controller="false", **who
+    )
     (n1,) = read(fake)["nodes"]
     assert [(p["pod"], p["kind"]) for p in n1["own"]] == [
         ("api-1", "ReplicaSet"),
+        ("loose", ""),
+        ("odd", None),
         ("pg-0", "Cluster"),
         ("solo", ""),
     ]
-    # the label absent (an older kube-state-metrics): not known, which is not "none"
-    who = {"namespace": "shop", "pod": "odd", "uid": "uid-odd"}
-    fake.add("kube_pod_info", 1, node="n1", **who)
-    fake.add("kube_pod_status_phase", 1, phase="Running", **who)
-    (n1,) = read(fake)["nodes"]
-    odd = next(p for p in n1["own"] if p["pod"] == "odd")
-    assert (odd["kind"], odd["bound"]) == (None, False)
+    assert n1["own"][4]["workload"] == {"kind": "Pod", "name": "solo"}  # as its Sizing names it
 
 
 def test_what_the_nodes_that_could_go_need_is_read() -> None:
@@ -268,10 +286,10 @@ def test_what_the_nodes_that_could_go_need_is_read() -> None:
     fake.add("kube_node_status_allocatable", 110, node="n1", resource="pods")
     node(fake, "n2")  # its capacity and slots not read
     (name,) = deployment(fake, "api", pods=1)
-    pod(fake, name)
+    pod(fake, name, owned=False)  # its owners are the Deployment's series above
     who = {"namespace": "shop", "pod": name, "uid": f"uid-shop-{name}", "node": "n1"}
     fake.add(POD_REQUESTS, 0.1, container="side", resource="cpu", **who)
-    pod(fake, "stray")  # no owner series: its Workload isn't known
+    pod(fake, "stray", owned=False)  # no owner series: its Workload isn't known
     pod(fake, name, ns="bank")  # another namespace's pod of the same name
     n1, n2 = read(fake)["nodes"]
     assert (n1["capacity"], n1["slots"]) == ({"cpu": 4.2, "memory": 16.5 * GI}, 110)

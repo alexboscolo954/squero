@@ -556,7 +556,8 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
     `bound` (slice 15.1b): how many of the node's pods stay with it whoever removes it,
     a DaemonSet's and the node's own static pods, counted over all namespaces like
     `pods`; each of `own` says whether it is one, and its controller's `kind` as
-    kube_pod_info has it ("" for none: slice 15.1c, what blocks without an Actuator).
+    kube_pod_owner has it ("" for none: slice 15.1c, what blocks without an Actuator;
+    None where it has no owner series).
     `budgets` (15.1c): the PodDisruptionBudgets of the Contract's namespaces that allow
     no disruption now; which pods one covers, kube-state-metrics doesn't say.
     For the nodes that could go (slice 15.4): per node its `capacity` (what it is priced
@@ -618,19 +619,30 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
         pod[m.get("resource", "")] = pod.get(m.get("resource", ""), 0.0) + float(s["value"][1])
         one = each.setdefault(who, {}).setdefault(label(m, "container"), {})
         one[m.get("resource", "")] = float(s["value"][1])
+    pod_owners = prom.instant(selector("kube_pod_owner", t), at)
     owned = resolve(  # its pods' Workloads, as the Sizings name them
-        prom.instant(selector("kube_pod_owner", t), at),
+        pod_owners,
         prom.instant(selector("kube_replicaset_owner", t), at),
         prom.instant(selector("kube_job_owner", t), at),
     )
+    # Each pod's controller, from kube_pod_owner, which says "<none>" outright: on
+    # kube_pod_info a pod without one simply lacks `created_by_kind` (found live), and
+    # an absent label can't be told from an old kube-state-metrics
+    controller: dict[tuple[str, str], str] = {}
+    for s in pod_owners:
+        m = s["metric"]
+        who = (label(m, "namespace"), label(m, "pod"))
+        if m.get("owner_is_controller") == "true":
+            controller[who] = m.get("owner_kind", "")
+        else:  # "<none>", or an owner that controls nothing
+            controller.setdefault(who, "")
     own: dict[str, list[dict[str, Any]]] = {}
     for s in prom.instant(f"{selector('kube_pod_info', t)} {live}", at):
         m = s["metric"]
         who = (label(m, "namespace"), label(m, "pod"))
         mine: dict[str, Any] = {"cpu": 0.0, "memory": 0.0} | asks.get(who, {})
-        by = m.get("created_by_kind")  # absent: not known, which is not "no controller"
-        mine["bound"] = by in ("DaemonSet", "Node")
-        mine["kind"] = "" if by == "<none>" else by
+        mine["bound"] = m.get("created_by_kind") in ("DaemonSet", "Node")
+        mine["kind"] = controller.get(who)  # None: no owner series of it, so not known
         mine["containers"] = [
             {"name": name, "cpu": 0.0, "memory": 0.0} | asked
             for name, asked in sorted(each.get(who, {}).items())
