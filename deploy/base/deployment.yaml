@@ -24,7 +24,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: agent
-          image: ghcr.io/alexboscolo954/squero:0.48.0
+          image: ghcr.io/alexboscolo954/squero:0.49.0
           args: [serve, --port, "8080"]
           env:
             - {name: HOME, value: /tmp}   # read-only root fs
