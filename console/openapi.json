@@ -730,6 +730,24 @@
             "title": "Cluster",
             "type": "string"
           },
+          "could_go": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Scenarios"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "judged": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Judged",
+            "type": "object"
+          },
           "largest": {
             "anyOf": [
               {
@@ -1123,6 +1141,44 @@
           "requests"
         ],
         "title": "Cost",
+        "type": "object"
+      },
+      "CouldGo": {
+        "description": "Nodes that could go (slice 15.4): an upper bound, a figure of its own.",
+        "properties": {
+          "cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost"
+          },
+          "cpu": {
+            "title": "Cpu",
+            "type": "number"
+          },
+          "memory": {
+            "title": "Memory",
+            "type": "number"
+          },
+          "nodes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Nodes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "nodes",
+          "cpu",
+          "memory"
+        ],
+        "title": "CouldGo",
         "type": "object"
       },
       "Decision": {
@@ -2385,6 +2441,14 @@
             ],
             "title": "Bound"
           },
+          "capacity": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "default": {},
+            "title": "Capacity",
+            "type": "object"
+          },
           "cordoned": {
             "title": "Cordoned",
             "type": "boolean"
@@ -2431,6 +2495,17 @@
             "title": "Room",
             "type": "object"
           },
+          "slots": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slots"
+          },
           "taints": {
             "items": {
               "type": "string"
@@ -2471,6 +2546,15 @@
             "title": "Bound",
             "type": "boolean"
           },
+          "containers": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Containers",
+            "type": "array"
+          },
           "cpu": {
             "title": "Cpu",
             "type": "number"
@@ -2497,6 +2581,20 @@
           "pod": {
             "title": "Pod",
             "type": "string"
+          },
+          "workload": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workload"
           }
         },
         "required": [
@@ -2516,6 +2614,17 @@
             },
             "title": "Clusters",
             "type": "array"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
           }
         },
         "required": [
@@ -2978,6 +3087,22 @@
           "week"
         ],
         "title": "SavingsCost",
+        "type": "object"
+      },
+      "Scenarios": {
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/CouldGo"
+          },
+          "now": {
+            "$ref": "#/components/schemas/CouldGo"
+          }
+        },
+        "required": [
+          "now",
+          "after"
+        ],
+        "title": "Scenarios",
         "type": "object"
       },
       "Share": {

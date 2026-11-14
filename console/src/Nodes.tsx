@@ -4,7 +4,7 @@
  * by its Actuator's hourly report of Blockers. */
 import * as api from "./api";
 import { useLoaded } from "./Checks";
-import { cores, gib, when } from "./format";
+import { cores, gib, money, when } from "./format";
 
 const both = (v: { cpu?: number; memory?: number }) => `${cores(v.cpu ?? 0)}, ${gib(v.memory ?? 0)}`;
 
@@ -31,6 +31,33 @@ export function NodesPage({ contract }: { contract: string }) {
             Whether a node could be removed goes by {c.rules}; its Actuator's last report of Blockers:{" "}
             {when(c.reported)}.
           </p>
+          {c.could_go && (
+            <p className="could-go">
+              {(["now", "after"] as const).map((which) => {
+                const went = c.could_go![which];
+                return (
+                  <span key={which}>
+                    {which === "now" ? "Could go now: " : " After the Sizings: "}
+                    {went.nodes.length === 0 ? (
+                      "none."
+                    ) : (
+                      <>
+                        up to {went.nodes.length} ({went.nodes.join(", ")}),{" "}
+                        <strong>
+                          {data.currency && went.cost != null ? money(went.cost, data.currency) : both(went)}
+                        </strong>
+                        .
+                      </>
+                    )}
+                  </span>
+                );
+              })}{" "}
+              <span className="hint">
+                An upper bound: affinity and spread rules can't be seen. Not part of Savings.
+                {(c.judged.unknown ?? 0) > 0 && ` ${c.judged.unknown} of ${c.nodes.length} nodes not judged.`}
+              </span>
+            </p>
+          )}
           {c.problem ? (
             <p className="notice">{c.problem}</p>
           ) : (

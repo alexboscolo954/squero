@@ -101,6 +101,37 @@ def _resource(res: str, r: webapp.Resource | None) -> dict[str, Any] | None:
     return out
 
 
+MAX_BLOCKERS = 5  # a node's blocking pods named to the model; the rest counted
+ORDER = {"blocked": 0, "unknown": 1, "clear": 2}
+
+
+def _nodes(cl: webapp.ClusterNodes, top: int) -> dict[str, Any]:
+    """A cluster's nodes for the `nodes` tool (slice 15.4): blocked first, `top` of them,
+    each with its Room and its verdict in a few capped strings. The pods' names and the
+    reasons came from the cluster's Actuator: capped here, redacted and masked with the
+    rest on the way out."""
+    listed = sorted(cl.nodes, key=lambda n: (ORDER[n.verdict.state], n.node))
+    nodes = []
+    for n in listed[:top]:
+        pods = [f"{b.namespace}/{b.pod}: {'; '.join(b.reasons)}"[:300] for b in n.verdict.blockers]
+        nodes.append(
+            {
+                **{"node": n.node, "type": n.type, "taints": n.taints, "cordoned": n.cordoned},
+                **{"room": n.room, "pods": n.pods, "own_pods": n.mine.pods},
+                **{"not_visible_pods": n.others.pods, "could_be_removed": n.verdict.state},
+                **{"why": n.verdict.why, "blockers": pods[:MAX_BLOCKERS]},
+                **{"more_blockers": max(0, len(pods) - MAX_BLOCKERS)},
+            }
+        )
+    went = cl.could_go.model_dump(mode="json") if cl.could_go else None
+    return {
+        **{"cluster": cl.cluster, "as_of": _date(cl.at), "problem": cl.problem},
+        **{"autoscaler": cl.autoscaler, "rules": cl.rules, "reported": _date(cl.reported)},
+        **{"judged": cl.judged, "could_go": went, "largest_room": cl.largest},
+        **{"nodes": nodes, "more_nodes": max(0, len(listed) - top)},
+    }
+
+
 def _workload(w: webapp.Workload, approved: dict[str, Any]) -> dict[str, Any]:
     """A ranked Workload as the client's model reads it: quantities as 115m and 96Mi,
     and who approved a container's Sizing, when one is."""
@@ -383,6 +414,37 @@ def build(
             a = await allocation(c, arg(c, by), compare_days)
             shown = a.model_dump(mode="json", exclude={"realized", "compare"})
             return {**shown, "compare": _compared(a.compare)}
+
+        result: dict[str, Any] = await answer(c, work())
+        return result
+
+    @mcp.tool(annotations=READ)
+    async def nodes(
+        contract: Annotated[str, CONTRACT],
+        cluster: str | None = None,
+        top: Annotated[int, Field(ge=1, le=100)] = 20,
+    ) -> dict[str, Any]:
+        """The Contract's nodes as the Hub's latest hourly run read them. Per cluster:
+        could_go, the nodes that could be removed `now` and `after` its Sizings are
+        applied, with their capacity and monthly cost: an upper bound (affinity and
+        spread rules are not seen) and a figure of its own, never part of Savings or
+        waste; None when the read can't say. judged: how many nodes are blocked, clear
+        or unknown, so "none could go" of nodes nobody judged is no finding. nodes: the
+        blocked ones first, `top` of them, each with its room (allocatable less every
+        pod's requests; cpu in cores, memory in bytes), its pods (own_pods are the
+        Contract's; not_visible_pods are outside its namespaces, never named) and
+        could_be_removed: blocked, with the pods that block it and why, by `rules`;
+        clear; or unknown, with why. Nothing here removes a node."""
+        c = resolve(contract)
+
+        async def work() -> dict[str, Any]:
+            wanted = None if cluster is None else arg(c, cluster)
+            found = await webapp.nodes_of(store(), c, now())
+            names = [cl.cluster for cl in found.clusters]
+            if wanted is not None and wanted not in names:
+                raise ToolError(f"cluster {wanted!r} has no nodes read: one of {names}")
+            shown = [_nodes(cl, top) for cl in found.clusters if wanted in (None, cl.cluster)]
+            return {"currency": found.currency, "clusters": shown}
 
         result: dict[str, Any] = await answer(c, work())
         return result

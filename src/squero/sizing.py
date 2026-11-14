@@ -332,11 +332,23 @@ def largest_room(found: dict[str, Any] | None) -> dict[str, float] | None:
     }
 
 
+def _worth(names: list[str], read: dict[str, Any], p: ClusterPrices | None) -> dict[str, Any]:
+    """Nodes that could go with what they are: their capacity (allocatable where it
+    wasn't read), and a month of it at the cluster's unit prices when it has them."""
+    by = {n["node"]: n for n in read["nodes"]}
+    held = {
+        res: sum((by[n].get("capacity") or {}).get(res, by[n]["allocatable"][res]) for n in names)
+        for res in ("cpu", "memory")
+    }
+    return {"nodes": names, **held, "cost": monthly(p, **held) if p else None}
+
+
 def nodes_report(
     found: dict[str, dict[str, Any]],
     c: Contract,
     reports: dict[str, dict[str, Any]] | None = None,
     now: float = 0.0,
+    rows: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Stored nodes as the console shows them (slice 15.1a), per cluster of the Contract
     that has a read: each node's Room (its allocatable less every pod's requests), split
@@ -345,7 +357,11 @@ def nodes_report(
     DaemonSets, which caps its Sizings, and the autoscaler the Contract names. Each
     node's `verdict` (slice 15.1b): whether it could be removed, by `rules`, going by its
     cluster's Actuator's latest report (`reports`, per cluster; `reported`: when the
-    Hub got it) as of `now`."""
+    Hub got it) as of `now`. `could_go` (slice 15.4): the nodes that could go `now` and
+    `after` the Contract's stored Sizings (`rows`) are applied, each with its capacity
+    and its monthly cost under the Contract's prices (pass it with its effective ones);
+    None where the read can't say (a problem, or one from before 15.4). `judged`: how
+    many nodes got each verdict, so that "none could go" shows what was not judged."""
     out = []
     for cl in c.clusters:
         read = found.get(cl.name)
@@ -353,6 +369,16 @@ def nodes_report(
             continue
         report = (reports or {}).get(cl.name)
         verdict = blockers.verdicts(read, report, cl, now)
+        went = None
+        first = None if read.get("problem") else blockers.could_go(read, verdict)
+        if first is not None:
+            sized = [r for r in rows or [] if r["cluster"] == cl.name]
+            later = blockers.could_go(blockers.after(read, sized), verdict) or []
+            price = c.price(cl.name)
+            went = {"now": _worth(first, read, price), "after": _worth(later, read, price)}
+        judged = {state: 0 for state in ("clear", "blocked", "unknown")}
+        for v in verdict.values():
+            judged[v["state"]] += 1
         nodes = []
         for n in read["nodes"]:
             mine = {res: sum(p[res] for p in n["own"]) for res in ("cpu", "memory")}
@@ -372,6 +398,7 @@ def nodes_report(
                 **{"cluster": cl.name, "at": read["at"], "autoscaler": cl.autoscaler},
                 **{"rules": blockers.RULES[cl.autoscaler]},
                 **{"reported": report["received"] if report else None},
+                **{"could_go": went, "judged": judged},
                 **{"problem": read.get("problem"), "largest": largest_room(read), "nodes": nodes},
             }
         )
@@ -854,6 +881,30 @@ def floors_line(found: dict[str, Any], currency: str | None) -> str | None:
     if below:
         parts.append(f"{below} with a minimum below their Floor")
     return f"Floors: {'; '.join(parts)}." if parts else None
+
+
+def nodes_line(clusters: list[dict[str, Any]], currency: str | None) -> str | None:
+    """The digest's one line on the nodes that could go (nodes_report), or None when
+    none could, now or after the Sizings. With how many nodes were not judged: "none"
+    of a cluster nobody looked at is no finding."""
+
+    def said(which: str) -> str | None:
+        went = [c["could_go"][which] for c in clusters if c["could_go"]]
+        count = sum(len(w["nodes"]) for w in went)
+        if not count:
+            return None
+        held = {res: sum(w[res] for w in went) for res in ("cpu", "memory")}
+        priced = currency and all(w["cost"] is not None for w in went)
+        worth = money(sum(w["cost"] for w in went), currency) if priced and currency else None
+        when = "now" if which == "now" else "after the Sizings"
+        return f"up to {count} {when} ({worth or quantities(held)})"
+
+    parts = [s for s in (said("now"), said("after")) if s]
+    if not parts:
+        return None
+    unknown = sum(c["judged"]["unknown"] for c in clusters)
+    judged = f"; {unknown} not judged" if unknown else ""
+    return f"Nodes that could go: {', '.join(parts)}{judged}. An upper bound, not Savings."
 
 
 GIB = 2**30
@@ -1477,6 +1528,7 @@ def digest_text(
     link: str | None = None,
     realized: dict[str, Any] | None = None,
     floors: dict[str, Any] | None = None,
+    nodes: list[dict[str, Any]] | None = None,
 ) -> str:
     """The weekly digest (Slack mrkdwn) from report() now and as of a week ago: total
     waste and its change, the realized Savings (10.3b), the Floors' line (14.1b,
@@ -1514,6 +1566,8 @@ def digest_text(
         if realized and (line := realized_line(realized)):
             lines.append(line)
         if floors and (line := floors_line(floors, currency)):
+            lines.append(line)
+        if nodes and (line := nodes_line(nodes, currency)):  # slice 15.4
             lines.append(line)
         top = [w for w in now["workloads"] if rank(w) > 0][:TOP]
         if top:
@@ -1559,4 +1613,9 @@ async def digest(store: "Store", c: Contract, at: float, console_url: str | None
     week = report(*await store.latest_sizings(c.id, clusters, before=at - WEEK), c)
     link = f"{console_url.rstrip('/')}/app/?contract={c.id}" if console_url else None
     stored = floors_report(await store.latest_floors(c.id, clusters), c)
-    return digest_text(c.id, now, week, link, await savings(store, c, at), stored)
+    rows, _ = await store.latest_sizings(c.id, clusters, before=at)
+    names = {cl.name for cl in c.clusters}
+    nodes = nodes_report(
+        await store.latest_rooms(c.id, names), c, await store.latest_blockers(c.id, names), at, rows
+    )
+    return digest_text(c.id, now, week, link, await savings(store, c, at), stored, nodes)

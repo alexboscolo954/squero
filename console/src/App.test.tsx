@@ -838,9 +838,11 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
     "/api/v1/contracts/demo-shop/nodes": [
       200,
       {
+        currency: "EUR",
         clusters: [
           { cluster: "kind", at: 1_700_000_000, autoscaler: "karpenter", problem: null, largest: { cpu: 7.5, memory: 30 * GI },
-            rules: "Karpenter's rules", reported: 1_700_000_600,
+            rules: "Karpenter's rules", reported: 1_700_000_600, judged: { clear: 1, blocked: 1, unknown: 1 },
+            could_go: { now: { nodes: ["n2"], cpu: 4, memory: 16 * GI, cost: 120 }, after: { nodes: ["n2", "n<b>4</b>"], cpu: 8, memory: 32 * GI, cost: null } },
             nodes: [
               { ...node, node: "n2", verdict: { state: "clear", why: null, blockers: [] }, allocatable: { cpu: 4, memory: 16 * GI }, requests: { cpu: 0, memory: 0 },
                 room: { cpu: 4, memory: 16 * GI }, mine: { pods: 0, cpu: 0, memory: 0 }, others: { pods: 0, cpu: 0, memory: 0 }, own: [] },
@@ -851,7 +853,7 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
                 mine: { pods: 2, cpu: 1.5, memory: 5 * GI }, others: { pods: 2, cpu: 0.35, memory: GI },
                 own: [{ namespace: "shop", pod: "api-1", cpu: 0.5, memory: GI }, { namespace: "shop", pod: "db-0", cpu: 1, memory: 4 * GI }] },
             ] },
-          { cluster: "edge", at: 1_700_000_000, autoscaler: null, largest: null, nodes: [], rules: "kubectl drain's rules (the Contract names no autoscaler)", reported: null,
+          { cluster: "edge", at: 1_700_000_000, autoscaler: null, largest: null, nodes: [], could_go: null, judged: {}, rules: "kubectl drain's rules (the Contract names no autoscaler)", reported: null,
             problem: "the store is shared with another Contract and has no cluster labels: node series would cross Contracts" },
         ],
       },
@@ -870,6 +872,13 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
   expect(verdicts[2]).toBe("blockedshop/db-0: PodDisruptionBudget <i>db</i> allows no disruption; local storage (data)");
   expect(page.querySelector("section.nodes i")).toBeNull();
   expect(edge?.textContent).toContain("its Actuator's last report of Blockers: never.");
+  // slice 15.4: the nodes that could go, now and after the Sizings, as a figure of its own
+  const could = kind?.querySelector(".could-go")?.textContent;
+  expect(could).toContain("Could go now: up to 1 (n2), 120.00 EUR/month.");
+  expect(could).toContain("After the Sizings: up to 2 (n2, n<b>4</b>), 8.00 cores, 32.00 GiB.");
+  expect(could).toContain("An upper bound: affinity and spread rules can't be seen. Not part of Savings. 1 of 3 nodes not judged.");
+  expect(page.querySelector(".could-go b")).toBeNull();
+  expect(edge?.querySelector(".could-go")).toBeNull();
   const cells = [...(kind?.querySelectorAll("tbody tr:last-child td") ?? [])].map((td) => td.textContent);
   expect(cells[0]).toContain("n1 m5.xlarge cordoned gpu=<b>true</b>:NoSchedule");
   expect(page.querySelector("section.nodes b")).toBeNull();

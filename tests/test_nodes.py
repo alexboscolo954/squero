@@ -90,6 +90,8 @@ def cluster() -> FakePrometheus:
 
 
 API_1 = {"namespace": "shop", "pod": "api-1", "cpu": 0.5, "memory": 1.0 * GI, "bound": False}
+# slice 15.4: each container's own requests, and the pod's Workload where its owners resolve
+ONE = {"containers": [{"name": "app", "cpu": 0.5, "memory": 1.0 * GI}], "workload": None}
 
 
 def test_each_node_is_read_with_what_its_room_is_made_of() -> None:
@@ -102,14 +104,17 @@ def test_each_node_is_read_with_what_its_room_is_made_of() -> None:
         "taints": [],
         "cordoned": False,
         "allocatable": {"cpu": 4.0, "memory": 16.0 * GI},
+        "capacity": {},  # slice 15.4: not in this fixture, nor its pod slots
+        "slots": None,
         "requests": {"cpu": 1.85, "memory": 5.5 * GI + 64 * MI},  # every pod on it
         "daemonsets": {"cpu": 0.1, "memory": 64.0 * MI},
         "pods": 4,
         "bound": 1,  # slice 15.1b: kube-system's DaemonSet pod stays with the node
         "own": [  # each with its controller's kind (slice 15.1c)
-            {**API_1, "kind": "ReplicaSet"},
+            {**API_1, "kind": "ReplicaSet", **ONE},
             {"namespace": "shop", "pod": "db-0", "cpu": 1.0, "memory": 4.0 * GI}
-            | {"bound": False, "kind": "StatefulSet"},
+            | {"bound": False, "kind": "StatefulSet", "workload": None}
+            | {"containers": [{"name": "app", "cpu": 1.0, "memory": 4.0 * GI}]},
         ],
     }
     assert (n2["node"], n2["type"], n2["pods"]) == ("n2", "", 1)
@@ -138,8 +143,9 @@ def test_a_pod_outside_the_contracts_namespaces_only_reaches_the_hub_in_a_sum() 
     for q in fake.queries:
         if "kube_pod" in q and 'namespace=~"shop"' not in q:
             assert q.startswith(("sum by (node, exported_node", "count by (node, exported_node")), q
-    # its own by name: its pods, their requests, and its budgets at 0 (slice 15.1c)
-    assert sum('namespace=~"shop"' in q for q in fake.queries) == 3
+    # its own by name: its pods, their requests, its budgets at 0 (slice 15.1c), and
+    # the three owner series that give each pod its Workload (slice 15.4)
+    assert sum('namespace=~"shop"' in q for q in fake.queries) == 6
 
 
 def test_only_running_and_pending_pods_hold_requests() -> None:
@@ -181,7 +187,7 @@ def test_a_pod_asking_nothing_is_still_the_contracts_own_and_one_on_no_node_is_n
     pod(fake, "waiting-1", on="", phase="Pending")  # not scheduled yet
     (n1,) = read(fake)["nodes"]
     bare = {"namespace": "shop", "pod": "bare-1", "cpu": 0.0, "memory": 0.0, "bound": False}
-    bare["kind"] = "ReplicaSet"
+    bare |= {"kind": "ReplicaSet", "containers": [], "workload": None}
     assert n1["own"] == [bare]
     assert (n1["pods"], n1["requests"]) == (1, {"cpu": 0.0, "memory": 0.0})
 
@@ -250,6 +256,33 @@ def test_each_own_pod_comes_with_its_controllers_kind() -> None:
     (n1,) = read(fake)["nodes"]
     odd = next(p for p in n1["own"] if p["pod"] == "odd")
     assert (odd["kind"], odd["bound"]) == (None, False)
+
+
+def test_what_the_nodes_that_could_go_need_is_read() -> None:
+    """Slice 15.4: a node's capacity and pod slots; each of the Contract's pods with its
+    containers one by one and the Workload its owners resolve to."""
+    fake = FakePrometheus()
+    node(fake, "n1")
+    for res, value in (("cpu", 4.2), ("memory", 16.5 * GI)):
+        fake.add("kube_node_status_capacity", value, node="n1", resource=res)
+    fake.add("kube_node_status_allocatable", 110, node="n1", resource="pods")
+    node(fake, "n2")  # its capacity and slots not read
+    (name,) = deployment(fake, "api", pods=1)
+    pod(fake, name)
+    who = {"namespace": "shop", "pod": name, "uid": f"uid-shop-{name}", "node": "n1"}
+    fake.add(POD_REQUESTS, 0.1, container="side", resource="cpu", **who)
+    pod(fake, "stray")  # no owner series: its Workload isn't known
+    pod(fake, name, ns="bank")  # another namespace's pod of the same name
+    n1, n2 = read(fake)["nodes"]
+    assert (n1["capacity"], n1["slots"]) == ({"cpu": 4.2, "memory": 16.5 * GI}, 110)
+    assert (n1["allocatable"], n2["capacity"], n2["slots"]) == (n2["allocatable"], {}, None)
+    api, stray = n1["own"]
+    assert api["workload"] == {"kind": "Deployment", "name": "api"} and stray["workload"] is None
+    assert api["containers"] == [
+        {"name": "app", "cpu": 0.5, "memory": 1.0 * GI},
+        {"name": "side", "cpu": 0.1, "memory": 0.0},
+    ]
+    assert api["cpu"] == 0.6 and stray["containers"] == [{"name": "app", "cpu": 0.5, "memory": GI}]
 
 
 def budget(
@@ -639,6 +672,6 @@ def test_the_nodes_route_gives_the_contracts_own_clusters(
     (shown,) = body["clusters"]
     assert (shown["cluster"], shown["at"], shown["autoscaler"]) == ("test", NOW, None)
     assert [n["node"] for n in shown["nodes"]] == ["n1", "n2"]
-    assert shown["nodes"][0]["own"][0] == {**API_1, "kind": "ReplicaSet"}
+    assert shown["nodes"][0]["own"][0] == {**API_1, "kind": "ReplicaSet", **ONE}
     assert shown["nodes"][0]["verdict"]["state"] == "unknown"
     assert shown["nodes"][0]["others"]["pods"] == 2 and "theirs" not in json.dumps(body)

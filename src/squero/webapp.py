@@ -347,6 +347,8 @@ class NodePod(BaseModel):
     memory: float
     bound: bool = False  # a DaemonSet's or the node's own static pod: it stays with it
     kind: str | None = None  # its controller's kind, "" for none (from slice 15.1c)
+    containers: list[dict[str, Any]] = []  # each one's requests (from slice 15.4)
+    workload: dict[str, str] | None = None  # kind and name, where its owners resolve
 
 
 class BlockingPod(BaseModel):
@@ -379,6 +381,8 @@ class Node(BaseModel):
     taints: list[str]  # key=value:effect
     cordoned: bool
     allocatable: dict[str, float]
+    capacity: dict[str, float] = {}  # what it is priced at (from slice 15.4)
+    slots: int | None = None  # the pods it may hold
     requests: dict[str, float]  # of every Running or Pending pod on it
     daemonsets: dict[str, float]  # of those, its DaemonSets' pods
     pods: int
@@ -390,18 +394,35 @@ class Node(BaseModel):
     own: list[NodePod]
 
 
+class CouldGo(BaseModel):
+    """Nodes that could go (slice 15.4): an upper bound, a figure of its own."""
+
+    nodes: list[str]
+    cpu: float  # their capacity
+    memory: float
+    cost: float | None = None  # a month of it, with a priced Contract
+
+
+class Scenarios(BaseModel):
+    now: CouldGo  # with today's requests
+    after: CouldGo  # once the stored Sizings are applied
+
+
 class ClusterNodes(BaseModel):
     cluster: str
     at: float  # the run that read them
     autoscaler: str | None = None  # as the Contract names it
     rules: str  # whose rules its nodes' verdicts go by
     reported: float | None = None  # when the Hub got its Actuator's last report
+    could_go: Scenarios | None = None  # None: its read can't say
+    judged: dict[str, int] = {}  # how many nodes got each verdict
     problem: str | None = None  # why there are none
     largest: dict[str, float] | None = None  # the Room after DaemonSets that caps Sizings
     nodes: list[Node]
 
 
 class Nodes(BaseModel):
+    currency: str | None = None  # the Contract's prices', when it has them
     clusters: list[ClusterNodes]
 
 
@@ -798,6 +819,19 @@ def daily(points: list[Point]) -> list[Point]:
     return list(last.values())
 
 
+async def nodes_of(st: Store, c: Contract, now: float) -> Nodes:
+    """The Contract's nodes as its latest hourly run read them, each with its verdict,
+    and the ones that could go: the Nodes page's and the Hub MCP server's (15.4)."""
+    c = await listprices.effective(st, c, now)
+    names = {cl.name for cl in c.clusters}
+    rows, _ = await st.latest_sizings(c.id, {t.cluster for t in usage.targets(c)})
+    clusters = sizing.nodes_report(
+        await st.latest_rooms(c.id, names), c, await st.latest_blockers(c.id, names), now, rows
+    )
+    currency = c.prices.currency if c.prices else None
+    return Nodes.model_validate({"currency": currency, "clusters": clusters})
+
+
 async def workloads_of(st: Store, c: Contract, now: float) -> Workloads:
     """The Contract's latest Sizings, ranked: the Workloads page's and the Hub MCP
     server's (slice 11.1a)."""
@@ -930,10 +964,7 @@ def router(
     @api.get("/contracts/{contract_id}/nodes")
     async def nodes(contract_id: str) -> Nodes:
         c = contract(contract_id)
-        names = {cl.name for cl in c.clusters}
-        read = await store().latest_rooms(c.id, names)
-        reports = await store().latest_blockers(c.id, names)
-        return Nodes.model_validate({"clusters": sizing.nodes_report(read, c, reports, now())})
+        return await nodes_of(store(), c, now())
 
     @api.get("/contracts/{contract_id}/cost")
     async def cost(

@@ -716,6 +716,14 @@ export interface components {
             autoscaler?: string | null;
             /** Cluster */
             cluster: string;
+            could_go?: components["schemas"]["Scenarios"] | null;
+            /**
+             * Judged
+             * @default {}
+             */
+            judged: {
+                [key: string]: number;
+            };
             /** Largest */
             largest?: {
                 [key: string]: number;
@@ -830,6 +838,20 @@ export interface components {
             requests: number;
             /** Waste */
             waste: number;
+        };
+        /**
+         * CouldGo
+         * @description Nodes that could go (slice 15.4): an upper bound, a figure of its own.
+         */
+        CouldGo: {
+            /** Cost */
+            cost?: number | null;
+            /** Cpu */
+            cpu: number;
+            /** Memory */
+            memory: number;
+            /** Nodes */
+            nodes: string[];
         };
         /** Decision */
         Decision: {
@@ -1234,6 +1256,13 @@ export interface components {
             };
             /** Bound */
             bound?: number | null;
+            /**
+             * Capacity
+             * @default {}
+             */
+            capacity: {
+                [key: string]: number;
+            };
             /** Cordoned */
             cordoned: boolean;
             /** Daemonsets */
@@ -1256,6 +1285,8 @@ export interface components {
             room: {
                 [key: string]: number;
             };
+            /** Slots */
+            slots?: number | null;
             /** Taints */
             taints: string[];
             /** Type */
@@ -1269,6 +1300,13 @@ export interface components {
              * @default false
              */
             bound: boolean;
+            /**
+             * Containers
+             * @default []
+             */
+            containers: {
+                [key: string]: unknown;
+            }[];
             /** Cpu */
             cpu: number;
             /** Kind */
@@ -1279,11 +1317,17 @@ export interface components {
             namespace: string;
             /** Pod */
             pod: string;
+            /** Workload */
+            workload?: {
+                [key: string]: string;
+            } | null;
         };
         /** Nodes */
         Nodes: {
             /** Clusters */
             clusters: components["schemas"]["ClusterNodes"][];
+            /** Currency */
+            currency?: string | null;
         };
         /** Point */
         Point: {
@@ -1442,6 +1486,11 @@ export interface components {
             rate: number;
             /** Week */
             week: number;
+        };
+        /** Scenarios */
+        Scenarios: {
+            after: components["schemas"]["CouldGo"];
+            now: components["schemas"]["CouldGo"];
         };
         /**
          * Share

@@ -559,6 +559,10 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
     kube_pod_info has it ("" for none: slice 15.1c, what blocks without an Actuator).
     `budgets` (15.1c): the PodDisruptionBudgets of the Contract's namespaces that allow
     no disruption now; which pods one covers, kube-state-metrics doesn't say.
+    For the nodes that could go (slice 15.4): per node its `capacity` (what it is priced
+    at) and `slots`, the pods it may hold (None where not read); each of `own` with its
+    `containers`' requests one by one and its `workload` (None where its owners don't
+    resolve), so its Sizings can be applied to it container by container.
     `problem` when no node is read; the caller refuses a store shared with another
     Contract that has no cluster labels (`SHARED_STORE`), as for list prices."""
     scoped = [f"{k}={_string(v)}" for k, v in sorted(t.labels.items())]
@@ -583,6 +587,11 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
     daemons = of("kube_pod_info", 'created_by_kind="DaemonSet"')
     of_daemons = f"* on (uid) group_left() max by (uid) ({daemons})"
     allocatable = per_node(prom.instant(of("kube_node_status_allocatable", both), at))
+    capacity = per_node(prom.instant(of("kube_node_status_capacity", both), at))
+    slots = {
+        label(s["metric"], "node"): int(float(s["value"][1]))
+        for s in prom.instant(of("kube_node_status_allocatable", 'resource="pods"'), at)
+    }
     requests = per_node(prom.instant(f"sum {by} ({of(POD_REQUESTS, both)} {live})", at))
     daemonsets = per_node(
         prom.instant(f"sum {by} ({of(POD_REQUESTS, both)} {of_daemons} {live})", at)
@@ -601,10 +610,19 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
     # the Contract's pods by node, from kube_pod_info so one asking nothing is still its
     # own; only its live pods are listed, so a finished one's requests go unused
     asks: dict[tuple[str, str], dict[str, float]] = {}
+    each: dict[tuple[str, str], dict[str, dict[str, float]]] = {}  # by container
     for s in prom.instant(selector(POD_REQUESTS, t, both), at):
         m = s["metric"]
-        pod = asks.setdefault((label(m, "namespace"), label(m, "pod")), {})
+        who = (label(m, "namespace"), label(m, "pod"))
+        pod = asks.setdefault(who, {})
         pod[m.get("resource", "")] = pod.get(m.get("resource", ""), 0.0) + float(s["value"][1])
+        one = each.setdefault(who, {}).setdefault(label(m, "container"), {})
+        one[m.get("resource", "")] = float(s["value"][1])
+    owned = resolve(  # its pods' Workloads, as the Sizings name them
+        prom.instant(selector("kube_pod_owner", t), at),
+        prom.instant(selector("kube_replicaset_owner", t), at),
+        prom.instant(selector("kube_job_owner", t), at),
+    )
     own: dict[str, list[dict[str, Any]]] = {}
     for s in prom.instant(f"{selector('kube_pod_info', t)} {live}", at):
         m = s["metric"]
@@ -613,6 +631,12 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
         by = m.get("created_by_kind")  # absent: not known, which is not "no controller"
         mine["bound"] = by in ("DaemonSet", "Node")
         mine["kind"] = "" if by == "<none>" else by
+        mine["containers"] = [
+            {"name": name, "cpu": 0.0, "memory": 0.0} | asked
+            for name, asked in sorted(each.get(who, {}).items())
+        ]
+        w = owned.get(who)
+        mine["workload"] = {"kind": w.kind, "name": w.name} if w else None
         own.setdefault(label(m, "node"), []).append({"namespace": who[0], "pod": who[1], **mine})
     taints: dict[str, list[str]] = {}
     for s in prom.instant(of("kube_node_spec_taint"), at):
@@ -638,6 +662,8 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
                 "taints": sorted(taints.get(name, [])),
                 "cordoned": name in cordoned,
                 "allocatable": allocatable.get(name, {}),
+                "capacity": capacity.get(name, {}),
+                "slots": slots.get(name),
                 "requests": {"cpu": 0.0, "memory": 0.0} | requests.get(name, {}),
                 "daemonsets": {"cpu": 0.0, "memory": 0.0} | daemonsets.get(name, {}),
                 "pods": pods.get(name, 0),

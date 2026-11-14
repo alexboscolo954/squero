@@ -8,7 +8,11 @@ verdict (`verdicts`): blocked, clear or unknown. Clear needs positive evidence: 
 (no Actuator, a report too old or cut short, a namespace it could not read, pods the Hub
 can't see) ever gives it. Without a usable report the Hub goes by what Prometheus shows
 (`seen`, slice 15.1c): a pod with no controller still blocks, the rest is unknown.
-Read-only: nothing is evicted for it."""
+Read-only: nothing is evicted for it.
+
+The nodes that could go (`could_go`, slice 15.4): clear ones whose pods fit, pod by pod,
+in the Room of the others with the same taints; `after` gives the same read with the
+requests the ready Sizings would leave. Every gap means the node stays."""
 
 import math
 import re
@@ -37,6 +41,10 @@ RULES = {
 }
 
 Name = Field(max_length=253)
+# What Kubernetes lets an object's name and a kind be. An Actuator's strings reach the
+# console and, from slice 15.4, the Hub MCP's model: a name of another shape is no name
+NAME = re.compile(r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?")
+KIND = re.compile(r"[A-Za-z][A-Za-z0-9]{0,62}")
 
 
 class PodFacts(BaseModel):
@@ -83,6 +91,9 @@ def unreal(r: Report) -> str | None:
     if any(len(ns) > 253 for ns in r.namespaces):
         return "namespaces"
     for p in r.pods:
+        named = [p.namespace, p.pod, p.node, *([] if p.budget is None else [p.budget])]
+        if not all(NAME.fullmatch(n) for n in named):  # what Kubernetes itself refuses
+            return "pods"
         names = [*p.empty_dir, *p.in_memory, *p.host_path, *p.annotations.values()]
         if any(len(n) > 253 for n in names) or set(p.annotations) - set(ANNOTATIONS):
             return "pods"
@@ -99,6 +110,19 @@ def go_duration(text: str) -> float | None:
     if not parts or "".join(n + u for n, u in parts) != text:
         return None
     return sum(float(n) * GO_UNITS[u] for n, u in parts)
+
+
+def _custom(kind: str) -> str:
+    """A custom controller, with its kind when it is shaped like one: an owner
+    reference's kind is whatever its writer put there."""
+    return f"a custom controller ({kind})" if KIND.fullmatch(kind) else "a custom controller"
+
+
+def _listed(volumes: list[str]) -> str:
+    """Volume names, or how many when one isn't shaped like a name."""
+    if all(NAME.fullmatch(v) for v in volumes):
+        return ", ".join(volumes)
+    return f"{len(volumes)} {'volume' if len(volumes) == 1 else 'volumes'}"
 
 
 def reasons(p: dict[str, Any], autoscaler: str | None, now: float = 0.0) -> list[str]:
@@ -123,7 +147,7 @@ def reasons(p: dict[str, Any], autoscaler: str | None, now: float = 0.0) -> list
     if budget is not None and not p.get("allowed"):
         out.append(f"PodDisruptionBudget {budget} allows no disruption")
     kind = p.get("kind") or ""
-    alone = "no controller" if not kind else f"a custom controller ({kind})"
+    alone = "no controller" if not kind else _custom(kind)
     if autoscaler == "karpenter":
         value = noted.get(DO_NOT_DISRUPT, "")
         lasts, started = go_duration(value), p.get("started")
@@ -141,14 +165,14 @@ def reasons(p: dict[str, Any], autoscaler: str | None, now: float = 0.0) -> list
             safe = {v.strip() for v in noted.get(SAFE_VOLUMES, "").split(",")}
             kept = sorted((on_disk | set(p.get("host_path") or [])) - safe)
             if kept:
-                out.append(f"local storage ({', '.join(kept)})")
+                out.append(f"local storage ({_listed(kept)})")
             if p["namespace"] == "kube-system" and budget is None:
                 out.append("a kube-system pod with no PodDisruptionBudget")
     else:  # a person, with kubectl drain and no force flags
         if kind not in BUILT_IN:
             out.append(alone)
         if p.get("empty_dir"):
-            out.append(f"emptyDir data ({', '.join(sorted(p['empty_dir']))})")
+            out.append(f"emptyDir data ({_listed(sorted(p['empty_dir']))})")
     return out
 
 
@@ -174,7 +198,7 @@ def seen(
             kind = p.get("kind")
             if kind is None or kind in BUILT_IN:  # None: read before 15.1c, not known
                 continue
-            said = "no controller" if not kind else f"a custom controller ({kind})"
+            said = "no controller" if not kind else _custom(kind)
             found.append({"namespace": p["namespace"], "pod": p["pod"], "reasons": [said + unless]})
     if found:
         return {"state": "blocked", "why": None, "blockers": found}
@@ -235,3 +259,153 @@ def verdicts(
         state = "blocked" if found else "unknown" if why else "clear"
         out[n["node"]] = {"state": state, "why": why, "blockers": found}
     return out
+
+
+# --- the nodes that could go (slice 15.4) ----------------------------------------------
+
+OWN_TAINT = "node.kubernetes.io/"  # the ones Kubernetes sets itself: cordon, conditions
+CONTROL_PLANE = ("node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master")
+
+
+def _group(n: dict[str, Any]) -> tuple[str, ...]:
+    """The taints a pod must tolerate to run on a node: its own, without those
+    Kubernetes sets itself (a cordoned node's pods ran on it before) and without
+    `PreferNoSchedule`, which keeps no pod out. Pods move only between nodes of one
+    group: a Workload's tolerations can't be seen."""
+    kept = (t for t in n["taints"] if not t.startswith(OWN_TAINT))
+    return tuple(sorted(t for t in kept if not t.endswith(":PreferNoSchedule")))
+
+
+def _closed(n: dict[str, Any]) -> bool:
+    """Whether a node takes no new pod now: cordoned, or under a taint Kubernetes set
+    itself for its condition (not ready, under pressure). Its own pods can still leave."""
+    held = (t for t in n["taints"] if t.startswith(OWN_TAINT))
+    return n["cordoned"] or any(not t.endswith(":PreferNoSchedule") for t in held)
+
+
+def after(read: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """A cluster's stored read with the requests its pods would have once its ready
+    Sizings (`rows`: the cluster's stored ones) are applied, container by container. A
+    container with no ready Sizing, or of a pod whose Workload isn't known, keeps its
+    own request: nothing is freed that no Sizing frees. A container that asks nothing
+    today, so that the pod doesn't list it, asks its Sizing then. Each node's requests
+    move by what its own pods' did; the pods the Hub can't see stay as they are."""
+    sized = {
+        (r["namespace"], r["kind"], r["name"], r["container"]): {
+            res: r[res]["target"] for res in ("cpu", "memory") if r.get(res)
+        }
+        for r in rows
+        if r.get("state") == "ready"
+    }
+    of: dict[tuple[str, str, str], dict[str, dict[str, float]]] = {}  # by Workload
+    for (ns, kind, name, container), target in sized.items():
+        of.setdefault((ns, kind, name), {})[container] = target
+    nodes = []
+    for n in read.get("nodes") or []:
+        own, moved = [], {"cpu": 0.0, "memory": 0.0}
+        for p in n["own"]:
+            w = p.get("workload")
+            targets = of.get((p["namespace"], w["kind"], w["name"]), {}) if w else {}
+            asks = {"cpu": 0.0, "memory": 0.0}
+            listed = set()
+            for ctr in p.get("containers") or []:
+                listed.add(ctr["name"])
+                for res in asks:
+                    asks[res] += targets.get(ctr["name"], {}).get(res, ctr[res])
+            if "containers" not in p:  # read before 15.4: as it is
+                asks = {res: p[res] for res in asks}
+            else:  # a container asking nothing today has no series: its Sizing sets one
+                for container, target in targets.items():
+                    if container not in listed:
+                        for res in asks:
+                            asks[res] += target.get(res, 0.0)
+            for res in moved:
+                moved[res] += asks[res] - p[res]
+            own.append({**p, **asks})
+        requests = {res: n["requests"][res] + moved[res] for res in moved}
+        nodes.append({**n, "own": own, "requests": requests})
+    return {**read, "nodes": nodes}
+
+
+def could_go(read: dict[str, Any], verdict: dict[str, dict[str, Any]]) -> list[str] | None:
+    """The nodes of a cluster's read that could be removed, by name, in the order the
+    arithmetic lets them go: a node whose `verdict` is clear (so every pod on it is
+    known, and none blocks), not a control-plane node, each of whose pods that would
+    move (its DaemonSets' and static pods go with it) fits whole, CPU and memory and a
+    pod slot, on one other node of its taint group that takes pods (not cordoned, not
+    under a condition taint) and isn't going itself. Fewest requests first, the largest
+    pod placed first, each on the first node by name with room, and what a node
+    receives is no longer free for the next;
+    a node that received pods and then goes itself must find room for those too.
+
+    An upper bound: affinity, spread and tolerations can't be seen. A node without its
+    allocatable or its pod slots neither goes nor receives. None for a read from before
+    15.4, which lacks what this goes by."""
+    nodes = read.get("nodes") or []
+    if any("slots" not in n or any("containers" not in p for p in n["own"]) for n in nodes):
+        return None
+
+    def whole(n: dict[str, Any]) -> bool:
+        return n["slots"] is not None and all(r in n["allocatable"] for r in ("cpu", "memory"))
+
+    def moving(n: dict[str, Any]) -> list[dict[str, Any]]:
+        return [p for p in n["own"] if not p.get("bound")]
+
+    free = {
+        n["node"]: [
+            n["allocatable"]["cpu"] - n["requests"]["cpu"],
+            n["allocatable"]["memory"] - n["requests"]["memory"],
+            n["slots"] - n["pods"],
+        ]
+        for n in nodes
+        if whole(n) and not _closed(n)
+    }
+    group = {n["node"]: _group(n) for n in nodes}
+    candidates = [
+        n
+        for n in nodes
+        if verdict[n["node"]]["state"] == "clear"
+        and whole(n)
+        and not any(t.startswith(CONTROL_PLANE) for t in n["taints"])
+    ]
+    candidates.sort(
+        key=lambda n: (
+            sum(p["cpu"] for p in moving(n)),
+            sum(p["memory"] for p in moving(n)),
+            n["node"],
+        )
+    )
+    gone = []
+    landed: dict[str, list[dict[str, Any]]] = {}  # the pods each node has received
+    for n in candidates:
+        name = n["node"]
+        room = {
+            other: list(left)
+            for other, left in sorted(free.items())
+            if other != name and group[other] == group[name]
+        }
+        pods = [*moving(n), *landed.get(name, [])]
+        pods.sort(key=lambda p: (-p["cpu"], -p["memory"], p["namespace"], p["pod"]))
+        placed = []
+        for p in pods:
+            fit = next(
+                (
+                    other
+                    for other, left in room.items()
+                    if left[0] >= p["cpu"] - 1e-9 and left[1] >= p["memory"] - 1e-9 and left[2] >= 1
+                ),
+                None,
+            )
+            if fit is None:
+                break
+            left = room[fit]
+            left[0], left[1], left[2] = left[0] - p["cpu"], left[1] - p["memory"], left[2] - 1
+            placed.append((fit, p))
+        else:
+            free.pop(name, None)  # it goes: nothing more lands on it
+            free.update(room)
+            landed.pop(name, None)
+            for other, p in placed:
+                landed.setdefault(other, []).append(p)
+            gone.append(name)
+    return gone

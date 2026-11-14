@@ -39,6 +39,7 @@ TOOLS = {
     "list_contracts",
     "sizings",
     "sizing",
+    "nodes",
     "cost",
     "savings",
     "bill",
