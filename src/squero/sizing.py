@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
-from squero import listprices, usage
+from squero import blockers, listprices, usage
 from squero.contracts import BUILTIN, ClusterPrices, Contract, Policy
 from squero.slack import clean
 from squero.usage import NEEDS_FOR, Bounds, ContainerUsage, Divides, Workload
@@ -332,17 +332,27 @@ def largest_room(found: dict[str, Any] | None) -> dict[str, float] | None:
     }
 
 
-def nodes_report(found: dict[str, dict[str, Any]], c: Contract) -> list[dict[str, Any]]:
+def nodes_report(
+    found: dict[str, dict[str, Any]],
+    c: Contract,
+    reports: dict[str, dict[str, Any]] | None = None,
+    now: float = 0.0,
+) -> list[dict[str, Any]]:
     """Stored nodes as the console shows them (slice 15.1a), per cluster of the Contract
     that has a read: each node's Room (its allocatable less every pod's requests), split
     into the Contract's own pods (`mine`) and the rest (`others`: not visible, a count
     and a sum, nothing else of them is ever read), the cluster's largest Room after
-    DaemonSets, which caps its Sizings, and the autoscaler the Contract names."""
+    DaemonSets, which caps its Sizings, and the autoscaler the Contract names. Each
+    node's `verdict` (slice 15.1b): whether it could be removed, by `rules`, going by its
+    cluster's Actuator's latest report (`reports`, per cluster; `reported`: when the
+    Hub got it) as of `now`."""
     out = []
     for cl in c.clusters:
         read = found.get(cl.name)
         if read is None:
             continue
+        report = (reports or {}).get(cl.name)
+        verdict = blockers.verdicts(read, report, cl, now)
         nodes = []
         for n in read["nodes"]:
             mine = {res: sum(p[res] for p in n["own"]) for res in ("cpu", "memory")}
@@ -351,6 +361,7 @@ def nodes_report(found: dict[str, dict[str, Any]], c: Contract) -> list[dict[str
             nodes.append(
                 {
                     **n,
+                    "verdict": verdict[n["node"]],
                     "room": room,
                     "mine": {"pods": len(n["own"]), **mine},
                     "others": {"pods": max(0, n["pods"] - len(n["own"])), **rest},
@@ -359,6 +370,8 @@ def nodes_report(found: dict[str, dict[str, Any]], c: Contract) -> list[dict[str
         out.append(
             {
                 **{"cluster": cl.name, "at": read["at"], "autoscaler": cl.autoscaler},
+                **{"rules": blockers.RULES[cl.autoscaler]},
+                **{"reported": report["received"] if report else None},
                 **{"problem": read.get("problem"), "largest": largest_room(read), "nodes": nodes},
             }
         )

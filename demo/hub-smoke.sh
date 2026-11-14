@@ -129,8 +129,11 @@ got=$(code -H 'Authorization: Bearer nope' "$public/actuator/desired")
 got=$(code -X POST -H 'Authorization: Bearer nope' -H 'Content-Type: application/json' -d '[]' \
   "$public/actuator/reports")
 [[ $got == 401 ]] || fail "an Actuator's report with a wrong token wasn't refused ($got)"
+got=$(code -X POST -H 'Authorization: Bearer nope' -H 'Content-Type: application/json' \
+  -d '{"at": 1, "namespaces": [], "pods": []}' "$public/actuator/blockers")
+[[ $got == 401 ]] || fail "an Actuator's Blockers with a wrong token weren't refused ($got)"
 [[ $(code "$public/actuator/x") == 404 ]] || fail "/actuator/x is public"
-echo "ok   only the alert route, the Relays' websocket and the Actuators' two routes are public; bodies over 1 MB refused"
+echo "ok   only the alert route, the Relays' websocket and the Actuators' three routes are public; bodies over 1 MB refused"
 
 local_api=http://127.0.0.1:18000
 for _ in $(seq 60); do

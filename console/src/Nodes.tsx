@@ -1,5 +1,7 @@
 /** Nodes (slice 15.1a): each cluster's nodes and their Room, as the latest hourly run read
- * them. Pods outside the Contract's namespaces are a count and a sum, never named. */
+ * them. Pods outside the Contract's namespaces are a count and a sum, never named. Each
+ * node's verdict (slice 15.1b): whether it could be removed, by its cluster's rules, going
+ * by its Actuator's hourly report of Blockers. */
 import * as api from "./api";
 import { useLoaded } from "./Checks";
 import { cores, gib, when } from "./format";
@@ -25,6 +27,10 @@ export function NodesPage({ contract }: { contract: string }) {
             Read {when(c.at)}. Autoscaler: {c.autoscaler ?? "none named in the Contract"}.
             {c.largest && ` No Sizing asks more than ${both(c.largest)}: the largest Room after DaemonSets.`}
           </p>
+          <p className="hint">
+            Whether a node could be removed goes by {c.rules}; its Actuator's last report of Blockers:{" "}
+            {when(c.reported)}.
+          </p>
           {c.problem ? (
             <p className="notice">{c.problem}</p>
           ) : (
@@ -37,6 +43,7 @@ export function NodesPage({ contract }: { contract: string }) {
                   <th>Not visible</th>
                   <th>DaemonSets</th>
                   <th>Room</th>
+                  <th>Could be removed</th>
                 </tr>
               </thead>
               <tbody>
@@ -69,6 +76,22 @@ export function NodesPage({ contract }: { contract: string }) {
                     </td>
                     <td>{both(n.daemonsets)}</td>
                     <td>{both(n.room)}</td>
+                    <td>
+                      {n.verdict.state === "clear" && "yes: nothing on it blocks"}
+                      {n.verdict.state === "unknown" && <span className="hint">unknown: {n.verdict.why}</span>}
+                      {n.verdict.state === "blocked" && (
+                        <>
+                          <span className="bad">blocked</span>
+                          <ul>
+                            {(n.verdict.blockers ?? []).map((b) => (
+                              <li key={`${b.namespace}/${b.pod}`}>
+                                {b.namespace}/{b.pod}: {b.reasons.join("; ")}
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

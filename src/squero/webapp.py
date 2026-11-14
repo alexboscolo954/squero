@@ -345,6 +345,21 @@ class NodePod(BaseModel):
     pod: str
     cpu: float
     memory: float
+    bound: bool = False  # a DaemonSet's or the node's own static pod: it stays with it
+
+
+class BlockingPod(BaseModel):
+    namespace: str
+    pod: str
+    reasons: list[str]
+
+
+class Removal(BaseModel):
+    """Whether a node could be removed (slice 15.1b), by its cluster's `rules`."""
+
+    state: Literal["blocked", "clear", "unknown"]
+    why: str | None = None  # of `unknown`
+    blockers: list[BlockingPod] = []
 
 
 class Share(BaseModel):
@@ -366,6 +381,8 @@ class Node(BaseModel):
     requests: dict[str, float]  # of every Running or Pending pod on it
     daemonsets: dict[str, float]  # of those, its DaemonSets' pods
     pods: int
+    bound: int | None = None  # of them, the ones that stay with it (DaemonSets', static)
+    verdict: Removal
     room: dict[str, float]  # allocatable less requests
     mine: Share  # the Contract's pods
     others: Share  # not visible: pods outside its namespaces, never named
@@ -376,6 +393,8 @@ class ClusterNodes(BaseModel):
     cluster: str
     at: float  # the run that read them
     autoscaler: str | None = None  # as the Contract names it
+    rules: str  # whose rules its nodes' verdicts go by
+    reported: float | None = None  # when the Hub got its Actuator's last report
     problem: str | None = None  # why there are none
     largest: dict[str, float] | None = None  # the Room after DaemonSets that caps Sizings
     nodes: list[Node]
@@ -910,8 +929,10 @@ def router(
     @api.get("/contracts/{contract_id}/nodes")
     async def nodes(contract_id: str) -> Nodes:
         c = contract(contract_id)
-        read = await store().latest_rooms(c.id, {cl.name for cl in c.clusters})
-        return Nodes.model_validate({"clusters": sizing.nodes_report(read, c)})
+        names = {cl.name for cl in c.clusters}
+        read = await store().latest_rooms(c.id, names)
+        reports = await store().latest_blockers(c.id, names)
+        return Nodes.model_validate({"clusters": sizing.nodes_report(read, c, reports, now())})
 
     @api.get("/contracts/{contract_id}/cost")
     async def cost(

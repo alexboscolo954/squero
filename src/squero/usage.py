@@ -553,6 +553,9 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
     all namespaces, scoped by the cluster's labels only, so a pod outside the Contract's
     namespaces reaches the Hub as part of a sum and a count per node, never by name.
     `own`: the Contract's pods there, each with its requests, read in its namespaces.
+    `bound` (slice 15.1b): how many of the node's pods stay with it whoever removes it,
+    a DaemonSet's and the node's own static pods, counted over all namespaces like
+    `pods`; each of `own` says whether it is one.
     `problem` when no node is read; the caller refuses a store shared with another
     Contract that has no cluster labels (`SHARED_STORE`), as for list prices."""
     scoped = [f"{k}={_string(v)}" for k, v in sorted(t.labels.items())]
@@ -585,6 +588,13 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
         label(s["metric"], "node"): int(float(s["value"][1]))
         for s in prom.instant(f"count by (node, exported_node) ({of('kube_pod_info')} {live})", at)
     }
+    stays = 'created_by_kind=~"DaemonSet|Node"'
+    bound = {
+        label(s["metric"], "node"): int(float(s["value"][1]))
+        for s in prom.instant(
+            f"count by (node, exported_node) ({of('kube_pod_info', stays)} {live})", at
+        )
+    }
     # the Contract's pods by node, from kube_pod_info so one asking nothing is still its
     # own; only its live pods are listed, so a finished one's requests go unused
     asks: dict[tuple[str, str], dict[str, float]] = {}
@@ -597,6 +607,7 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
         m = s["metric"]
         who = (label(m, "namespace"), label(m, "pod"))
         mine = {"cpu": 0.0, "memory": 0.0} | asks.get(who, {})
+        mine["bound"] = m.get("created_by_kind") in ("DaemonSet", "Node")
         own.setdefault(label(m, "node"), []).append({"namespace": who[0], "pod": who[1], **mine})
     taints: dict[str, list[str]] = {}
     for s in prom.instant(of("kube_node_spec_taint"), at):
@@ -625,6 +636,7 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
                 "requests": {"cpu": 0.0, "memory": 0.0} | requests.get(name, {}),
                 "daemonsets": {"cpu": 0.0, "memory": 0.0} | daemonsets.get(name, {}),
                 "pods": pods.get(name, 0),
+                "bound": bound.get(name, 0),
                 "own": sorted(own.get(name, []), key=lambda p: (p["namespace"], p["pod"])),
             }
         )

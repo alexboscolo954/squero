@@ -94,6 +94,8 @@ src/squero/
   listprices.py    Cloud list prices (AWS, Azure, GCP), per currency.
   actuator.py      The Actuator (Phase 12): in a client's cluster, pulls Approved Sizings
                    from the Hub and resizes pods in place.
+  blockers.py      Blockers (15.1b): the Actuator's report of the pods that may keep a node
+                   from being removed, each autoscaler's rules, a node's verdict.
   billing.py       Cloud bills (AWS Cost Explorer, Azure Cost Management, GCP's BigQuery
                    billing export) vs the estimate.
   evals.py         Scenario replay and scoring.
@@ -148,7 +150,7 @@ examples/          Example inputs.
 Use the terms in `CONTEXT.md` exactly and do not invent synonyms: Contract, Operator,
 Integration, Hub, Alert, Alert group, Investigation, Triage, Question, Check, Report,
 Evidence, Runbook, Category, Recommendation, Proposed action, Approval decision, Executed
-action, Teaching, Workload, Sizing, Sizing policy, Waste, Automation, Actuator, Actuation, Revert, Reflex, Step-up, Startup boost, Burst, OOM kill, Need, Floor, Weekly profile, Backtest, Room,
+action, Teaching, Workload, Sizing, Sizing policy, Waste, Automation, Actuator, Actuation, Revert, Reflex, Step-up, Startup boost, Burst, OOM kill, Need, Floor, Weekly profile, Backtest, Room, Blocker,
 List price, Bill, Savings, Scenario, Expectation. A *Sizing* is machine output for a
 Workload; a *Recommendation* is human advice in a Report, so do not mix them.
 

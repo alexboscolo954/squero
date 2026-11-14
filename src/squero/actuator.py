@@ -96,6 +96,8 @@ from kubernetes.utils.quantity import parse_quantity
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from squero import blockers
+
 log = logging.getLogger("squero.actuator")
 
 CONFIGMAP = "squero-actuator"  # in its own namespace: what it applied, by container
@@ -105,6 +107,10 @@ KEPT_REPORTS = 200  # of its unsent reports, the newest kept across a restart: t
 STATE = "state.json"  # beside it: the Kill switch as last heard, reports not yet taken
 RUN_AGE = 30 * 1440  # minutes: how old a CronJob run's scheduled time may be (slice 12.9b)
 MAX_REPORTS = 1000  # per POST, and kept unsent while the Hub is unreachable
+BLOCKERS_EVERY = 3600  # seconds between its reports of Blockers' facts (slice 15.1b)
+BLOCKERS_RETRY = 300  # after one that didn't reach the Hub: its reports go stale at two hours
+PAGE = 200  # pods a list call when it reads whole namespaces: its memory limit is 256Mi
+MIRROR = "kubernetes.io/config.mirror"  # on a node's own static pods
 MIN_MINOR = 33  # Kubernetes 1.33: in-place pod resize on by default
 MI = 2**20
 WEBHOOK = "squero-actuator"  # its MutatingWebhookConfiguration and its Service, by name
@@ -310,6 +316,10 @@ class Desired(BaseModel):
     # from a Hub of 13.3a: no Burst is made), and its term in seconds
     burst_max: float | None = None
     burst_expires: float | None = None
+    # slice 15.1b: the namespaces whose pods' Blocker facts to report, the cluster's own;
+    # sent under the Kill switch too (a read is no change). None, as from an older Hub:
+    # nothing is reported
+    blockers: list[str] | None = None
 
 
 class Actuation(BaseModel):
@@ -1071,6 +1081,84 @@ def selects(s: Any, labels: dict[str, str]) -> bool:
         }.get(e.operator, False):
             return False
     return all(labels.get(k) == v for k, v in (s.match_labels or {}).items())
+
+
+def pod_facts(p: Any, budgets: list[Any]) -> blockers.PodFacts | None:
+    """A pod's facts for the Hub's Blocker rules (slice 15.1b), or None for one that
+    blocks no one's removal of its node: not on a node yet, finished or on its way out,
+    a DaemonSet's or the node's own static pod (they stay with it), or with no fact at
+    all. `budgets`: its namespace's PodDisruptionBudgets; the one covering it that
+    allows the fewest disruptions is named, one whose status isn't written yet as
+    allowing none. Facts only: which of them block is the Hub's to say."""
+    meta, spec = p.metadata, p.spec
+    noted = meta.annotations or {}
+    if not spec.node_name or p.status.phase in ("Succeeded", "Failed"):
+        return None
+    if meta.deletion_timestamp is not None or MIRROR in noted:
+        return None
+    by = next((o for o in meta.owner_references or [] if o.controller), None)
+    if by is not None and by.kind == "DaemonSet":
+        return None
+    volumes = spec.volumes or []
+    covering = [
+        (b.status.disruptions_allowed or 0 if b.status else 0, b.metadata.name)
+        for b in budgets
+        if selects(b.spec.selector, meta.labels or {})
+    ]
+    allowed, budget = min(covering) if covering else (None, None)
+    f = blockers.PodFacts(
+        namespace=meta.namespace,
+        pod=meta.name,
+        node=spec.node_name,
+        kind=by.kind if by else "",
+        name=by.name if by else "",
+        empty_dir=sorted(v.name for v in volumes if v.empty_dir is not None)[:50],
+        in_memory=sorted(
+            v.name for v in volumes if v.empty_dir is not None and v.empty_dir.medium == "Memory"
+        )[:50],
+        host_path=sorted(v.name for v in volumes if v.host_path is not None)[:50],
+        annotations={a: noted[a][:253] for a in blockers.ANNOTATIONS if a in noted},
+        budget=budget,
+        allowed=allowed,
+        started=p.status.start_time.timestamp() if p.status.start_time else None,
+    )
+    told = bool(f.empty_dir or f.host_path or f.annotations) or allowed == 0
+    told = told or f.kind not in blockers.BUILT_IN
+    return f if told or (f.namespace == "kube-system" and budget is None) else None
+
+
+def blocking(core: Any, policy: Any, namespaces: list[str], now: float) -> blockers.Report:
+    """The Blocker facts of `namespaces`' pods (slice 15.1b), read a page at a time. A
+    namespace it may not read, or whose read fails, is left out of `namespaces`: the Hub
+    then knows what it wasn't told. Over `MAX_PODS`, or over the size the Hub's proxy
+    lets through: cut there, and said."""
+    read, found = [], []
+    for ns in sorted(set(namespaces)):
+        try:
+            budgets = policy.list_namespaced_pod_disruption_budget(ns).items
+            here, token = [], None
+            while True:
+                page = core.list_namespaced_pod(ns, limit=PAGE, _continue=token)
+                here += [f for p in page.items if (f := pod_facts(p, budgets))]
+                token = page.metadata._continue if page.metadata else None
+                if not token:
+                    break
+        except ApiException as e:
+            log.warning("the Blockers of %s not read: %s", ns, why(e))
+            continue
+        read.append(ns)
+        found += here
+    found.sort(key=lambda f: (f.namespace, f.pod))
+    report = blockers.Report(
+        at=now,
+        namespaces=read,
+        truncated=len(found) > blockers.MAX_PODS,
+        pods=found[: blockers.MAX_PODS],
+    )
+    while report.pods and len(report.model_dump_json()) > blockers.MAX_BYTES:
+        fewer = report.pods[: len(report.pods) * 3 // 4]  # long names: cut by size too
+        report = report.model_copy(update={"pods": fewer, "truncated": True})
+    return report
 
 
 def unevictable(apps: Any, policy: Any, ns: str, kind: str, name: str, p: Any) -> str | None:
@@ -1952,6 +2040,7 @@ class Actuator:
     burst_expires: float | None = None
     burst_peaks: dict[str, float | None] = field(default_factory=dict)
     burst_said: dict[str, tuple[str, float]] = field(default_factory=dict)
+    blockers_due: float = 0.0  # when its next report of Blockers' facts goes (slice 15.1b)
 
     def load(self) -> None:
         try:
@@ -2110,6 +2199,30 @@ class Actuator:
         if done or rolling or undoing:
             self.save()  # before reporting: a restart sends again what the Hub didn't take
         self.send()
+        if desired is not None and desired.blockers is not None:
+            try:  # last and on its own: a read for a report never costs a Rollback
+                self.blocked(desired.blockers, time.time())
+            except Exception:
+                log.exception("reporting its Blockers failed")
+
+    def blocked(self, namespaces: list[str], now: float) -> None:
+        """Report the Blocker facts of `namespaces` to the Hub once an hour (slice 15.1b).
+        One that didn't reach it goes again in five minutes; one it refused (an older
+        Hub has no such route) waits the hour: sending it again changes nothing."""
+        if now < self.blockers_due:
+            return
+        self.blockers_due = now + BLOCKERS_EVERY
+        report = blocking(self.core, self.policy, namespaces, now)
+        try:
+            r = self.http.post("/actuator/blockers", json=report.model_dump())
+            r.raise_for_status()
+        except httpx.HTTPError as e:
+            code = e.response.status_code if isinstance(e, httpx.HTTPStatusError) else None
+            if code and 400 <= code < 500 and code not in (401, 403, 429):
+                log.error("the Hub refused its Blockers (%d)", code)
+                return
+            log.warning("reporting its Blockers to the Hub: %s", code or type(e).__name__)
+            self.blockers_due = now + BLOCKERS_RETRY
 
     def send(self) -> None:
         self.report()

@@ -13,7 +13,7 @@ Two optional parts run inside a client's cluster, from the Hub's own image. Each
 | Reads | read-only ServiceAccount, bound per namespace, like the Hub's own | pods, Deployments, ReplicaSets, StatefulSets, DaemonSets, Argo Rollouts, CronJobs, Jobs, HPAs, VPAs, PodDisruptionBudgets, LimitRanges and ResourceQuotas in the Contract's namespaces; Events in `default`, where a Node's are (for `reflexes.oom`; its own Role, which a client may remove) |
 | Writes | none, unless the client also applies `deploy/relay-actions`: evict pods and scale deployments only | resize pods (`pods/resize`, a RoleBinding per namespace), evict pods (`pods/eviction`, only with the Contract's eviction on), create Events, read and replace its own ConfigMap, patch its own webhook's `caBundle` |
 | Token | `relay_token_secret` | `actuator_token_secret`, never a Relay's |
-| Talks to | `wss://<the Hub's domain>/relay` | `GET /actuator/desired`, `POST /actuator/reports` |
+| Talks to | `wss://<the Hub's domain>/relay` | `GET /actuator/desired`, `POST /actuator/reports`, `POST /actuator/blockers` |
 
 Neither can change an image or a command. The full table is in [safety.md](safety.md).
 
@@ -237,6 +237,15 @@ Three Rollbacks of one Workload in 7 days end its Automation: the Hub lists none
 ## Revert
 
 The Operator's Revert, from the console's Automation page or `revert_sizing` on the Hub MCP server ([Reverting a Sizing](running-the-hub.md#reverting-a-sizing)), reaches the Actuator in `/actuator/desired`'s `reverts` until it reports it done. It puts every pod with the requests it holds for that container back to the template's, in place and at once (a request the template doesn't set stays), as a rollback does but with no backoff, drops its Step-up and its Burst, and holds that container no more: its webhook leaves new pods alone and nothing catches up. A `SizingReverted` Event and a `reverted` Actuation say what went back to what; with nothing held, the Actuation says so. A paused Deployment's Revert waits for the pause to lift. An approval applied before stays reverted; a later approval applies, and resumes Automation of that container.
+
+## Blockers: what the Actuator reports
+
+Once an hour the Actuator also tells the Hub which pods in the Contract's namespaces may keep a node from being removed (slice 15.1b; the Hub names the namespaces in `/actuator/desired`, under the Kill switch too, since a read changes nothing). It needs no new permission: it lists pods and PodDisruptionBudgets, as it already may, a page of 200 pods at a time.
+
+- **What it sends** (`POST /actuator/blockers`, with its own token): per pod its namespace, name and node, its controller's kind and name, the names of its emptyDir volumes (and which are in memory) and hostPath volumes, the annotations `cluster-autoscaler.kubernetes.io/safe-to-evict`, `.../safe-to-evict-local-volumes` and `karpenter.sh/do-not-disrupt` as they are, the PodDisruptionBudget covering it that allows the fewest disruptions (one whose status isn't written yet counts as allowing none), and when the pod started. Facts only: [the Hub applies the rules](optimizer.md#blockers-could-a-node-be-removed). No other annotation, no label, no environment and no volume contents leave the cluster.
+- **Which pods.** Only those with such a fact: no controller or a custom one, a local volume, one of the annotations, a covering budget at 0, or a kube-system pod no budget covers. Never a DaemonSet's pod, a node's static pod, one not yet on a node, one finished or on its way out.
+- **What it could not read** it says: a namespace it is not bound in, or whose read failed, is left out of the namespaces it lists, and the Hub then gives that namespace's nodes no verdict. Over 1000 pods, or over the megabyte the Hub's proxy lets through, the report is cut there and says so.
+- **When.** Hourly, after everything else in its minute and on its own: a failure there costs no resize and no Rollback. A report that didn't reach the Hub goes again in five minutes; one the Hub refused (an older Hub has no such route) waits the hour. The Hub stores a cluster's latest only, dated by its own clock, and refuses a report that names a namespace outside the cluster's.
 
 ## Stopping it: pause, Hub down
 

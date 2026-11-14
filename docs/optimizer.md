@@ -226,13 +226,31 @@ Each hourly run also reads the cluster's nodes from kube-state-metrics and store
 - **A shared Prometheus.** Node series carry no namespace. Where another Contract reads the same Prometheus and the cluster has no `prometheus_labels`, nothing of this is read (the same guard as for list prices) and the page says why. Give the cluster's series a label (like `cluster: <name>`) and name it in `prometheus_labels` to lift it.
 - **The cap on Sizings.** No Sizing asks more than the largest Room after DaemonSets in its cluster: per resource, the most any node has once its DaemonSets' pods are in, among the nodes not cordoned. A Sizing that needs more is capped there and carries the risk `needs_larger_node`. The cap never lowers a request: a container already asking more than that (its node cordoned, or missing from the read) keeps what it has. A DaemonSet's own Sizing is not capped, since that Room already leaves its requests out. When a pod's containers together ask more than that Room, each carries the risk and none is cut. A cluster whose nodes were not read, or only in part (a node without its allocatable), has no cap.
 - **Tainted nodes count** toward the largest Room: the Hub can't see a Workload's tolerations, and a cap that is too generous changes nothing, where one too strict would shrink a correct Sizing. CPU and memory may come from different nodes, for the same reason.
-- **The autoscaler** is named per cluster in the Contract, never guessed; this slice only shows it. Its rules for what blocks a node's removal come with the next slices.
+- **The autoscaler** is named per cluster in the Contract, never guessed. It decides whose rules a node's Blockers go by.
 
   ```yaml
   clusters:
     - name: prod
       autoscaler: karpenter   # or cluster-autoscaler; left out: none
   ```
+
+### Blockers: could a node be removed
+
+A **Blocker** is a pod that keeps its node from being removed. The Nodes page gives each node a verdict: **blocked** (with the pods and why), **clear** ("yes: nothing on it blocks") or **unknown** (with why). It is read-only: the Hub evicts nothing for it, and it does not yet say whether a node's pods would fit elsewhere (that comes with the nodes that could go).
+
+- **Where the facts come from.** A cluster's [Actuator](client-cluster.md#blockers-what-the-actuator-reports) reports hourly the facts of the pods in the Contract's namespaces that may block: its controller, its emptyDir and hostPath volumes by name, three annotations as they are, and the PodDisruptionBudget covering it that allows the fewest disruptions. It sends facts and no conclusion; the Hub applies the rules, so they can change without redeploying an Actuator.
+- **Whose rules.** Those of the autoscaler the Contract names for the cluster, from each one's own documentation:
+
+  | Removes nodes | A pod blocks when |
+  |---|---|
+  | all three | a PodDisruptionBudget covering it allows no disruption |
+  | `cluster-autoscaler` | it is annotated `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`; or, unless annotated `"true"`: it has no controller or a custom one, it has local storage (a hostPath, or an emptyDir not in memory) not all named in `safe-to-evict-local-volumes`, or it is a kube-system pod with no PodDisruptionBudget |
+  | `karpenter` | it is annotated `karpenter.sh/do-not-disrupt: "true"`, or with a duration (`"30m"`) and started less than that long ago; any other value is ignored, as Karpenter ignores it |
+  | none named | what stops `kubectl drain` without force flags: a pod not managed by a ReplicationController, ReplicaSet, Job or StatefulSet, or a pod using emptyDir |
+
+  A DaemonSet's pods and a node's own static pods stay with their node and block no one.
+- **Clear needs evidence.** A node is clear only when every pod on it is known and none blocks. It is unknown when the cluster runs no Actuator, when its last report reached the Hub more than two hours ago (by the Hub's clock), when the report was cut at 1000 pods and names no Blocker there, when the Actuator could not read a namespace that has pods on the node, or when the node holds pods the Hub can't see: pods outside the Contract's namespaces that are not a DaemonSet's or static (CoreDNS in kube-system, say), counted from Prometheus and never named.
+- **Limits.** Karpenter's `do-not-disrupt` on a Node is not read (the Actuator reads no nodes). Cluster Autoscaler's flags are taken at their defaults (`skip-nodes-with-system-pods`, `-local-storage`, `-custom-controller-pods`: all true); a cluster that changed them is judged more strictly than it behaves. A pod that fits nowhere else is not a Blocker here. A cluster without an Actuator gets no verdict yet.
 
 ## The optimizer lab
 

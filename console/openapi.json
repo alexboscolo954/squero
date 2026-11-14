@@ -440,6 +440,32 @@
         "title": "Block",
         "type": "object"
       },
+      "BlockingPod": {
+        "properties": {
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "pod": {
+            "title": "Pod",
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          }
+        },
+        "required": [
+          "namespace",
+          "pod",
+          "reasons"
+        ],
+        "title": "BlockingPod",
+        "type": "object"
+      },
       "Brief": {
         "description": "An Investigation in a list (slice 11.5a).",
         "properties": {
@@ -735,11 +761,27 @@
               }
             ],
             "title": "Problem"
+          },
+          "reported": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported"
+          },
+          "rules": {
+            "title": "Rules",
+            "type": "string"
           }
         },
         "required": [
           "cluster",
           "at",
+          "rules",
           "nodes"
         ],
         "title": "ClusterNodes",
@@ -2332,6 +2374,17 @@
             "title": "Allocatable",
             "type": "object"
           },
+          "bound": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bound"
+          },
           "cordoned": {
             "title": "Cordoned",
             "type": "boolean"
@@ -2388,6 +2441,9 @@
           "type": {
             "title": "Type",
             "type": "string"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/Removal"
           }
         },
         "required": [
@@ -2399,6 +2455,7 @@
           "requests",
           "daemonsets",
           "pods",
+          "verdict",
           "room",
           "mine",
           "others",
@@ -2409,6 +2466,11 @@
       },
       "NodePod": {
         "properties": {
+          "bound": {
+            "default": false,
+            "title": "Bound",
+            "type": "boolean"
+          },
           "cpu": {
             "title": "Cpu",
             "type": "number"
@@ -2737,6 +2799,44 @@
           "separate_id"
         ],
         "title": "Related",
+        "type": "object"
+      },
+      "Removal": {
+        "description": "Whether a node could be removed (slice 15.1b), by its cluster's `rules`.",
+        "properties": {
+          "blockers": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/BlockingPod"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "blocked",
+              "clear",
+              "unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "Removal",
         "type": "object"
       },
       "Resource": {

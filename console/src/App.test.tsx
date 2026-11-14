@@ -831,7 +831,8 @@ test("Checks show each one's last Run and Open failure, and Deploy verifications
 
 test("Nodes shows each node's Room, the Contract's pods by name and the rest as a sum", async () => {
   history.replaceState(null, "", "/app/?view=nodes");
-  const node = { type: "", taints: [], cordoned: false, daemonsets: { cpu: 0.1, memory: GI / 4 }, pods: 4 };
+  const node = { type: "", taints: [], cordoned: false, daemonsets: { cpu: 0.1, memory: GI / 4 }, pods: 4, bound: 1 };
+  const blocked = { state: "blocked", why: null, blockers: [{ namespace: "shop", pod: "db-0", reasons: ["PodDisruptionBudget <i>db</i> allows no disruption", "local storage (data)"] }] };
   answer({
     "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]],
     "/api/v1/contracts/demo-shop/nodes": [
@@ -839,13 +840,18 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
       {
         clusters: [
           { cluster: "kind", at: 1_700_000_000, autoscaler: "karpenter", problem: null, largest: { cpu: 7.5, memory: 30 * GI },
+            rules: "Karpenter's rules", reported: 1_700_000_600,
             nodes: [
-              { ...node, node: "n1", type: "m5.xlarge", taints: ["gpu=<b>true</b>:NoSchedule"], cordoned: true,
+              { ...node, node: "n2", verdict: { state: "clear", why: null, blockers: [] }, allocatable: { cpu: 4, memory: 16 * GI }, requests: { cpu: 0, memory: 0 },
+                room: { cpu: 4, memory: 16 * GI }, mine: { pods: 0, cpu: 0, memory: 0 }, others: { pods: 0, cpu: 0, memory: 0 }, own: [] },
+              { ...node, node: "n3", verdict: { state: "unknown", why: "2 pods not visible", blockers: [] }, allocatable: { cpu: 4, memory: 16 * GI }, requests: { cpu: 0, memory: 0 },
+                room: { cpu: 4, memory: 16 * GI }, mine: { pods: 0, cpu: 0, memory: 0 }, others: { pods: 2, cpu: 0, memory: 0 }, own: [] },
+              { ...node, node: "n1", type: "m5.xlarge", verdict: blocked, taints: ["gpu=<b>true</b>:NoSchedule"], cordoned: true,
                 allocatable: { cpu: 4, memory: 16 * GI }, requests: { cpu: 1.85, memory: 6 * GI }, room: { cpu: 2.15, memory: 10 * GI },
                 mine: { pods: 2, cpu: 1.5, memory: 5 * GI }, others: { pods: 2, cpu: 0.35, memory: GI },
                 own: [{ namespace: "shop", pod: "api-1", cpu: 0.5, memory: GI }, { namespace: "shop", pod: "db-0", cpu: 1, memory: 4 * GI }] },
             ] },
-          { cluster: "edge", at: 1_700_000_000, autoscaler: null, largest: null, nodes: [],
+          { cluster: "edge", at: 1_700_000_000, autoscaler: null, largest: null, nodes: [], rules: "kubectl drain's rules (the Contract names no autoscaler)", reported: null,
             problem: "the store is shared with another Contract and has no cluster labels: node series would cross Contracts" },
         ],
       },
@@ -856,7 +862,15 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
   const [kind, edge] = [...page.querySelectorAll("section.nodes")];
   expect(kind?.textContent).toContain("Read 2023-11-14 22:13 UTC. Autoscaler: karpenter.");
   expect(kind?.textContent).toContain("No Sizing asks more than 7.50 cores, 30.00 GiB: the largest Room after DaemonSets.");
-  const cells = [...(kind?.querySelectorAll("tbody td") ?? [])].map((td) => td.textContent);
+  // slice 15.1b: each node's verdict, by its cluster's rules
+  expect(kind?.textContent).toContain("goes by Karpenter's rules; its Actuator's last report of Blockers: 2023-11-14 22:23 UTC.");
+  const verdicts = [...(kind?.querySelectorAll("tbody tr") ?? [])].map((tr) => tr.lastElementChild?.textContent);
+  expect(verdicts[0]).toBe("yes: nothing on it blocks");
+  expect(verdicts[1]).toBe("unknown: 2 pods not visible");
+  expect(verdicts[2]).toBe("blockedshop/db-0: PodDisruptionBudget <i>db</i> allows no disruption; local storage (data)");
+  expect(page.querySelector("section.nodes i")).toBeNull();
+  expect(edge?.textContent).toContain("its Actuator's last report of Blockers: never.");
+  const cells = [...(kind?.querySelectorAll("tbody tr:last-child td") ?? [])].map((td) => td.textContent);
   expect(cells[0]).toContain("n1 m5.xlarge cordoned gpu=<b>true</b>:NoSchedule");
   expect(page.querySelector("section.nodes b")).toBeNull();
   expect(cells[1]).toBe("4.00 cores, 16.00 GiB");

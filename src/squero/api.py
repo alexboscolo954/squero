@@ -44,6 +44,7 @@ from squero import (
     actuator,
     agent,
     billing,
+    blockers,
     checks,
     console,
     contracts,
@@ -1860,8 +1861,8 @@ def create_app(
         Deployment's, so it gets Deployments' only."""
         cid, cluster = actuator_of(creds)
         known = set(kinds.split(",")) & set(actuator.KINDS)
-        if await store().kill_switch(cid) is not None:
-            return actuator.Desired(kill_switch=True, sizings=[])
+        if await store().kill_switch(cid) is not None:  # a read is no change: slice 15.1b
+            return actuator.Desired(kill_switch=True, sizings=[], blockers=cluster.namespaces)
         reverted = await store().reverted(cid, cluster.name)  # an approval before it is undone
         approved = [
             actuator.Wanted.model_validate(a)
@@ -1880,6 +1881,7 @@ def create_app(
         age = None if read.get("at") is None else time.time() - read["at"]
         return actuator.Desired(
             kill_switch=False,
+            blockers=cluster.namespaces,  # slice 15.1b: where to report Blockers' facts of
             eviction=by_id[cid].actuator.evicting(datetime.now(UTC)),
             sizings=approved,
             automated=[
@@ -1931,6 +1933,35 @@ def create_app(
                 for r in await store().pending_reverts(cid, cluster.name)
                 if r["namespace"] in cluster.namespaces and r["kind"] in known
             ],
+        )
+
+    @app.post("/actuator/blockers", status_code=204)
+    async def actuator_blockers(
+        report: blockers.Report,
+        creds: HTTPAuthorizationCredentials = Depends(bearer),  # noqa: B008
+    ) -> None:
+        """An Actuator's hourly facts of the pods that may block a node's removal (slice
+        15.1b), stored as its Contract's cluster's latest, by its token only. Refused
+        whole: more pods than it may send, a namespace outside the cluster's, a value
+        no Actuator sends. Dated by the Hub's clock."""
+        cid, cluster = actuator_of(creds)
+        if len(report.pods) > blockers.MAX_PODS:
+            raise HTTPException(413, f"at most {blockers.MAX_PODS} pods in a report")
+        named = {p.namespace for p in report.pods} | set(report.namespaces)
+        outside = sorted(named - set(cluster.namespaces))
+        if outside:
+            raise HTTPException(422, f"namespaces not in cluster {cluster.name!r}: {outside}")
+        unreal = blockers.unreal(report)
+        if unreal:
+            raise HTTPException(422, f"not what an Actuator sends: {unreal}")
+        await store().save_blockers(cid, cluster.name, time.time(), report.model_dump())
+        log.info(
+            "blockers %s/%s: %d pods in %d namespaces%s",
+            cid,
+            cluster.name,
+            len(report.pods),
+            len(report.namespaces),
+            ", cut short" if report.truncated else "",
         )
 
     @app.post("/actuator/reports", status_code=204)

@@ -634,6 +634,30 @@ class Store:
         )
         return {r["cluster"]: {"at": r["at"], **r["rooms"]} for r in rows}
 
+    async def save_blockers(
+        self, contract_id: str, cluster: str, received: float, report: dict[str, Any]
+    ) -> None:
+        """A cluster's Actuator's report of its Blockers' facts (slice 15.1b), replacing
+        the last; `received`: the Hub's clock."""
+        await self._exec(
+            "insert into cluster_blockers (contract_id, cluster, received, report) "
+            "values (%s, %s, %s, %s) on conflict (contract_id, cluster) do update set "
+            "received = excluded.received, report = excluded.report",
+            (contract_id, cluster, received, Jsonb(report)),
+        )
+
+    async def latest_blockers(
+        self, contract_id: str, clusters: set[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Each of the Contract's `clusters` (its clusters now) with its Actuator's latest
+        report: `received`, and the report's own fields."""
+        rows = await self._all(
+            "select cluster, received, report from cluster_blockers "
+            "where contract_id = %s and cluster = any(%s)",
+            (contract_id, sorted(clusters)),
+        )
+        return {r["cluster"]: {**r["report"], "received": r["received"]} for r in rows}
+
     async def latest_nodes(self, contract_id: str) -> dict[str, dict[str, Any]]:
         """Each cluster's latest node facts: `at`, `nodes`, `problem`."""
         rows = await self._all(

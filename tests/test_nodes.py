@@ -102,9 +102,10 @@ def test_each_node_is_read_with_what_its_room_is_made_of() -> None:
         "requests": {"cpu": 1.85, "memory": 5.5 * GI + 64 * MI},  # every pod on it
         "daemonsets": {"cpu": 0.1, "memory": 64.0 * MI},
         "pods": 4,
+        "bound": 1,  # slice 15.1b: kube-system's DaemonSet pod stays with the node
         "own": [
-            {"namespace": "shop", "pod": "api-1", "cpu": 0.5, "memory": 1.0 * GI},
-            {"namespace": "shop", "pod": "db-0", "cpu": 1.0, "memory": 4.0 * GI},
+            {"namespace": "shop", "pod": "api-1", "cpu": 0.5, "memory": 1.0 * GI, "bound": False},
+            {"namespace": "shop", "pod": "db-0", "cpu": 1.0, "memory": 4.0 * GI, "bound": False},
         ],
     }
     assert (n2["node"], n2["type"], n2["pods"]) == ("n2", "", 1)
@@ -151,13 +152,31 @@ def test_only_running_and_pending_pods_hold_requests() -> None:
     assert n1["daemonsets"] == {"cpu": 0.0, "memory": 0.0}
 
 
+def test_the_pods_that_stay_with_a_node_are_counted_whoever_they_belong_to() -> None:
+    """Slice 15.1b: a DaemonSet's pods and the node's own static pods, over all
+    namespaces as one count; each of the Contract's says whether it is one."""
+    fake = FakePrometheus()
+    node(fake, "n1")
+    pod(fake, "api-1")
+    pod(fake, "agent-x", by="DaemonSet")
+    pod(fake, "proxy-x", ns="kube-system", by="DaemonSet")
+    pod(fake, "etcd-n1", ns="kube-system", by="Node")
+    pod(fake, "dns-1", ns="kube-system")
+    pod(fake, "old-x", ns="kube-system", by="DaemonSet", phase="Succeeded")
+    (n1,) = read(fake)["nodes"]
+    assert (n1["pods"], n1["bound"]) == (5, 3)
+    assert [(p["pod"], p["bound"]) for p in n1["own"]] == [("agent-x", True), ("api-1", False)]
+    assert "etcd" not in str(n1) and "dns-1" not in str(n1)
+
+
 def test_a_pod_asking_nothing_is_still_the_contracts_own_and_one_on_no_node_is_nowhere() -> None:
     fake = FakePrometheus()
     node(fake, "n1")
     pod(fake, "bare-1", cores=None, memory=None)
     pod(fake, "waiting-1", on="", phase="Pending")  # not scheduled yet
     (n1,) = read(fake)["nodes"]
-    assert n1["own"] == [{"namespace": "shop", "pod": "bare-1", "cpu": 0.0, "memory": 0.0}]
+    bare = {"namespace": "shop", "pod": "bare-1", "cpu": 0.0, "memory": 0.0, "bound": False}
+    assert n1["own"] == [bare]
     assert (n1["pods"], n1["requests"]) == (1, {"cpu": 0.0, "memory": 0.0})
 
 
@@ -572,5 +591,6 @@ def test_the_nodes_route_gives_the_contracts_own_clusters(
         "pod": "api-1",
         "cpu": 0.5,
         "memory": 1.0 * GI,
+        "bound": False,
     }
     assert shown["nodes"][0]["others"]["pods"] == 2 and "theirs" not in json.dumps(body)

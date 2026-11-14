@@ -278,3 +278,33 @@ async def test_record_eval_fixtures(live: contracts.Contract) -> None:
     Path(out).mkdir(parents=True, exist_ok=True)
     data = json.dumps(rec, indent=2, default=str)
     (Path(out) / "recording.json").write_text(data)
+
+
+async def test_the_actuator_reads_blocker_facts_a_page_at_a_time_through_the_real_client(
+    live: contracts.Contract, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slice 15.1b on a real cluster: `limit` and `_continue` through the client the
+    Actuator runs with. Every pod its own page gives what one page of them all does."""
+    from kubernetes import client
+
+    from squero import actuator, blockers
+
+    api = kubernetes.api_client(live.clusters[0], live)
+    core, policy = actuator.Calm(client.CoreV1Api(api)), actuator.Calm(client.PolicyV1Api(api))
+    spaces = ["demo", "orders"]
+    there = {p.metadata.name for ns in spaces for p in core.list_namespaced_pod(ns).items}
+    assert len(there) > 2
+
+    def every(p: Any, budgets: list[Any]) -> blockers.PodFacts:  # each pod, fact or not
+        return blockers.PodFacts(
+            namespace=p.metadata.namespace, pod=p.metadata.name, node=p.spec.node_name or ""
+        )
+
+    real = actuator.blocking(core, policy, spaces, 1.0)
+    assert real.namespaces == spaces and blockers.unreal(real) is None
+    monkeypatch.setattr(actuator, "pod_facts", every)
+    monkeypatch.setattr(actuator, "PAGE", 1)
+    paged = {p.pod for p in actuator.blocking(core, policy, spaces, 1.0).pods}
+    monkeypatch.setattr(actuator, "PAGE", 200)
+    whole = {p.pod for p in actuator.blocking(core, policy, spaces, 1.0).pods}
+    assert paged == whole and len(whole & there) > 2

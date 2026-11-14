@@ -619,6 +619,15 @@ export interface components {
             /** Until */
             until: string;
         };
+        /** BlockingPod */
+        BlockingPod: {
+            /** Namespace */
+            namespace: string;
+            /** Pod */
+            pod: string;
+            /** Reasons */
+            reasons: string[];
+        };
         /**
          * Brief
          * @description An Investigation in a list (slice 11.5a).
@@ -715,6 +724,10 @@ export interface components {
             nodes: components["schemas"]["Node"][];
             /** Problem */
             problem?: string | null;
+            /** Reported */
+            reported?: number | null;
+            /** Rules */
+            rules: string;
         };
         /** ClusterStatus */
         ClusterStatus: {
@@ -1219,6 +1232,8 @@ export interface components {
             allocatable: {
                 [key: string]: number;
             };
+            /** Bound */
+            bound?: number | null;
             /** Cordoned */
             cordoned: boolean;
             /** Daemonsets */
@@ -1245,9 +1260,15 @@ export interface components {
             taints: string[];
             /** Type */
             type: string;
+            verdict: components["schemas"]["Removal"];
         };
         /** NodePod */
         NodePod: {
+            /**
+             * Bound
+             * @default false
+             */
+            bound: boolean;
             /** Cpu */
             cpu: number;
             /** Memory */
@@ -1355,6 +1376,24 @@ export interface components {
             separate_id: string | null;
             /** Title */
             title: string;
+        };
+        /**
+         * Removal
+         * @description Whether a node could be removed (slice 15.1b), by its cluster's `rules`.
+         */
+        Removal: {
+            /**
+             * Blockers
+             * @default []
+             */
+            blockers: components["schemas"]["BlockingPod"][];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "blocked" | "clear" | "unknown";
+            /** Why */
+            why?: string | null;
         };
         /** Resource */
         Resource: {
