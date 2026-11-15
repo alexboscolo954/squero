@@ -393,6 +393,29 @@ def _short_of(row: dict[str, Any], policy: Policy) -> dict[str, str] | None:
     return {"kind": "type_needs_more_cpu", "text": text}
 
 
+def by_type(row: dict[str, Any]) -> dict[str, dict[str, float | None]]:
+    """A DaemonSet's Sizings per instance type as its Actuator applies them (slice 15.3b):
+    each ready type's requests where it changes them, None where it keeps one. Empty:
+    one Sizing for every pod."""
+    if row.get("kind") != "DaemonSet":
+        return {}
+    return {
+        g["type"]: {
+            res: g[res]["target"] if g.get(res) and g[res]["action"] != "keep" else None
+            for res in ("cpu", "memory")
+        }
+        for g in row.get("groups") or []
+        if g["state"] == "ready"
+    }
+
+
+def changes(cpu: float | None, memory: float | None, types: dict[str, Any]) -> bool:
+    """Whether a Sizing asks anything of its pods: some instance type's does, where it
+    has types; else its one set does."""
+    sets = list(types.values()) or [{"cpu": cpu, "memory": memory}]
+    return any(v is not None for q in sets for v in q.values())
+
+
 def group_lines(row: dict[str, Any]) -> list[str]:
     """A row's groups as indented lines under it, for `sizing show` and the Hub MCP."""
     lines = []

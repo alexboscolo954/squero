@@ -123,6 +123,7 @@ def test_an_actuator_gets_only_its_own_clusters_current_approved_deployments(
         none = c.get("/actuator/desired")
     wanted = {"run_id": 1, "namespace": "shop", "kind": "Deployment", "container": "app"}
     wanted["again"] = False  # none approved after a Revert (slice 12.9b)
+    wanted["types"] = {}  # none sized per instance type (slice 15.3b)
     assert mine.json() == {
         "kill_switch": False,
         "sizings": [
@@ -153,6 +154,7 @@ def test_an_actuator_gets_only_its_own_clusters_current_approved_deployments(
         "burst_max": None,
         "burst_expires": None,
         "blockers": ["shop"],  # slice 15.1b: under the Kill switch too
+        "node_types": None,  # slice 15.3b: no Sizing here has types
     }
     assert old.json()["sizings"] == [{**wanted, "name": "api", "cpu": 0.115, "memory": None}]
     known = ("Deployment", "StatefulSet", "DaemonSet")  # what 0.44.0 names
@@ -187,6 +189,7 @@ def test_the_kill_switch_and_a_later_run_leave_nothing_to_apply(
         "burst_max": None,
         "burst_expires": None,
         "blockers": ["shop"],  # slice 15.1b: under the Kill switch too
+        "node_types": None,  # slice 15.3b: no Sizing here has types
     }
     assert superseded == {
         "kill_switch": False,
@@ -203,6 +206,7 @@ def test_the_kill_switch_and_a_later_run_leave_nothing_to_apply(
         "burst_max": None,
         "burst_expires": None,
         "blockers": ["shop"],  # slice 15.1b: under the Kill switch too
+        "node_types": None,  # slice 15.3b: no Sizing here has types
     }
 
 
@@ -1495,6 +1499,7 @@ def test_an_actuator_gets_the_newest_sizings_of_what_its_contract_automates(
         killed = c.get("/actuator/desired", headers=as_actuator(A_TOKEN)).json()
     one = {"run_id": 2, "namespace": "shop", "kind": "Deployment", "container": "app"}
     one["again"] = False
+    one["types"] = {}
     assert [w["name"] for w in mine["sizings"]] == ["approved"]
     assert mine["automated"] == [
         {**one, "name": n, "cpu": 0.115, "memory": None} for n in ("api", "elsewhere", "twice")
@@ -1520,6 +1525,7 @@ def test_an_actuator_gets_the_newest_sizings_of_what_its_contract_automates(
         "burst_max": None,
         "burst_expires": None,
         "blockers": ["shop"],  # slice 15.1b: under the Kill switch too
+        "node_types": None,  # slice 15.3b: no Sizing here has types
     }
 
 

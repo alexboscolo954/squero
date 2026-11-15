@@ -990,6 +990,71 @@ def test_approving_is_refused_unless_it_is_the_latest_sizing_and_changes_somethi
     assert [r[1] for r in approved_rows(database_url)] == ["twin"]
 
 
+def test_a_daemonsets_types_are_approved_with_it_never_more_than_were_shown(
+    settings: Settings, fake_cluster: Any, database_url: str
+) -> None:
+    """Slice 15.3b: one approval covers the instance types of the run it approves."""
+
+    def group(kind: str, action: str = "lower", state: str = "ready") -> dict[str, Any]:
+        g: dict[str, Any] = {"type": kind, "state": state, "pods": 2, "history_h": 200}
+        if state == "ready":
+            target = 1.0 if action == "keep" else 0.05
+            g["cpu"] = {"action": action, "current": 1.0, "target": target}
+        return g
+
+    def daemons(name: str, groups: list[Any], **more: Any) -> Any:
+        where = {"kind": "DaemonSet", "workload": f"test/shop/DaemonSet/{name}/app"}
+        return sized(name, **({"cpu": "keep"} | more), **where, groups=groups)
+
+    mixed = [group("m5.large"), group("m5.4xlarge", "keep"), group("", state="learning")]
+    seed_run(
+        database_url,
+        "bank",
+        daemons("agent", mixed),  # its one Sizing keeps both: only a type changes something
+        daemons("steady", [group("a", "keep"), group("b", "keep")]),
+        daemons("wide", [group(f"t{i}") for i in range(hubmcp.MAX_TYPES + 1)]),
+        sized(),
+    )
+
+    def approve(name: str, cpu: str = "1000m") -> Any:
+        where = {"cluster": "test", "namespace": "shop", "container": "app", "name": name}
+        return call(c, "approve_sizing", contract="bank", cpu=cpu, memory="512Mi", **where)
+
+    with hub(settings, fake_cluster, database_url) as c:
+        agent_, steady, wide, api = (
+            approve("agent"),
+            approve("steady"),
+            approve("wide"),
+            approve("api", "115m"),
+        )
+    assert agent_["approved"] == "approved" and agent_["by_instance_type"] == [
+        "  on m5.large (2 pods): cpu lower 1000m -> 50m",
+        "  on m5.4xlarge (2 pods): cpu keep 1000m -> 1000m",
+        "  on nodes with no instance type (2 pods): learning (200 h of usage)",
+    ]
+    assert steady == {"error": "its Sizing keeps the requests as they are: nothing to approve"}
+    assert wide == {
+        "error": "it is sized for 11 instance types, more than the 10 shown here: "
+        "not approved unseen"
+    }
+    assert "by_instance_type" not in api
+    import psycopg
+
+    with psycopg.connect(database_url) as conn:
+        found = conn.execute("select name, cpu, types from approved_sizings order by name")
+        assert found.fetchall() == [
+            (
+                "agent",
+                None,
+                {
+                    "m5.large": {"cpu": 0.05, "memory": None},
+                    "m5.4xlarge": {"cpu": None, "memory": None},
+                },
+            ),
+            ("api", 0.115, None),  # one Sizing for every pod: no types
+        ]
+
+
 def test_approving_a_sizing_is_refused_while_the_kill_switch_is_on(
     settings: Settings, fake_cluster: Any, database_url: str
 ) -> None:

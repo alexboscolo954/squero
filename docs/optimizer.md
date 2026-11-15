@@ -248,6 +248,14 @@ kind/shop/DaemonSet/agent/app [production]: cpu lower 2000m -> 1150m, memory rai
 
 Here one node of three is busy, and the pooled Sizing follows it: the two small nodes' pods would be asked 1150m where 58m does.
 
+**Applied per type** (from 0.54.0, by an Actuator of that version or later). Where a DaemonSet's container has Sizings per instance type, the Actuator applies those and not the pooled one: each pod gets the Sizing of its node's type.
+
+- **A type with no Sizing yet** (still learning, or a node whose type the Hub doesn't know): its pods get their template's requests, also where an earlier pooled Sizing had changed them.
+- **One approval covers every type** of the run it approves. `approve_sizing` is called with the container's pooled values as `sizings` showed them and answers with the types it approved (`by_instance_type`). A container whose pooled Sizing keeps its requests can still be approved when a type's changes them. One with more than the ten types `sizings` shows is refused, since nothing is approved unseen; Automation still applies it.
+- **Automation** sends a container when some type's Sizing changes a request, and its churn rule (10% and one lowering a day) is each type's own, against what that type's pods hold.
+- **An older Actuator** (before 0.54.0) keeps getting the pooled Sizing for every pod, and nothing for a container only a type of which changes.
+- **Not yet by type** (slice 15.3c): Waste, the cost of requests and realized Savings still count the container against its pooled Sizing.
+
 - **Which nodes.** By `node.kubernetes.io/instance-type` (the label list prices need, allowlisted in kube-state-metrics), over the Sizing's window, so the pods of nodes since replaced still count. Nodes without the label are one type of their own. With fewer than two types there is nothing to split and nothing shows. A pod whose node isn't found is in no type; it still counts in the pooled Sizing.
 - **Only with an Actuator.** A DaemonSet has one pod template, so nothing but an Actuator resizing each pod in place can give two nodes different requests. On a cluster without one the read isn't made. Nor from a Prometheus another Contract reads without cluster labels: node series carry no namespace.
 - **Each type is sized like a container**: the same policy, a day of its own history (a type newly added is still learning), and what hides the container's real demand (throttling, an OOM kill) keeps every type from being lowered.

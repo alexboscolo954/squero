@@ -211,6 +211,29 @@ def test_a_shared_store_without_labels_or_a_failed_read_gives_no_groups(
     assert failed.by_window[7 * 86400][0][1].groups == {}
 
 
+def test_each_nodes_type_is_kept_with_its_clusters_rooms_for_its_actuator_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Slice 15.3b: what the Actuator applies each type's Sizing by, from the window the
+    types were sized over; behind the guard of every node read."""
+    fake = fleet()
+    a_node(fake, "bare", None)
+    types = {"s1": "m5.large", "s2": "m5.large", "big": "m5.4xlarge", "bare": ""}
+    assert collected(fake, monkeypatch).rooms["test"]["types"] == types
+    assert usage.node_types(_prom(fake, SHOP), SHOP, 7 * 86400, NOW) == types
+    assert "types" not in collected(fake, monkeypatch, prometheus_contract()).rooms["test"]
+    shared = acting()
+    shared._shared_stores.add("test")
+    assert "types" not in collected(fake, monkeypatch, shared).rooms["test"]
+
+    def boom(*a: Any) -> Any:
+        raise UsageError("HTTP 500 from prometheus")
+
+    monkeypatch.setattr(usage, "node_types", boom)
+    failed = collected(fake, monkeypatch)
+    assert failed.clusters == {"test": None} and "types" not in failed.rooms["test"]
+
+
 # --- the Sizings ------------------------------------------------------------------------
 
 

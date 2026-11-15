@@ -1829,9 +1829,12 @@ def create_app(
                 out.append(r)
         return out, status.get(cluster.name) or {}
 
-    def automation(rows: list[dict[str, Any]], run: int | None) -> list[actuator.Wanted]:
+    def automation(
+        rows: list[dict[str, Any]], run: int | None, typed: bool = False
+    ) -> list[actuator.Wanted]:
         """The Sizings Automation applies (slice 12.5), of the `automated` containers:
-        ready, changing something."""
+        ready, changing something. `typed`: for an Actuator that applies a DaemonSet's
+        per instance type (slice 15.3b), where some type's must change something."""
         out = []
         for r in rows:
             if r.get("state") != "ready":
@@ -1840,14 +1843,16 @@ def create_app(
                 res: r[res]["target"] if r.get(res) and r[res]["action"] != "keep" else None
                 for res in ("cpu", "memory")
             }
-            if any(v is not None for v in values.values()):
-                out.append(actuator.Wanted(run_id=run, **{**r, **values}))
+            types = sizing.by_type(r) if typed else {}
+            if sizing.changes(values["cpu"], values["memory"], types):
+                out.append(actuator.Wanted(run_id=run, **{**r, **values}, types=types))
         return out
 
     @app.get("/actuator/desired")
     async def actuator_desired(
         creds: HTTPAuthorizationCredentials = Depends(bearer),  # noqa: B008
         kinds: str = "Deployment",
+        types: bool = False,
     ) -> actuator.Desired:
         """What an Actuator should apply now: its cluster's current Approved Sizings in the
         cluster's namespaces, Automation's for the containers no approval covers, the
@@ -1858,19 +1863,23 @@ def create_app(
         what the burst Reflex goes by (slice 13.3a). Only of the `kinds` it names
         that the Hub's knows (slice
         12.8a): an Actuator that names none, 0.43.0 or older, reads every Sizing as a
-        Deployment's, so it gets Deployments' only."""
+        Deployment's, so it gets Deployments' only. To one that says it knows `types`
+        (slice 15.3b), a DaemonSet's Sizing goes with each instance type's, and each
+        node's type with them; any other gets the one Sizing for every pod."""
         cid, cluster = actuator_of(creds)
         known = set(kinds.split(",")) & set(actuator.KINDS)
         if await store().kill_switch(cid) is not None:  # a read is no change: slice 15.1b
             return actuator.Desired(kill_switch=True, sizings=[], blockers=cluster.namespaces)
         reverted = await store().reverted(cid, cluster.name)  # an approval before it is undone
         approved = [
-            actuator.Wanted.model_validate(a)
+            actuator.Wanted.model_validate({**a, "types": of})
             for a in await store().approved_sizings(cid)
             if a["cluster"] == cluster.name
             and a["namespace"] in cluster.namespaces
             and a["kind"] in known
             and (a["namespace"], a["kind"], a["name"], a["container"]) not in reverted
+            # one approved for its types only is nothing to an Actuator that knows none
+            and sizing.changes(a["cpu"], a["memory"], of := (a["types"] or {}) if types else {})
         ]
         mine = {(w.namespace, w.kind, w.name, w.container) for w in approved}
         rows, read = await automated(cid, cluster)
@@ -1879,16 +1888,25 @@ def create_app(
         bursting = by_id[cid].actuator.reflexes.burst
         burst = bursting is not None
         age = None if read.get("at") is None else time.time() - read["at"]
+        automatic = [
+            w
+            for w in automation(rows, run, types)
+            if (w.namespace, w.kind, w.name, w.container) not in mine and w.kind in known
+        ]
+        # slice 15.3b: each node's type, from the last good read of them, to an Actuator that
+        # knows types, whatever is sent with it: what it holds is caught up by them, on a
+        # node that joined since and after its own restart
+        node_types = None
+        if types:
+            found = await store().latest_rooms(cid, {cluster.name})
+            node_types = found.get(cluster.name, {}).get("types")
         return actuator.Desired(
             kill_switch=False,
+            node_types=node_types,
             blockers=cluster.namespaces,  # slice 15.1b: where to report Blockers' facts of
             eviction=by_id[cid].actuator.evicting(datetime.now(UTC)),
             sizings=approved,
-            automated=[
-                w
-                for w in automation(rows, run)
-                if (w.namespace, w.kind, w.name, w.container) not in mine and w.kind in known
-            ],
+            automated=automatic,
             # slice 13.1a: with the Contract's `reflexes.oom`, the containers whose OOM
             # kills its Actuator reports, a Sizing ready or not
             # and each one's memory peak over its Sizing's window (slice 13.1c): a

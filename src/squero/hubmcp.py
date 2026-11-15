@@ -38,7 +38,7 @@ from squero.contracts import Contract
 from squero.models import Investigation
 from squero.observability import AuditMiddleware
 from squero.servers.sizing import allowed, workload
-from squero.sizing import floor_text, group_lines, profile_lines, show
+from squero.sizing import by_type, changes, floor_text, group_lines, profile_lines, show
 from squero.store import Store
 
 READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)
@@ -360,7 +360,10 @@ def build(
         shows it. cpu and memory: its Sizing exactly as `sizing` or `sizings` showed it
         (115m, 96Mi; null where none was shown), so a newer Sizing is never approved
         unseen. Refused while it is learning, when it changes nothing, and while the
-        Contract's Kill switch is on. A later Sizing of the container supersedes it."""
+        Contract's Kill switch is on. A later Sizing of the container supersedes it. A
+        DaemonSet's Sizings by instance type are approved with it, as `sizings` showed
+        them (its Actuator gives each pod its node's type's, a pod on a type still
+        learning its template's requests), so never one with more types than shown."""
         c = resolve(contract)
 
         async def work() -> dict[str, Any]:
@@ -383,16 +386,24 @@ def build(
                     f"its latest Sizing is cpu {shown['cpu']}, memory {shown['memory']}: "
                     "read it again"
                 )
-            if all(r[res]["action"] == "keep" for res in RES if r.get(res)):
+            types = by_type(r)
+            kept = all(r[res]["action"] == "keep" for res in RES if r.get(res))
+            if kept and not changes(None, None, types):
                 raise ToolError("its Sizing keeps the requests as they are: nothing to approve")
+            if len(r.get("groups") or []) > MAX_TYPES:  # never approved unseen
+                raise ToolError(
+                    f"it is sized for {len(r['groups'])} instance types, more than the "
+                    f"{MAX_TYPES} shown here: not approved unseen"
+                )
             run = status[want["cluster"]]["run"]
-            done = await store().approve_sizing(c.id, run, r, by, now())
+            done = await store().approve_sizing(c.id, run, r, by, now(), types)
             if done == "killed":
                 raise ToolError(KILLED)
             return {
                 "workload": r["workload"],
                 "approved": "approved" if done == "approved" else "already approved",
                 **shown,
+                **({"by_instance_type": group_lines(r)} if types else {}),
             }
 
         result: dict[str, Any] = await answer(c, work())

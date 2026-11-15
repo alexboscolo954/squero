@@ -230,6 +230,10 @@ class Wanted(BaseModel):
     # approved after a Revert of that container (slice 12.9b): applied even if it is the
     # run that Revert undid, which an approval from before it never is
     again: bool = False
+    # slice 15.3b: a DaemonSet's Sizing per instance type ("" where a node has no such
+    # label), each as `cpu` and `memory` above. With any, each pod gets its node's type's
+    # and `cpu` and `memory` are for an Actuator that knows no types
+    types: dict[str, dict[str, float | None]] = {}
 
 
 class Undo(BaseModel):
@@ -307,6 +311,9 @@ class Desired(BaseModel):
     # it is still needed. None, as from a Hub of 13.1b: a Step-up never expires
     oom_expires: float | None = None
     boosts: list[Boost] = []  # slice 13.4; none from an older Hub
+    # slice 15.3b: each node's instance type ("" for none), from the read the Sizings per
+    # type were made of, to an Actuator that knows types. None: not read, what it knew stays
+    node_types: dict[str, str] | None = None
     # slice 13.3a: the automated containers of a Contract with `reflexes.burst`, and the
     # Sizing run they were read in (a Burst is due once a run). Read by no Actuator yet:
     # slice 13.3b acts on them
@@ -752,6 +759,71 @@ def needs(pod: Any, container: str, set_to: dict[str, str]) -> bool:
     return not all(same(now.get(r), q) for r, q in set_to.items())
 
 
+def wants(h: dict[str, Any], pod: Any, nodes: dict[str, str] | None = None) -> dict[str, str]:
+    """The requests a hold wants of one pod: every step that looks at a pod asks here,
+    never the hold's own set. A hold with `types` (slice 15.3b) wants each pod's node's
+    instance type's, by `nodes` (node -> type); its template's of a pod whose type has
+    none (a request its template doesn't set is left); and nothing while it knows no
+    node's type (a restart with the Hub away), so that nothing is resized by a guess."""
+    types = h.get("types")
+    if types is None:
+        return dict(h["requests"])
+    if not nodes:
+        return {}
+    kind = nodes.get(pod.spec.node_name)
+    if kind in types:
+        return dict(types[kind])
+    had = h.get("template") or {}
+    return {r: had[r] for r in h["requests"] if had.get(r) is not None}
+
+
+def at_hold(h: dict[str, Any], pod: Any, container: str) -> bool:
+    """Whether a pod has the requests held as `h`: the Actuator's doing, to watch and to
+    put back. Any instance type's, of a hold with `types`: wherever the pod runs now."""
+    types = h.get("types")
+    if types is None:
+        return not needs(pod, container, h["requests"])
+    return any(t and not needs(pod, container, t) for t in types.values())
+
+
+def set_by(h: dict[str, Any]) -> dict[str, float]:
+    """What a hold's Actuation says it set: its requests, as numbers. None of a hold with
+    `types`, which has no one number: its reason names each type's."""
+    if h.get("types") is not None:
+        return {}
+    return {r: float(qty(q)) for r, q in h["requests"].items()}
+
+
+TYPES_SAID = 3  # instance types a reason names: it is cut at 1000 characters
+
+
+def held_text(h: dict[str, Any]) -> str:
+    """What a hold asks, for an Actuation's reason: its requests, or each instance type's
+    (three types, the rest counted)."""
+    if h.get("types") is None:
+        return texts(h["requests"])
+    said = [f"{t or 'no instance type'} {texts(q)}" for t, q in sorted(h["types"].items())]
+    more = f" and {len(said) - TYPES_SAID} more" if len(said) > TYPES_SAID else ""
+    return f"{'; '.join(said[:TYPES_SAID])}{more}"
+
+
+def node_of(pod: dict[str, Any]) -> str | None:
+    """The node a DaemonSet's new pod is for (slice 15.3b): it has no `nodeName` when it is
+    admitted, its controller names the node in its node affinity instead."""
+    spec = pod.get("spec") or {}
+    if spec.get("nodeName"):
+        return str(spec["nodeName"])
+    required = ((spec.get("affinity") or {}).get("nodeAffinity") or {}).get(
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    ) or {}
+    for term in required.get("nodeSelectorTerms") or []:
+        for f in term.get("matchFields") or []:
+            values = f.get("values") or []
+            if f.get("key") == "metadata.name" and f.get("operator") == "In" and len(values) == 1:
+                return str(values[0])
+    return None
+
+
 def apply(
     core: Any,
     apps: Any,
@@ -764,27 +836,37 @@ def apply(
     eviction: str = "off",
     left: list[str] | None = None,
     stepped: bool = False,
+    nodes: dict[str, str] | None = None,
 ) -> tuple[Actuation | None, dict[str, Any]]:
     """Start resizing `w`'s container in place on its workload's pods (slice 12.3): the
     pre-checks, then one canary pod. An Actuation when it ends here (skipped or failed),
     None while it rolls; and what to remember of it, empty when Automation's churn rule
-    leaves nothing to change. `old`: the hold a new Sizing replaces (None: catching up)."""
+    leaves nothing to change. `old`: the hold a new Sizing replaces (None: catching up).
+    A DaemonSet's Sizing with `types` (slice 15.3b) is one set of requests per instance
+    type, each pod getting its node's by `nodes`: every pre-check holds for every type,
+    and one that fails for any skips the container."""
     set_to: dict[str, str] = {}
     template_had: dict[str, str | None] = {}  # its template's requests then: a change hands back
     notes: list[str] = []
+    # per instance type; None: one set for every pod. Then `set_to` is the most any type
+    # asks of each resource: what a quota must take, and which resources are held
+    types: dict[str, dict[str, str]] | None = {} if w.types and w.kind == "DaemonSet" else None
+
+    def hold() -> dict[str, Any]:
+        kept = {"requests": set_to, "template": template_had}
+        return kept if types is None else {**kept, "types": types}
 
     def done(outcome: Outcome, pods: int, reason: str) -> tuple[Actuation, dict[str, Any]]:
-        values = {r: float(qty(q)) for r, q in set_to.items()}
+        values = set_by(hold())
         a = Actuation(
-            **w.model_dump(exclude={"cpu", "memory", "again"}),
+            **w.model_dump(exclude={"cpu", "memory", "again", "types"}),
             outcome=outcome,
             pods=pods,
             reason=(reason + "".join(notes))[:1000],
             at=at,
             **values,
         )
-        kept = {"requests": set_to, "template": template_had}
-        return a, {"run_id": w.run_id, "outcome": outcome, **kept, "at": at}
+        return a, {"run_id": w.run_id, "outcome": outcome, **hold(), "at": at}
 
     def failed(e: ApiException, reason: str) -> tuple[Actuation, dict[str, Any]]:
         a, held = done("failed", 0, reason)
@@ -805,47 +887,74 @@ def apply(
     if template is None:
         return done("skipped", 0, f"no container {w.container!r} in its template")
     limits, asked = limits_of(template), requests_of(template)
-    capped = []
-    for res, value, text in (("cpu", w.cpu, cpu_text), ("memory", w.memory, memory_text)):
-        if value is None:
-            continue
-        if stepped and res == "memory":  # its Step-up's while it lasts (slice 13.1b)
-            notes.append("; memory left to its Step-up")
-            continue
-        q = text(value)
-        if res in limits and qty(q) > qty(limits[res]):
-            q = limits[res]  # requests never above the limit: the Sizing's risk stays shown
-            capped.append(res)
-        set_to[res] = q
-        template_had[res] = asked.get(res)
-    if capped:
-        notes.append(f"; capped at its limit: {capped}")
-    if stepped and not set_to and w.memory is not None:
-        notes.clear()
-        return done("skipped", 0, "it asks memory only, which is its Step-up's while it lasts")
     kept = old if old and old.get("outcome") in ("applied", "rolling") else {}
-    holds = kept.get("requests") or {}
-    was = {r: holds.get(r) or asked.get(r) for r in set_to}  # what its pods ask now
+    held_template = kept.get("template") or {}
+    since = at - (old or {}).get("lowered_at", -LOWER_EVERY)
+    capped: set[str] = set()
+    deferred: set[str] = set()
+    fresh: set[str] = set()  # the resources this Sizing sets, for any type
+    lowered = False
 
-    def lower(r: str) -> bool:
-        return bool(was[r]) and qty(set_to[r]) < qty(was[r] or "0")
+    def one(values: dict[str, float | None], holds: dict[str, str]) -> dict[str, str]:
+        """One set of requests: the Sizing's `values`, never above the limit, less what
+        Automation's churn rule (slice 12.5) leaves out, over what its pods hold now."""
+        nonlocal lowered
+        out = dict(holds)  # a resource this Sizing leaves alone keeps what it holds
+        for res, text in (("cpu", cpu_text), ("memory", memory_text)):
+            value = values.get(res)
+            if value is None or (stepped and res == "memory"):
+                continue  # memory: its Step-up's while it lasts (slice 13.1b)
+            q = text(value)
+            if res in limits and qty(q) > qty(limits[res]):
+                q = limits[res]  # requests never above the limit: the Sizing's risk stays shown
+                capped.add(res)
+            was = holds.get(res) or asked.get(res)  # what its pods ask now
+            lower = bool(was) and qty(q) < qty(was or "0")
+            if automated and was and qty(was) > 0:
+                change = abs(qty(q) / qty(was) - 1)
+                if change < CHURN or (lower and since < LOWER_EVERY):
+                    deferred.add(res)
+                    continue
+            lowered = lowered or (old is not None and lower)
+            fresh.add(res)
+            out[res] = q
+        return out
 
-    deferred = []
-    if automated:  # the churn rule (slice 12.5)
-        since = at - (old or {}).get("lowered_at", -LOWER_EVERY)
-        for r in list(set_to):
-            if was[r] and qty(was[r] or "0") > 0:
-                change = abs(qty(set_to[r]) / qty(was[r] or "0") - 1)
-                if change < CHURN or (lower(r) and since < LOWER_EVERY):
-                    del set_to[r], template_had[r]
-                    deferred.append(r)
-        if not set_to:
-            return None, {}
-    lowered = old is not None and any(lower(r) for r in set_to)
-    for r, q in holds.items():  # a resource this Sizing leaves alone keeps what it holds
-        if r not in set_to:
-            set_to[r] = q
-            template_had[r] = (kept.get("template") or {}).get(r)
+    pooled = kept.get("requests") or {}
+    if types is None:
+        asks = [{"cpu": w.cpu, "memory": w.memory}]
+        set_to.update(one(asks[0], pooled))
+    else:
+        asks = list(w.types.values())
+        before = kept.get("types")
+        # a type the last Sizing had and this one has not keeps what it holds
+        types.update({t: dict(q) for t, q in (before or {}).items() if t not in w.types})
+        for t, values in w.types.items():
+            # its pods ask their type's, or the one set held before there were types, or
+            # their template's
+            types[t] = one(values, pooled if before is None else before.get(t) or {})
+        for t in [t for t, q in types.items() if not q]:
+            del types[t]  # nothing for it: its pods keep their template's
+        for q in types.values():
+            for res, value in q.items():
+                if res not in set_to or qty(value) > qty(set_to[res]):
+                    set_to[res] = value
+    for res in set_to:
+        template_had[res] = asked.get(res) if res in fresh else held_template.get(res)
+    if stepped and any(a.get("memory") is not None for a in asks):
+        notes.append("; memory left to its Step-up")
+    if capped:
+        notes.append(f"; capped at its limit: {sorted(capped)}")
+    if stepped and not fresh and not deferred and any(a.get("memory") is not None for a in asks):
+        notes.clear()
+        set_to.clear()
+        template_had.clear()
+        types = None
+        return done("skipped", 0, "it asks memory only, which is its Step-up's while it lasts")
+    if automated and not fresh:  # nothing moves enough: the churn rule (slice 12.5)
+        return None, {}
+    if types is not None:
+        notes.append(f"; by instance type: {held_text(hold())}")
     restarts = sorted(
         p.resource_name
         for p in template.resize_policy or []
@@ -860,15 +969,20 @@ def apply(
         scaled = hpa_resources(autoscaling, w.namespace, w.kind, w.name, w.container)
         for r in sorted(scaled & set(set_to)):
             del set_to[r], template_had[r]
+            for q in (types or {}).values():
+                q.pop(r, None)
             notes.append(f"; {r} left to its HPA, which scales on its utilization")
         if not set_to:
             return done("skipped", 0, "nothing its HPA doesn't scale on")
         pairs = [(c.name, requests_of(c), limits_of(c)) for c in containers]
-        why_not = qos_change(pairs, w.container, set_to) or limit_range_breach(
-            core, w.namespace, set_to, limits
-        )
-        if why_not:
-            return done("skipped", 0, why_not)
+        for t, q in [("", set_to)] if types is None else sorted(types.items()):
+            why_not = qos_change(pairs, w.container, q) or limit_range_breach(
+                core, w.namespace, q, limits
+            )
+            if why_not and types is not None:
+                why_not += f" (its pods' on {t or 'nodes with no instance type'})"
+            if why_not:
+                return done("skipped", 0, why_not)
         if w.kind == "CronJob":  # through the webhook only (slice 12.8c): its next run
             runs = d.spec.job_template.spec.parallelism or 1
             why_not = quota_breach(core, w.namespace, set_to, asked, runs)
@@ -879,7 +993,7 @@ def apply(
             if lowered:
                 held["lowered_at"] = at
             if deferred:
-                held["deferred"] = deferred
+                held["deferred"] = sorted(deferred)
             return a, held
         pods = pods_of(core, apps, d, w.kind)
         if not pods:
@@ -889,8 +1003,16 @@ def apply(
             return done("skipped", 0, why_not)
     except ApiException as e:  # a namespace its RoleBinding misses: the others still go on
         return failed(e, f"checking it: {why(e)}")
+    if types is not None and not nodes:
+        a, held = done("skipped", 0, "its nodes' instance types are not known yet")
+        held["passing"] = True  # the Hub sends them with its next good read
+        return a, held
+
+    def its(p: Any) -> dict[str, str]:
+        return wants(hold(), p, nodes)
+
     behind = [
-        p for p in pods if needs(p, w.container, set_to) and p.metadata.name not in (left or [])
+        p for p in pods if needs(p, w.container, its(p)) and p.metadata.name not in (left or [])
     ]
     todo = [p for p in behind if not lost(p)]  # one whose node is gone is no canary (12.10)
     if behind and not todo:
@@ -901,7 +1023,7 @@ def apply(
         return done("skipped", 0, f"all {len(pods)} pods already have these requests")
     room = None
     try:
-        resize(core, todo[0], w.container, set_to)
+        resize(core, todo[0], w.container, its(todo[0]))
     except ApiException as e:
         room = no_room(e)
         if room is None or (eviction == "off" and w.kind != "DaemonSet"):  # off: failed at once
@@ -916,7 +1038,7 @@ def apply(
             if p is todo[0]
             else {"restarts": restarts_of(p, w.container)}  # not resized now: no NotReady rule
             for p in pods
-            if p is todo[0] or not needs(p, w.container, set_to)
+            if p is todo[0] or not needs(p, w.container, its(p))
         },
         "pod": todo[0].metadata.name,
         "since": at,
@@ -929,7 +1051,7 @@ def apply(
     if lowered:
         held["lowered_at"] = at
     if deferred:  # an approval of this run still applies them
-        held["deferred"] = deferred
+        held["deferred"] = sorted(deferred)
     return None, held
 
 
@@ -941,6 +1063,7 @@ def advance(
     now: float,
     eviction: str = "off",
     policy: Any = None,
+    nodes: dict[str, str] | None = None,
 ) -> Actuation | None:
     """One minute of a rolling resize: wait for its current pod, then (after the canary's
     10 minutes) resize the next one. An Actuation once it ends: applied when every live pod
@@ -951,7 +1074,8 @@ def advance(
     left as it runs instead (slice 12.8a), the rollout failing only when every pod is.
     `policy` is a PolicyV1Api."""
     ns, kind, name, container = key.split("/")
-    set_to = h["requests"]
+    if h.get("types") is not None and not nodes:
+        return None  # no node's type known (a restart, the Hub away): it waits, unjudged
 
     def end(outcome: Outcome, reason: str) -> Actuation:
         h["outcome"] = outcome
@@ -968,7 +1092,7 @@ def advance(
             pods=resized,
             reason=(reason + notes)[:1000],
             at=now,
-            **{r: float(qty(q)) for r, q in set_to.items()},
+            **set_by(h),
         )
 
     resized, notes, pod = h["resized"], h.get("notes", ""), h["pod"]
@@ -982,12 +1106,12 @@ def advance(
             return None
         p = None  # gone: its replacement is one of the pods still to do
     if p is not None and not p.metadata.deletion_timestamp and not lost(p):
-        state, message = resize_state(p, container, set_to)
+        state, message = resize_state(p, container, wants(h, p, nodes))
         if "no_room" in h:  # the API server refused its resize: no room on its node, ever
             state, message = "infeasible", h["no_room"]
         late = now - h["since"] >= WAIT_SECONDS
         if kind == "DaemonSet" and (state == "infeasible" or (state == "deferred" and late)):
-            leave(core, p, key, h, message)  # its node has no room: the others go on
+            leave(core, p, key, h, message, nodes)  # its node has no room: the others go on
             resized, notes = h["resized"], h["notes"]
         elif state == "infeasible":
             never = None if eviction == "off" else unevictable(apps, policy, ns, kind, name, p)
@@ -1012,14 +1136,15 @@ def advance(
         pods = pods_of(core, apps, read(apps, kind, name, ns), kind)
         pods = [x for x in pods if not lost(x)]  # its node gone: a catch-up's, if it returns
         left = h.get("left") or []
-        todo = [x for x in pods if needs(x, container, set_to) and x.metadata.name not in left]
+        behind = [x for x in pods if needs(x, container, wants(h, x, nodes))]
+        todo = [x for x in behind if x.metadata.name not in left]
         if not pods:  # scaled to zero meanwhile: held, and its webhook gives them to new pods
             return end("applied", f"{resized} pods resized in place, then none left to resize")
         if not todo:
-            if all(needs(x, container, set_to) for x in pods):  # every pod left: none has room
+            if len(behind) == len(pods):  # every pod left: none has room
                 return end("failed", f"no node of its {len(pods)} pods has room for them")
             return end("applied", f"{resized} of {len(pods)} pods resized in place, one at a time")
-        resize(core, todo[0], container, set_to)
+        resize(core, todo[0], container, wants(h, todo[0], nodes))
     except ApiException as e:
         room = no_room(e)
         if room is None and passing(e) and now - h.setdefault("stalled", now) < WAIT_SECONDS:
@@ -1036,7 +1161,14 @@ def advance(
     return None
 
 
-def leave(core: Any, p: Any, key: str, h: dict[str, Any], message: str) -> None:
+def leave(
+    core: Any,
+    p: Any,
+    key: str,
+    h: dict[str, Any],
+    message: str,
+    nodes: dict[str, str] | None = None,
+) -> None:
     """A DaemonSet's pod whose node has no room for the requests (slice 12.8a): its pending
     resize undone (back to what the kubelet allocated it) but for the requests it lowers,
     which always fit and are set in place; the pod left out of this rollout and of
@@ -1045,11 +1177,10 @@ def leave(core: Any, p: Any, key: str, h: dict[str, Any], message: str) -> None:
     pod = p.metadata.name
     st = container_status(p, container)
     allocated = (st.resources.requests if st and st.resources else None) or {}
-    lower = {
-        r: q for r, q in h["requests"].items() if r in allocated and qty(q) < qty(allocated[r])
-    }
+    its = wants(h, p, nodes)
+    lower = {r: q for r, q in its.items() if r in allocated and qty(q) < qty(allocated[r])}
     pending = h.pop("no_room", None) is None  # refused at once (Kubernetes 1.35+): nothing is
-    back = {r: allocated[r] for r in h["requests"] if r in allocated} if pending else {}
+    back = {r: allocated[r] for r in its if r in allocated} if pending else {}
     try:
         if back or lower:
             resize(core, p, container, back | lower)
@@ -1241,8 +1372,8 @@ def evict(
     h["evicted_at"] = now
     h["notes"] = h.get("notes", "") + f"; {pod} evicted, its resize Infeasible"
     said = f"{pod} evicted: its resize was Infeasible ({message}); its replacement starts with "
-    log.info("%s: %s", key, said + texts(h["requests"]))
-    post(core, ns, ("apps/v1", kind, name), "PodEvicted", said + texts(h["requests"]), False)
+    log.info("%s: %s", key, said + held_text(h))
+    post(core, ns, ("apps/v1", kind, name), "PodEvicted", said + held_text(h), False)
     return None
 
 
@@ -1276,7 +1407,7 @@ def replaced(
     if not up:
         return None
     p = up[0]
-    if needs(p, container, h["requests"]):
+    if not at_hold(h, p, container):
         return end(
             "failed",
             f"{p.metadata.name}, replacing evicted {ev['pod']}, started from its template",
@@ -1318,10 +1449,19 @@ def lowered(h: dict[str, Any], limit: str | None = None) -> bool:
     """Whether the hold `h` asks less memory for its container than its template did: such
     a Sizing can bring an OOM kill on (slice 13.1b), a likelier victim on a fuller node. A
     template that sets only a memory `limit` asks that much: Kubernetes makes it the pod's
-    request."""
-    q = (h.get("requests") or {}).get("memory")
+    request. Of a hold with `types` (slice 15.3b): any instance type's does."""
+    sets = [h.get("requests") or {}] if h.get("types") is None else list(h["types"].values())
     had = (h.get("template") or {}).get("memory") or limit
-    return bool(q and had and qty(q) < qty(had))
+    return bool(had and any(q.get("memory") and qty(q["memory"]) < qty(had) for q in sets))
+
+
+def stepped_over(h: dict[str, Any]) -> None:
+    """A hold's memory is its container's Step-up's from now, no Sizing's (slice 13.1b):
+    every instance type's too."""
+    del h["requests"]["memory"]
+    (h.get("template") or {}).pop("memory", None)
+    for q in (h.get("types") or {}).values():
+        q.pop("memory", None)
 
 
 def next_step(limit: Decimal, request: Decimal, top: Decimal) -> tuple[str, str] | None:
@@ -1391,7 +1531,7 @@ def trouble(
         return f"{ev['pod']} evicted: no replacement Ready in {WAIT_SECONDS // 60} minutes"
     seen = h.get("pods") or {}
     for p in pods:
-        if needs(p, container, h["requests"]):
+        if not at_hold(h, p, container):
             continue  # not the Actuator's requests: not its doing
         st = container_status(p, container)
         spec = next((c for c in p.spec.containers if c.name == container), None)
@@ -1455,7 +1595,7 @@ def first_run(
                 (
                     j.metadata.name
                     for j in jobs
-                    if any(not needs(p, container, h["requests"]) for p in pods(j.metadata.name))
+                    if any(at_hold(h, p, container) for p in pods(j.metadata.name))
                 ),
                 None,
             )
@@ -1466,7 +1606,7 @@ def first_run(
             run["job"] = chosen
         job = next((j for j in jobs if j.metadata.name == run["job"]), None)
         for p in pods(run["job"]) if job else []:
-            if needs(p, container, h["requests"]):
+            if not at_hold(h, p, container):
                 continue  # from its template: not the Actuator's doing
             st = container_status(p, container)
             killed = any(
@@ -1532,7 +1672,7 @@ def put_back(
             except ApiException as e:
                 refused.append(f"evicting {p.metadata.name}: {why(e)}")
             continue
-        if back and not needs(p, container, h["requests"]):
+        if back and at_hold(h, p, container):
             try:
                 resize(core, p, container, back)
                 done += 1
@@ -1544,7 +1684,8 @@ def put_back(
     if kind == "CronJob":  # never resized in place (slice 12.8c)
         reason = f"{why_}: its next run's pods start from its template, not {texts(h['requests'])}"
     else:
-        reason = f"{why_}: {done} pods back from {texts(h['requests'])}"
+        each = "" if h.get("types") is None else "each instance type's requests: "
+        reason = f"{why_}: {done} pods back from {each}{held_text(h)}"
         if back:
             reason += f" to their template's {texts(back)}"
         if unset:
@@ -1573,7 +1714,8 @@ def put_back(
 def undo(h: dict[str, Any]) -> dict[str, Any]:
     """What a put back still to finish needs of the hold `h`, kept when a Sizing that
     changes nothing (skipped, failed) takes its place."""
-    return {k: h[k] for k in ("unfinished", "requests", "template") if h.get("unfinished")}
+    kept = ("unfinished", "requests", "template", "types")
+    return {k: h[k] for k in kept if k in h and h.get("unfinished")}
 
 
 def finish(core: Any, apps: Any, key: str, h: dict[str, Any]) -> None:
@@ -1596,7 +1738,7 @@ def finish(core: Any, apps: Any, key: str, h: dict[str, Any]) -> None:
             return
     again = False
     for p in pods:
-        if needs(p, container, h["requests"]):
+        if not at_hold(h, p, container):
             continue
         try:
             resize(core, p, container, back)
@@ -1605,7 +1747,7 @@ def finish(core: Any, apps: Any, key: str, h: dict[str, Any]) -> None:
                 again = True
                 log.warning("putting %s back: %s", p.metadata.name, why(e))
             elif e.status != 404:  # its verdict (a pod gone meanwhile aside): not tried again
-                log.error("%s keeps %s: %s", p.metadata.name, texts(h["requests"]), why(e))
+                log.error("%s keeps %s: %s", p.metadata.name, held_text(h), why(e))
     if not again:
         log.info("%s: no pod left to put back", key)
         h.pop("unfinished")
@@ -1633,6 +1775,8 @@ def event(core: Any, a: Actuation, h: dict[str, Any] | None = None) -> None:
         if v is not None
     )
     by = "Automation" if (h or {}).get("automated") else "Approved Sizing"
+    if (h or {}).get("types"):  # no one number (slice 15.3b): its reason names each type's
+        values = "requests by instance type"
     message = (
         f"{a.container}: {GONE.get(a.outcome) or values or 'no change'} "
         f"({by}, run {a.run_id}): {a.reason}"
@@ -1770,13 +1914,16 @@ def mutation(
     stepped: dict[str, dict[str, Any]] | None = None,
     boosts: dict[str, float] | None = None,
     bursts: dict[str, dict[str, Any]] | None = None,
+    nodes: dict[str, str] | None = None,
 ) -> list[Any]:
     """The JSON Patch giving a new pod of a workload the requests applied to it: only
     where its container still asks what the template asked then (a person's change wins),
     never above its limit, never in kube-* or the Actuator's own namespace, never for a
     paused workload (`ns/kind/name` in `paused`). A DaemonSet's pod gets only requests
     lower than its template's (slice 12.8a): it must fit on whatever node it starts; a raise
-    reaches it in place, where its node has room. An Argo Rollout's pod is told by its
+    reaches it in place, where its node has room; and of a hold with `types` (slice 15.3b)
+    its node's instance type's, by `nodes`, nothing where its node or that type is not
+    known. An Argo Rollout's pod is told by its
     `rollouts-pod-template-hash` label (slice 12.8b). A container in `boosts` starts with
     its CPU limit times its factor (the Startup boost, slice 13.4), its own limit kept in
     the pod's `BOOST` annotation; never a pod that already carries one (its template's),
@@ -1825,7 +1972,10 @@ def mutation(
             and had is not None
             and all(same(requests.get(r), had.get(r)) for r in h["requests"])
         ):
-            for r, q in h["requests"].items():
+            its = h["requests"]
+            if h.get("types") is not None:  # its node's instance type's (slice 15.3b)
+                its = h["types"].get((nodes or {}).get(node_of(pod) or ""), {})
+            for r, q in its.items():
                 if r in limits and qty(q) > qty(limits[r]):
                     q = limits[r]
                 if kind == "DaemonSet" and not (requests.get(r) and qty(q) < qty(requests[r])):
@@ -1900,13 +2050,14 @@ def admit(
     stepped: dict[str, dict[str, Any]] | None = None,
     boosts: dict[str, float] | None = None,
     bursts: dict[str, dict[str, Any]] | None = None,
+    nodes: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """The AdmissionReview answer: always allowed; a patch unless the Kill switch is on."""
     req = review.get("request") if isinstance(review, dict) else None
     req = req if isinstance(req, dict) else {}
     answer: dict[str, Any] = {"uid": req.get("uid", ""), "allowed": True}
     try:
-        ops = [] if killed else mutation(req, held, own, paused, stepped, boosts, bursts)
+        ops = [] if killed else mutation(req, held, own, paused, stepped, boosts, bursts, nodes)
     except Exception:  # fail open, as the webhook's failurePolicy does
         log.exception("webhook: pod left as it is")
         ops = []
@@ -1965,7 +2116,8 @@ def serve(a: "Actuator", cert: bytes, key: bytes, port: int = WEBHOOK_PORT) -> T
                 self.send_error(400)
                 return
             answer = admit(
-                review, a.held, a.killed, a.namespace, a.paused, a.stepped, a.boosting, a.bursts
+                *(review, a.held, a.killed, a.namespace, a.paused, a.stepped, a.boosting),
+                *(a.bursts, a.node_types),
             )
             body = json.dumps(answer).encode()
             self.send_response(200)
@@ -2041,6 +2193,8 @@ class Actuator:
     burst_peaks: dict[str, float | None] = field(default_factory=dict)
     burst_said: dict[str, tuple[str, float]] = field(default_factory=dict)
     blockers_due: float = 0.0  # when its next report of Blockers' facts goes (slice 15.1b)
+    # slice 15.3b: each node's instance type, as the Hub last said it from a good read
+    node_types: dict[str, str] = field(default_factory=dict)
 
     def load(self) -> None:
         try:
@@ -2097,7 +2251,8 @@ class Actuator:
 
     def pull(self) -> Desired | None:
         try:
-            r = self.http.get("/actuator/desired", params={"kinds": ",".join(KINDS)})
+            params = {"kinds": ",".join(KINDS), "types": "1"}  # slice 15.3b: it knows types
+            r = self.http.get("/actuator/desired", params=params)
             r.raise_for_status()
             return Desired.model_validate_json(r.content)
         except httpx.HTTPStatusError as e:
@@ -2135,6 +2290,8 @@ class Actuator:
                 "/".join((b.namespace, b.kind, b.name, b.container)): b.factor
                 for b in desired.boosts
             }
+        if desired is not None and desired.node_types is not None:  # else as last said
+            self.node_types = desired.node_types
         wanted = (desired.sizings + desired.automated) if desired else []
         mine = {*self.held, *self.stepped, *self.boosts, *self.bursts}
         self.pauses({*mine, *(f"{w.namespace}/{w.kind}/{w.name}" for w in wanted)})
@@ -2549,8 +2706,7 @@ class Actuator:
                 del self.stepped[k]
             return "every pod refused it: " + "; ".join(refused[:3])
         if earned and holds and held:  # its memory is the Step-up's now, no Sizing's
-            del h["requests"]["memory"]
-            (h.get("template") or {}).pop("memory", None)
+            stepped_over(h)
         said = (
             f"{STEP_SAID}{was[0]} to {target[0]}, request {was[1]} to {target[1]}"
             if earned
@@ -3197,7 +3353,7 @@ class Actuator:
                 busy = any("evicted" in x for x in self.held.values())
                 if may == "open" and (busy or now - last < EVICT_EVERY):
                     may = "closed"
-                a = advance(self.core, self.apps, key, h, now, may, self.policy)
+                a = advance(self.core, self.apps, key, h, now, may, self.policy, self.node_types)
                 if a:
                     log.info("%s %s: %s", a.outcome, key, a.reason)
                     event(self.core, a, h)
@@ -3223,20 +3379,25 @@ class Actuator:
             behind = [
                 p.metadata.name
                 for p in pods
-                if needs(p, container, h["requests"])
+                if needs(p, container, wants(h, p, self.node_types))
                 and p.metadata.name not in left
                 and not lost(p)  # its node gone (slice 12.10): caught up if it comes back
             ]
             if not behind:
                 continue
-            values = {r: float(qty(q)) for r, q in h["requests"].items()}
+            values = set_by(h)
             w = Wanted(
                 run_id=h["run_id"], namespace=ns, kind=kind, name=name, container=container,
                 cpu=values.get("cpu"), memory=values.get("memory"),
+                types={
+                    t: {r: float(qty(v)) for r, v in q.items()}
+                    for t, q in (h.get("types") or {}).items()
+                },
             )  # fmt: skip
             a, new = apply(
                 self.core, self.apps, w, time.time(), self.autoscaling, self.custom,
                 eviction=self.eviction, left=left, stepped=key in self.stepped,
+                nodes=self.node_types,
             )  # fmt: skip
             if new.pop("passing", False):
                 log.warning("%s waits to catch up: %s", key, a.reason if a else "")
@@ -3352,7 +3513,7 @@ class Actuator:
             if now < old.get("backoff_until", 0):
                 until = datetime.fromtimestamp(old["backoff_until"], UTC)
                 a = Actuation(
-                    **w.model_dump(exclude={"cpu", "memory", "again"}),
+                    **w.model_dump(exclude={"cpu", "memory", "again", "types"}),
                     outcome="skipped",
                     pods=0,
                     reason=f"rolled back {len(old.get('rollbacks') or [])} times in 7 days: "
@@ -3370,7 +3531,12 @@ class Actuator:
                 }
             else:
                 args = (self.core, self.apps, w, now, self.autoscaling, self.custom, old, auto)
-                a, new = apply(*args, eviction=self.eviction, stepped=key in self.stepped)
+                a, new = apply(
+                    *args,
+                    eviction=self.eviction,
+                    stepped=key in self.stepped,
+                    nodes=self.node_types,
+                )
                 if new.pop("passing", False):  # tried again each minute, 10 at most
                     t = old.get("trying") or {}
                     if t.get("run") != w.run_id:

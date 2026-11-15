@@ -803,17 +803,25 @@ class Store:
         return [r["row"] for r in rows], status
 
     async def approve_sizing(
-        self, contract_id: str, run_id: int, row: dict[str, Any], by: str, at: float
+        self,
+        contract_id: str,
+        run_id: int,
+        row: dict[str, Any],
+        by: str,
+        at: float,
+        types: dict[str, Any] | None = None,
     ) -> Literal["approved", "already", "killed"]:
         """Store an Approved Sizing of `row`'s container from run `run_id`, with its
-        requests where it changes them, unless the Contract's Kill switch is on."""
+        requests where it changes them and, of a DaemonSet sized per instance type,
+        each type's as `types` (slice 15.3b, sizing.by_type), unless the Contract's Kill
+        switch is on."""
         keys = tuple(row[k] for k in ("cluster", "namespace", "kind", "name", "container"))
         wanted = [
             row[r]["target"] if row.get(r) and row[r]["action"] != "keep" else None
             for r in ("cpu", "memory")
         ]
         stored = await self._one(
-            "insert into approved_sizings select %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s "
+            "insert into approved_sizings select %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s "
             "where not exists (select 1 from kill_switches where contract_id = %s) "
             # approved again after a Revert of that container: its time moves past the
             # Revert, so it is sent to the Actuator once more (slice 12.9b)
@@ -825,7 +833,16 @@ class Store:
             "and r.kind = approved_sizings.kind and r.name = approved_sizings.name "
             "and r.container = approved_sizings.container "
             "and r.asked_at >= approved_sizings.approved_at) returning run_id",
-            (contract_id, run_id, *keys, *wanted, by, at, contract_id),
+            (
+                contract_id,
+                run_id,
+                *keys,
+                *wanted,
+                by,
+                at,
+                Jsonb(types) if types else None,
+                contract_id,
+            ),
         )
         if stored:
             return "approved"

@@ -479,17 +479,25 @@ def _sum_by_row(
 TYPE_LABELS = ("label_node_kubernetes_io_instance_type", "label_beta_kubernetes_io_instance_type")
 
 
+def node_types(prom: Prom, t: Target, window_s: int, end: float) -> dict[str, str]:
+    """node -> its instance type over the window, "" without the label: what the Sizings
+    per type are made of, and what the Actuator applies them by (slice 15.3b). The caller
+    keeps the guard of every node read."""
+    scoped = ",".join(f"{k}={_string(v)}" for k, v in sorted(t.labels.items()))
+    kinds = {}
+    for s in prom.instant(f"last_over_time(kube_node_labels{{{scoped}}}[{window_s}s])", end):
+        m = s["metric"]
+        kinds[label(m, "node")] = next((m[k] for k in TYPE_LABELS if m.get(k)), "")
+    return kinds
+
+
 def pod_types(prom: Prom, t: Target, window_s: int, end: float) -> dict[tuple[str, str], str]:
     """(namespace, pod) -> the instance type of the node it ran on, over the window, for
     the Contract's pods (slice 15.3a): "" for a node without the label (not allowlisted
     in kube-state-metrics, or bare metal). A pod whose node isn't found is left out:
     not known is no type. Node series carry no namespace: the caller keeps the guard
     of every node read."""
-    scoped = ",".join(f"{k}={_string(v)}" for k, v in sorted(t.labels.items()))
-    kinds = {}
-    for s in prom.instant(f"last_over_time(kube_node_labels{{{scoped}}}[{window_s}s])", end):
-        m = s["metric"]
-        kinds[label(m, "node")] = next((m[k] for k in TYPE_LABELS if m.get(k)), "")
+    kinds = node_types(prom, t, window_s, end)
     out = {}
     for s in prom.instant(f"last_over_time({selector('kube_pod_info', t)}[{window_s}s])", end):
         m = s["metric"]
@@ -991,6 +999,11 @@ def collect(
                 out.rooms[t.cluster] = rooms(prom, t, end)
             except UsageError as e:
                 out.rooms[t.cluster] = {"nodes": [], "problem": str(e)}
+            if cluster.actuator_token_secret:  # slice 15.3b: what it applies each type by
+                try:
+                    out.rooms[t.cluster]["types"] = node_types(prom, t, max(windows), end)
+                except UsageError as e:
+                    log.warning("%s/%s: its nodes' types not read: %s", c.id, t.cluster, e)
         if c.list_prices:
             if crossing:
                 out.nodes[t.cluster] = {"nodes": [], "problem": SHARED_STORE}
