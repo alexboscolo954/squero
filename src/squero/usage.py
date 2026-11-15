@@ -513,11 +513,15 @@ REGION_LABELS = (
 PROVIDERS = {"aws": "aws", "azure": "azure", "gce": "gcp"}  # kube_node_info provider_id scheme
 
 
-def nodes(prom: Prom, t: Target, end: float, provider: str | None = None) -> dict[str, Any]:
+def nodes(
+    prom: Prom, t: Target, end: float, provider: str | None = None, spot: str | None = None
+) -> dict[str, Any]:
     """The cluster's nodes for list prices (slice 10.4): per node its provider, region,
     instance type and capacity, from kube-state-metrics (whose node labels must be
     allowlisted). `problem` says why a node can't be priced; the nodes are kept anyway.
-    Node series carry no namespace: only the cluster's labels scope them."""
+    Node series carry no namespace: only the cluster's labels scope them. With the
+    cluster's `spot` label (slice 16.1a), whether each node carries it, and the label
+    the read was made with."""
     scoped = ",".join(f"{k}={_string(v)}" for k, v in sorted(t.labels.items()))
 
     def read(metric: str, *extra: str) -> list[dict[str, Any]]:
@@ -549,6 +553,7 @@ def nodes(prom: Prom, t: Target, end: float, provider: str | None = None) -> dic
                 "type": kind,
                 "vcpu": cpu or 0.0,
                 "gib": (memory or 0.0) / 2**30,
+                "spot": carries(have, spot),
             }
         )
     problem = None
@@ -560,7 +565,7 @@ def nodes(prom: Prom, t: Target, end: float, provider: str | None = None) -> dic
             "capacity: allowlist the node labels node.kubernetes.io/instance-type and "
             "topology.kubernetes.io/region in kube-state-metrics, or set the cluster's provider"
         )
-    return {"nodes": out, "problem": problem}
+    return {"nodes": out, "problem": problem, "spot": spot}
 
 
 def node_hours(prom: Prom, t: Target, start: float, end: float) -> tuple[float, float, int]:
@@ -591,7 +596,18 @@ SHARED_STORE = (
 POD_REQUESTS = "kube_pod_container_resource_requests"
 
 
-def rooms(prom: Prom, t: Target, at: float, pinned: str | None = None) -> dict[str, Any]:
+def carries(labels: dict[str, str], label: str | None) -> bool:
+    """Whether a node's `kube_node_labels` series carries `label` (`key=value`), as
+    kube-state-metrics names it; never without one."""
+    if not label:
+        return False
+    key, _, value = label.partition("=")
+    return labels.get(ksm_label(key)) == value
+
+
+def rooms(
+    prom: Prom, t: Target, at: float, pinned: str | None = None, spot: str | None = None
+) -> dict[str, Any]:
     """The cluster's nodes with what their Room is made of (slice 15.1a), from
     kube-state-metrics as it is at `at`: per node its allocatable, taints, whether it is
     cordoned, its instance type where the label is allowlisted, and the requests of the
@@ -616,11 +632,9 @@ def rooms(prom: Prom, t: Target, at: float, pinned: str | None = None) -> dict[s
     resolve), so its Sizings can be applied to it container by container.
     `pinned` (slice 15.2a): the cluster's Placement label, `key=value`; each node says
     whether it carries it, as kube-state-metrics shows it (a label it doesn't allowlist
-    is on no node).
+    is on no node); `spot` (slice 16.1a) the same of the cluster's spot label.
     `problem` when no node is read; the caller refuses a store shared with another
     Contract that has no cluster labels (`SHARED_STORE`), as for list prices."""
-    pin_key, _, pin_value = (pinned or "").partition("=")
-    shown = ksm_label(pin_key)
     scoped = [f"{k}={_string(v)}" for k, v in sorted(t.labels.items())]
 
     def of(metric: str, *extra: str) -> str:
@@ -726,7 +740,8 @@ def rooms(prom: Prom, t: Target, at: float, pinned: str | None = None) -> dict[s
             {
                 "node": name,
                 "type": next((have[k] for k in TYPE_LABELS if have.get(k)), ""),
-                "pinned": bool(pinned) and have.get(shown) == pin_value,
+                "pinned": carries(have, pinned),
+                "spot": carries(have, spot),
                 "taints": sorted(taints.get(name, [])),
                 "cordoned": name in cordoned,
                 "allocatable": allocatable.get(name, {}),
@@ -750,6 +765,7 @@ def rooms(prom: Prom, t: Target, at: float, pinned: str | None = None) -> dict[s
         "problem": problem,
         "budgets": [{"namespace": ns, "budget": name} for ns, name in budgets],
         "placement": pinned,  # the label it was read with (slice 15.2a)
+        "spot": spot,  # and its spot label's (slice 16.1a)
     }
 
 
@@ -1008,7 +1024,8 @@ def collect(
         else:
             try:
                 pinned = cluster.placement.label if cluster.placement else None
-                out.rooms[t.cluster] = rooms(prom, t, end, pinned)
+                spot = cluster.spot.label if cluster.spot else None
+                out.rooms[t.cluster] = rooms(prom, t, end, pinned, spot)
             except UsageError as e:
                 out.rooms[t.cluster] = {"nodes": [], "problem": str(e)}
             if cluster.actuator_token_secret:  # slice 15.3b: what it applies each type by
@@ -1016,12 +1033,13 @@ def collect(
                     out.rooms[t.cluster]["types"] = node_types(prom, t, max(windows), end)
                 except UsageError as e:
                     log.warning("%s/%s: its nodes' types not read: %s", c.id, t.cluster, e)
-        if c.list_prices:
+        if c.list_prices or cluster.spot:  # slice 16.1a: a typed price blends its spot too
             if crossing:
                 out.nodes[t.cluster] = {"nodes": [], "problem": SHARED_STORE}
             else:
                 try:
-                    out.nodes[t.cluster] = nodes(prom, t, end, cluster.provider)
+                    spot = cluster.spot.label if cluster.spot else None
+                    out.nodes[t.cluster] = nodes(prom, t, end, cluster.provider, spot)
                 except UsageError as e:
                     out.nodes[t.cluster] = {"nodes": [], "problem": str(e)}
         for w, found in by_window.items():

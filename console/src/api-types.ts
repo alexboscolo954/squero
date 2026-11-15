@@ -765,6 +765,7 @@ export interface components {
              * @default []
              */
             settings: string[];
+            spot?: components["schemas"]["SpotShown"] | null;
         };
         /** ClusterStatus */
         ClusterStatus: {
@@ -1333,6 +1334,11 @@ export interface components {
             };
             /** Slots */
             slots?: number | null;
+            /**
+             * Spot
+             * @default false
+             */
+            spot: boolean;
             /** Taints */
             taints: string[];
             /** Type */
@@ -1586,6 +1592,20 @@ export interface components {
             accrued: number;
             /** Rate */
             rate: number;
+        };
+        /**
+         * SpotShown
+         * @description A cluster's spot nodes (slice 16.1a): priced at `discount` of on-demand.
+         */
+        SpotShown: {
+            /** Discount */
+            discount: number;
+            /** Label */
+            label: string;
+            /** Nodes */
+            nodes: number;
+            /** Note */
+            note?: string | null;
         };
         /** Taught */
         Taught: {

@@ -118,9 +118,12 @@ def test_nodes_come_from_kube_state_metrics() -> None:
     node(fake, "b", "c5.xlarge", cpu=4, gib=8, provider_id="aws:///us-east-1b/i-0def")
     got = read(fake)
     assert got["problem"] is None
+    on_demand = {"spot": False}  # slice 16.1a: no spot label given
     assert got["nodes"] == [
-        {"provider": "aws", "region": "us-east-1", "type": "m5.large", "vcpu": 2, "gib": 8},
-        {"provider": "aws", "region": "us-east-1", "type": "c5.xlarge", "vcpu": 4, "gib": 8},
+        {"provider": "aws", "region": "us-east-1", "type": "m5.large", "vcpu": 2, "gib": 8}
+        | on_demand,
+        {"provider": "aws", "region": "us-east-1", "type": "c5.xlarge", "vcpu": 4, "gib": 8}
+        | on_demand,
     ]
 
 

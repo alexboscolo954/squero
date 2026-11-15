@@ -112,6 +112,7 @@ def test_each_node_is_read_with_what_its_room_is_made_of() -> None:
         "node": "n1",
         "type": "m5.xlarge",
         "pinned": False,  # slice 15.2a: no Placement given
+        "spot": False,  # slice 16.1a: no spot label given
         "taints": [],
         "cordoned": False,
         "allocatable": {"cpu": 4.0, "memory": 16.0 * GI},
@@ -234,6 +235,7 @@ def test_no_node_read_is_a_problem_and_a_cordoned_node_says_so() -> None:
         "problem": "no nodes read: kube_node_status_allocatable is missing",
         "budgets": [],
         "placement": None,  # slice 15.2a: read with no Placement label
+        "spot": None,  # slice 16.1a: nor a spot label
     }
     fake = FakePrometheus()
     node(fake, "n1")

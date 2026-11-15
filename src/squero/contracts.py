@@ -116,6 +116,15 @@ class Placement(Strict):
     )
 
 
+class Spot(Strict):
+    """Spot nodes (slice 16.1a): `label`, `key=value`, marks them (a node without it is
+    on-demand); `discount`, what a spot node costs as a share of its on-demand price
+    (0.35: it pays 35%), as `list_prices.discount` is a multiplier."""
+
+    label: str = Field(pattern=rf"^{LABEL_KEY}={LABEL_VALUE}$")
+    discount: float = Field(gt=0, lt=1)
+
+
 class Cluster(Strict):
     name: Slug
     namespaces: list[str] = Field(min_length=1)
@@ -153,6 +162,8 @@ class Cluster(Strict):
     # Placement (slice 15.2a): its Actuator's webhook prefers these nodes for the pods
     # that block a node; none: off
     placement: Placement | None = None
+    # Spot nodes (slice 16.1a): priced at their discount; none: every node on-demand
+    spot: Spot | None = None
 
     @model_validator(mode="after")
     def _placing(self) -> "Cluster":
@@ -845,6 +856,10 @@ class Contract(Strict):
     _shared_stores: set[str] = PrivateAttr(default_factory=set)
     # Where each cluster's price comes from (typed, list, or why none), set by listprices
     _price_notes: list[dict[str, str]] = PrivateAttr(default_factory=list)
+    # Where a cluster's spot nodes were priced at their discount (slice 16.1a): its price
+    # as a share of what its nodes would cost all on-demand, and what a spot node costs
+    # against an on-demand one; a node's own rate from them
+    _spot_shares: dict[str, tuple[float, float]] = PrivateAttr(default_factory=dict)
 
     @model_validator(mode="after")
     def _consistent(self) -> "Contract":

@@ -377,7 +377,7 @@ async def sizing_savings(contract_id: str, as_json: bool) -> int:
 
 
 def _price_notes(out: dict[str, Any]) -> None:
-    """Where each cluster's price comes from, for a Contract with list_prices."""
+    """Where each cluster's price comes from, for a Contract with list prices or spot."""
     for n in out.get("prices", []):
         print(f"prices {n['cluster']}: {n['note']}")
 
@@ -389,7 +389,7 @@ async def sizing_prices(contract_id: str, refresh: bool) -> int:
 
     settings = Settings()
     c = contract(settings, contract_id)
-    if not c.list_prices:
+    if not c.list_prices and not any(cl.spot for cl in c.clusters):
         print(f"{c.id}: no list_prices; its prices are typed" if c.prices else f"{c.id}: no prices")
         return 0
     async with connect(_store_url(settings)) as pool:
@@ -402,7 +402,7 @@ async def sizing_prices(contract_id: str, refresh: bool) -> int:
         eff = await listprices.effective(store, c, time.time())
     for n in eff._price_notes:
         print(f"{n['cluster']}: {n['note']}")
-    if eff.prices:
+    if eff.prices and c.list_prices:  # a typed Contract-level price is the on-demand rate
         print(
             f"{c.id}: {eff.prices.cpu:.4f} {eff.prices.currency} per vCPU-hour and "
             f"{eff.prices.memory:.4f} per GiB-hour (cluster average)"

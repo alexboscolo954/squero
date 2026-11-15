@@ -170,6 +170,7 @@ def _nodes(cl: webapp.ClusterNodes, top: int) -> dict[str, Any]:
         nodes.append(
             {
                 **{"node": n.node, "type": n.type, "taints": n.taints, "cordoned": n.cordoned},
+                **{"spot": n.spot},
                 **{"room": n.room, "pods": n.pods, "own_pods": n.mine.pods},
                 **{"not_visible_pods": n.others.pods, "could_be_removed": n.verdict.state},
                 **{"why": n.verdict.why, "blockers": blockers[:MAX_BLOCKERS]},
@@ -184,6 +185,7 @@ def _nodes(cl: webapp.ClusterNodes, top: int) -> dict[str, Any]:
         **{"autoscaler_settings_to_check": cl.settings},
         **{"judged": cl.judged, "could_go": went, "largest_room": cl.largest},
         **{"placement": _placement(cl.placement) if cl.placement else None},
+        **{"spot": cl.spot.model_dump() if cl.spot else None},
         **{"nodes": nodes, "more_nodes": max(0, len(listed) - top)},
     }
 
@@ -505,6 +507,9 @@ def build(
         spread rules are not seen) and a figure of its own, never part of Savings or
         waste; None when the read can't say. judged: how many nodes are blocked, clear
         or unknown (or pinned), so "none could go" of nodes nobody judged is no finding.
+        spot: where the cluster names spot nodes, their label, the discount they are priced
+        at (the share of on-demand they cost) and how many nodes carry it; each node says
+        whether it is spot, and a node that could go is priced at its own rate.
         placement: where the cluster has Placement, its label, how many nodes carry it
         (Pinned nodes: kept for pods that can't move, never removed), the Workloads its
         Actuator is told to place (their new pods prefer the Pinned nodes) and whether it

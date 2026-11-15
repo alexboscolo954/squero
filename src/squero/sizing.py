@@ -336,15 +336,38 @@ def largest_room(found: dict[str, Any] | None) -> dict[str, float] | None:
     }
 
 
-def _worth(names: list[str], read: dict[str, Any], p: ClusterPrices | None) -> dict[str, Any]:
+def _worth(
+    names: list[str], read: dict[str, Any], p: ClusterPrices | None, rate: dict[str, float]
+) -> dict[str, Any]:
     """Nodes that could go with what they are: their capacity (allocatable where it
-    wasn't read), and a month of it at the cluster's unit prices when it has them."""
+    wasn't read), and a month of it at the cluster's unit prices when it has them, each
+    node times its `rate` (slice 16.1a: its own price against the cluster's, a spot
+    node's below an on-demand one's; 1 for a node not in it)."""
     by = {n["node"]: n for n in read["nodes"]}
-    held = {
-        res: sum((by[n].get("capacity") or {}).get(res, by[n]["allocatable"][res]) for n in names)
-        for res in ("cpu", "memory")
-    }
-    return {"nodes": names, **held, "cost": monthly(p, **held) if p else None}
+
+    def held(n: str) -> dict[str, float]:
+        return {
+            res: (by[n].get("capacity") or {}).get(res, by[n]["allocatable"][res])
+            for res in ("cpu", "memory")
+        }
+
+    total = {res: sum(held(n)[res] for n in names) for res in ("cpu", "memory")}
+    cost = sum(monthly(p, **held(n)) * rate.get(n, 1.0) for n in names) if p else None
+    return {"nodes": names, **total, "cost": cost}
+
+
+def rates(read: dict[str, Any], c: Contract, cluster: str) -> dict[str, float]:
+    """Each node's price against its cluster's (slice 16.1a): the cluster's price is
+    the share of its nodes all on-demand that its pricing applied (`c._spot_shares`), so
+    an on-demand node costs it over that share and a spot node its own rate over it.
+    Empty where spot wasn't priced, or this read wasn't made with the label: every node
+    at the cluster's price."""
+    cl = next(x for x in c.clusters if x.name == cluster)
+    applied = c._spot_shares.get(cluster)
+    if cl.spot is None or applied is None or read.get("spot") != cl.spot.label:
+        return {}
+    share, spot = applied
+    return {n["node"]: (spot if n.get("spot") else 1.0) / share for n in read["nodes"]}
 
 
 def _sized_type(
@@ -468,7 +491,10 @@ def nodes_report(
     many nodes got each verdict, so that "none could go" shows what was not judged.
     `placement` (slice 15.2a), where the Contract names the cluster's label: the label
     and taint, how many nodes carry it, the Workloads its Actuator is told to place,
-    whether it places them (its last report says so), and a `note` when no node does."""
+    whether it places them (its last report says so), and a `note` when no node does.
+    `spot` (slice 16.1a), where it names the cluster's spot label: the label, the
+    discount, how many nodes carry it, and a `note` when none does; a node that could go
+    is priced at its own rate, a spot node's at the discount."""
     out = []
     for cl in c.clusters:
         read = found.get(cl.name)
@@ -481,8 +507,11 @@ def nodes_report(
         if first is not None:
             sized = [r for r in rows or [] if r["cluster"] == cl.name]
             later = blockers.could_go(blockers.after(read, sized), verdict) or []
-            price = c.price(cl.name)
-            went = {"now": _worth(first, read, price), "after": _worth(later, read, price)}
+            price, rate = c.price(cl.name), rates(read, c, cl.name)
+            went = {
+                "now": _worth(first, read, price, rate),
+                "after": _worth(later, read, price, rate),
+            }
         judged = {state: 0 for state in ("clear", "blocked", "unknown")}
         if cl.placement:
             judged["pinned"] = 0
@@ -504,6 +533,18 @@ def nodes_report(
                 **{"workloads": blockers.placing(verdict)},
                 **{"placing": bool(report and report.get("placing"))},
             }
+        spot = None
+        if s := cl.spot:  # slice 16.1a
+            count = sum(bool(n.get("spot")) for n in read["nodes"])
+            said = None
+            if read.get("spot") != s.label:
+                said = f"its nodes were not read with {s.label} yet: the next hourly run does"
+            elif not count and not read.get("problem"):
+                said = (
+                    f"no node carries {s.label} as kube-state-metrics shows it: allowlist it "
+                    "in its --metric-labels-allowlist, or every node is priced on-demand"
+                )
+            spot = {"label": s.label, "discount": s.discount, "nodes": count, "note": said}
         nodes = []
         for n in read["nodes"]:
             mine = {res: sum(p[res] for p in n["own"]) for res in ("cpu", "memory")}
@@ -525,7 +566,7 @@ def nodes_report(
                 **{"rules": blockers.RULES[cl.autoscaler]},
                 **{"settings": blockers.SETTINGS[cl.autoscaler]},  # slice 15.6
                 **{"reported": report["received"] if report else None},
-                **{"could_go": went, "judged": judged, "placement": placement},
+                **{"could_go": went, "judged": judged, "placement": placement, "spot": spot},
                 **{"problem": read.get("problem"), "largest": largest_room(read), "nodes": nodes},
             }
         )
@@ -1159,7 +1200,7 @@ def report(
             "waste": sum(w["cost"]["waste"] for w in ranked),
             "requests": sum(asked.values()),
         }
-    if contract is not None and contract.list_prices:
+    if contract is not None and contract._price_notes:  # list prices, or spot (16.1a)
         out["prices"] = contract._price_notes
     return out
 
@@ -1366,7 +1407,7 @@ async def cost(
         **allocate(rows, c, by),
         "realized": await savings(store, c, now, rows),
     }
-    if c.list_prices:
+    if c._price_notes:  # list prices, or spot (slice 16.1a)
         out["prices"] = c._price_notes
     if back is None:
         return out

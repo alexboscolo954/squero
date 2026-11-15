@@ -255,7 +255,11 @@ The Reflex for CPU throttling: an automated container with a CPU limit, not Guar
 _Avoid_: Startup boost (that is for a pod's start), Step-up (that is memory, after an OOM kill)
 
 **List price**:
-What a cloud charges on demand per hour for an instance type in a region, from its public price list (USD unless the Contract asks for another currency, which only Azure's and GCP's catalogs give; no discounts). A cluster with no typed prices gets its nodes' list prices, split into a CPU and a GiB price by one weight, so they add back up to the nodes' price.
+What a cloud charges on demand per hour for an instance type in a region, from its public price list (USD unless the Contract asks for another currency, which only Azure's and GCP's catalogs give; no discounts). A cluster with no typed prices gets its nodes' list prices, split into a CPU and a GiB price by one weight, so they add back up to the nodes' price. A Spot node's list price counts at the cluster's spot discount.
+
+**Spot node**:
+A node carrying the cluster's spot label (`spot.label` in the Contract; a node without it is on-demand), priced at the cluster's spot discount: the share of its on-demand price it costs (0.35: it pays 35%). The cluster's one CPU and one GiB price blend its spot and on-demand nodes, by size, each hour: a typed price is then the on-demand rate, a list price each spot node's at the discount. Every pod costs the cluster's blended price, wherever it runs; a Node that could go is priced at its own rate. Seen through kube-state-metrics, which shows a node label only when allowlisted; where no node shows it, every node is priced on-demand.
+_Avoid_: preemptible node, spot instance (the cloud's own words for the machine)
 
 **Bill**:
 What the cloud says a cluster's compute cost each UTC day, read from its billing API (AWS Cost Explorer, Azure Cost Management or GCP's billing export in BigQuery, usage before credits, lines carrying the cluster's `billing` tag). The Hub sets it beside the estimate (the cluster's node-hours at its unit prices): within 5% it reconciles, else it is flagged; when fewer than 90% of the window's hours were sampled it gives the gap but no verdict. A Bill never changes a shown cost.

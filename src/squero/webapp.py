@@ -423,6 +423,7 @@ class Node(BaseModel):
     node: str
     type: str  # its instance type, "" when the label is not allowlisted
     pinned: bool = False  # it carries the cluster's Placement label (slice 15.2a)
+    spot: bool = False  # it carries the cluster's spot label (slice 16.1a)
     taints: list[str]  # key=value:effect
     cordoned: bool
     allocatable: dict[str, float]
@@ -464,6 +465,15 @@ class PlacementShown(BaseModel):
     placing: bool  # its Actuator places them, by its last report
 
 
+class SpotShown(BaseModel):
+    """A cluster's spot nodes (slice 16.1a): priced at `discount` of on-demand."""
+
+    label: str
+    discount: float
+    nodes: int  # carrying the label
+    note: str | None = None  # when none does
+
+
 class ClusterNodes(BaseModel):
     cluster: str
     at: float  # the run that read them
@@ -474,6 +484,7 @@ class ClusterNodes(BaseModel):
     could_go: Scenarios | None = None  # None: its read can't say
     judged: dict[str, int] = {}  # how many nodes got each verdict
     placement: PlacementShown | None = None  # None: off
+    spot: SpotShown | None = None  # None: every node on-demand (slice 16.1a)
     problem: str | None = None  # why there are none
     largest: dict[str, float] | None = None  # the Room after DaemonSets that caps Sizings
     nodes: list[Node]

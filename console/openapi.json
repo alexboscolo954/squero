@@ -883,6 +883,16 @@
             },
             "title": "Settings",
             "type": "array"
+          },
+          "spot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SpotShown"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -2624,6 +2634,11 @@
             ],
             "title": "Slots"
           },
+          "spot": {
+            "default": false,
+            "title": "Spot",
+            "type": "boolean"
+          },
           "taints": {
             "items": {
               "type": "string"
@@ -3356,6 +3371,41 @@
           "accrued"
         ],
         "title": "SpentCost",
+        "type": "object"
+      },
+      "SpotShown": {
+        "description": "A cluster's spot nodes (slice 16.1a): priced at `discount` of on-demand.",
+        "properties": {
+          "discount": {
+            "title": "Discount",
+            "type": "number"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "nodes": {
+            "title": "Nodes",
+            "type": "integer"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "required": [
+          "label",
+          "discount",
+          "nodes"
+        ],
+        "title": "SpotShown",
         "type": "object"
       },
       "Taught": {

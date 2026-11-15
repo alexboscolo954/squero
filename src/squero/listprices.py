@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import ijson  # type: ignore[import-untyped]
 
-from squero.contracts import ClusterPrices, Contract, Prices
+from squero.contracts import Cluster, ClusterPrices, Contract, ListPrices, Prices
 
 if TYPE_CHECKING:
     from squero.store import Store
@@ -245,35 +245,104 @@ async def refresh(
     return looked
 
 
+def spot_paid(
+    sizes: Iterable[tuple[float, float, bool]], weight: float, discount: float
+) -> tuple[float, int]:
+    """What a cluster's nodes cost as a share of their on-demand price (slice 16.1a),
+    from each node's (vCPU, GiB, spot): its size (`weight` GiB a vCPU, as a price is
+    split) at the discount where spot; and how many are spot. 1.0 with none."""
+    total = paid = 0.0
+    spot = 0
+    for vcpu, gib, on_spot in sizes:
+        size = weight * vcpu + gib
+        total += size
+        paid += size * (discount if on_spot else 1.0)
+        spot += on_spot
+    return (paid / total if total else 1.0), spot
+
+
+def _spot_of(cluster: Cluster, facts: dict[str, Any] | None) -> tuple[bool, str]:
+    """Whether a cluster's read of its nodes can price its spot ones (slice 16.1a), and
+    what its price note says of them."""
+    if cluster.spot is None:
+        return False, ""
+    label = cluster.spot.label
+    if facts is not None and not facts["nodes"] and facts.get("problem"):
+        return False, f", spot not priced: {facts['problem']}"
+    if facts is None or facts.get("spot") != label:
+        return False, f", spot not priced yet: the next hourly run reads {label}"
+    count = sum(bool(n.get("spot")) for n in facts["nodes"])
+    if not count:
+        return False, (
+            f", no node carries {label} as kube-state-metrics shows it: allowlist it in its "
+            "--metric-labels-allowlist, or every node is priced on-demand"
+        )
+    return True, f", spot x{cluster.spot.discount:g} on {count} of {len(facts['nodes'])} nodes"
+
+
+def _typed(
+    cluster: Cluster, typed: ClusterPrices, facts: dict[str, Any] | None, weight: float
+) -> tuple[ClusterPrices, str, tuple[float, float] | None]:
+    """A typed price with the cluster's spot nodes at their discount (slice 16.1a): read
+    as the on-demand rate, times what its nodes cost as a share of it (also returned;
+    None where spot isn't priced)."""
+    priced, said = _spot_of(cluster, facts)
+    if not priced or cluster.spot is None or facts is None:
+        return typed, "typed prices" + said, None
+    sizes = [(n["vcpu"], n["gib"], bool(n.get("spot"))) for n in facts["nodes"]]
+    share, _ = spot_paid(sizes, weight, cluster.spot.discount)
+    blended = ClusterPrices(cpu=typed.cpu * share, memory=typed.memory * share)
+    return blended, f"typed prices{said}: x{share:.3f} of them", (share, cluster.spot.discount)
+
+
 def resolve(
     c: Contract,
     nodes: dict[str, dict[str, Any]],
     rows: dict[Key, dict[str, Any]],
     now: float,
+    shares: dict[str, tuple[float, float]] | None = None,
 ) -> tuple[dict[str, ClusterPrices], list[dict[str, str]]]:
     """Each cluster's prices (typed, else from the list) and, per cluster, where its
-    price came from or why it has none."""
+    price came from or why it has none; in `shares`, each cluster's whose spot nodes
+    were priced, its price as a share of its nodes all on-demand, and a spot node's
+    against an on-demand one (slice 16.1a): a deal (`discount`) is an on-demand node's
+    only, so a spot node pays its own discount of the list price and no more."""
+    shares = {} if shares is None else shares
     assert c.list_prices is not None
     prices: dict[str, ClusterPrices] = {}
     notes = []
     for cluster in c.clusters:
         if cluster.prices:
-            prices[cluster.name] = cluster.prices
-            notes.append({"cluster": cluster.name, "source": "typed", "note": "typed prices"})
+            typed, said, share = _typed(
+                cluster, cluster.prices, nodes.get(cluster.name), c.list_prices.weight
+            )
+            prices[cluster.name] = typed
+            if share is not None:
+                shares[cluster.name] = share
+            notes.append({"cluster": cluster.name, "source": "typed", "note": said})
             continue
-        got = _from_list(c, nodes.get(cluster.name), rows, now)
+        got = _from_list(c, cluster, nodes.get(cluster.name), rows, now)
         if isinstance(got, str):
             notes.append({"cluster": cluster.name, "source": "none", "note": got})
         else:
             prices[cluster.name] = got[0]
             notes.append({"cluster": cluster.name, "source": "list", "note": got[1]})
+            if got[2] is not None:
+                shares[cluster.name] = got[2]
     return prices, notes
 
 
 def _from_list(
-    c: Contract, facts: dict[str, Any] | None, rows: dict[Key, dict[str, Any]], now: float
-) -> tuple[ClusterPrices, str] | str:
+    c: Contract,
+    cluster: Cluster,
+    facts: dict[str, Any] | None,
+    rows: dict[Key, dict[str, Any]],
+    now: float,
+) -> tuple[ClusterPrices, str, tuple[float, float] | None] | str:
     assert c.list_prices is not None
+    priced, said = _spot_of(cluster, facts)
+    deal = c.list_prices.discount  # an on-demand node's only: no deal covers spot capacity
+    on_demand = 0.0  # the same nodes all on-demand
     if facts is None:
         return "no list price yet: the next hourly run reads the nodes"
     if facts["problem"]:
@@ -286,7 +355,9 @@ def _from_list(
         if row is None or row["hour_price"] is None:
             why = f" ({row['error']})" if row and row["error"] else " (looked up daily)"
             return f"no list price yet for {n['provider']} {n['type']} in {n['region']}{why}"
-        total += row["hour_price"]
+        on_spot = priced and cluster.spot is not None and n.get("spot")
+        total += row["hour_price"] * (cluster.spot.discount if on_spot and cluster.spot else deal)
+        on_demand += row["hour_price"] * deal
         vcpu += n["vcpu"]
         gib += n["gib"]
         oldest = min(oldest, row["ok_at"])
@@ -294,23 +365,46 @@ def _from_list(
             shapes.get(f"{n['provider']} {n['type']} in {n['region']}", 0) + 1
         )
     w = c.list_prices.weight
-    memory = total / (w * vcpu + gib) * c.list_prices.discount
+    memory = total / (w * vcpu + gib)
     age = (now - oldest) / HOUR
     old = f", {age / 24:.0f} days old" if now - oldest > STALE else ""
     made = ", ".join(f"{n} x {s}" for s, n in sorted(shapes.items()))
-    deal = f", discount x{c.list_prices.discount:g}" if c.list_prices.discount != 1 else ""
-    note = f"list price of {made} (1 vCPU = {w:g} GiB{deal}), read {age:.0f} h ago{old}"
-    return ClusterPrices(cpu=w * memory, memory=memory), note
+    off = f", discount x{deal:g}" if deal != 1 else ""
+    note = f"list price of {made} (1 vCPU = {w:g} GiB{off}), read {age:.0f} h ago{old}{said}"
+    against = cluster.spot.discount / deal if cluster.spot else 1.0
+    share = (total / on_demand, against) if priced and on_demand else None
+    return ClusterPrices(cpu=w * memory, memory=memory), note, share
 
 
 async def effective(store: "Store", c: Contract, now: float) -> Contract:
     """The Contract as its prices stand now: with `list_prices`, every cluster priced
     or the Contract left unpriced (money for some clusters and cores for the others
     can't be ranked), and `price_notes` saying where each price came from."""
-    if not c.list_prices or c._price_notes:  # none to resolve, or already resolved
-        return c
+    if c._price_notes or not (c.list_prices or any(cl.spot for cl in c.clusters)):
+        return c  # already resolved, or nothing to resolve
+    shares: dict[str, tuple[float, float]] = {}
+    if not c.list_prices:  # typed prices only: its spot clusters' blended (slice 16.1a)
+        facts = await store.latest_nodes(c.id)
+        clusters, notes = [], []
+        for cl in c.clusters:
+            typed = c.price(cl.name)
+            if cl.spot is None or typed is None:
+                clusters.append(cl)
+                continue
+            blended, note, share = _typed(cl, typed, facts.get(cl.name), ListPrices().weight)
+            clusters.append(cl.model_copy(update={"prices": blended}))
+            notes.append({"cluster": cl.name, "source": "typed", "note": note})
+            if share is not None:
+                shares[cl.name] = share
+        out = c.model_copy(update={"clusters": clusters})
+        out._price_notes, out._spot_shares = notes, shares
+        return out
     prices, notes = resolve(
-        c, await store.latest_nodes(c.id), await store.list_prices(c.list_prices.currency), now
+        c,
+        await store.latest_nodes(c.id),
+        await store.list_prices(c.list_prices.currency),
+        now,
+        shares,
     )
     out = c.model_copy()
     if len(prices) == len(c.clusters):
@@ -327,5 +421,5 @@ async def effective(store: "Store", c: Contract, now: float) -> Contract:
                 ),
             }
         )
-    out._price_notes = notes
+    out._price_notes, out._spot_shares = notes, shares
     return out

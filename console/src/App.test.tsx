@@ -955,6 +955,7 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
   expect(edge?.querySelector("table")).toBeNull();
   expect(screen.getByText("Nodes", { selector: "nav a" }).getAttribute("aria-current")).toBe("page");
   expect(kind?.querySelector(".placement")).toBeNull(); // no Placement: nothing said of it
+  expect(kind?.querySelector(".spot")).toBeNull(); // no spot label: nothing said of it
 });
 
 test("Nodes shows a cluster's Placement, its Pinned nodes and which Workload to restart", async () => {
@@ -969,11 +970,12 @@ test("Nodes shows a cluster's Placement, its Pinned nodes and which Workload to 
     "/api/v1/contracts/demo-shop/nodes": [
       200,
       { currency: null, clusters: [{ cluster: "kind", at: 1_700_000_000, autoscaler: "cluster-autoscaler", problem: null, largest: null, could_go: null,
+        spot: { label: "karpenter.sh/capacity-type=spot", discount: 0.35, nodes: 1, note: null },
         rules: "Cluster Autoscaler's rules", reported: 1_700_000_600, judged: { clear: 0, blocked: 2, unknown: 0, pinned: 1 },
         placement: { label: "squero.io/pinned=yes", taint: "squero.io/pinned=yes:NoSchedule", pinned: 1, note: null, workloads: ["shop/Deployment/api"], placing: true },
         nodes: [
           { ...base, node: "p1", pinned: true, verdict: { state: "pinned", why: null, blockers: [keeps("api-0", { changes: [] })] } },
-          { ...base, node: "w1", verdict: { state: "blocked", why: null, restart: restart(["shop/Deployment/api"]),
+          { ...base, node: "w1", spot: true, verdict: { state: "blocked", why: null, restart: restart(["shop/Deployment/api"]),
             blockers: [keeps("api-1", { note: "placed, on w1: the pinned nodes had no room when it started" })] } },
           { ...base, node: "w2", verdict: { state: "blocked", why: null, restart: restart([], "pod shop/web-1 would still hold it"),
             blockers: [keeps("api-2"), { namespace: "shop", pod: "web-1", reasons: ["PodDisruptionBudget web allows no disruption"], placement: null }] } },
@@ -987,7 +989,10 @@ test("Nodes shows a cluster's Placement, its Pinned nodes and which Workload to 
   );
   const rows = [...page.querySelectorAll("tbody tr")];
   expect(rows[0]?.firstElementChild?.querySelector(".chip")?.textContent).toBe("pinned");
-  expect(rows[1]?.firstElementChild?.querySelector(".chip")).toBeNull();
+  expect(rows[1]?.firstElementChild?.querySelector(".chip")?.textContent).toBe("spot"); // slice 16.1a
+  expect(page.querySelector(".spot")?.textContent).toBe(
+    "Spot: nodes labelled karpenter.sh/capacity-type=spot (1) are priced at 0.35 of on-demand. ",
+  );
   const verdicts = rows.map((tr) => tr.lastElementChild?.textContent);
   expect(verdicts[0]).toBe("no: pinned, kept for pods that can't moveshop/api-0: annotated safe-to-evict: falseplaced");
   expect(verdicts[1]).toContain("placed, on w1: the pinned nodes had no room when it started.");

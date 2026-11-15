@@ -64,6 +64,12 @@ export function NodesPage({ contract }: { contract: string }) {
               {!c.placement.placing && "Its Actuator doesn't place them yet."}
             </p>
           )}
+          {c.spot && (
+            <p className="hint spot">
+              Spot: nodes labelled {c.spot.label} ({c.spot.nodes}) are priced at {c.spot.discount} of on-demand.{" "}
+              {c.spot.note && <span className="notice">{c.spot.note}.</span>}
+            </p>
+          )}
           {(c.settings ?? []).length > 0 && (
             <details className="settings">
               <summary>Its autoscaler's own settings to check (the Hub can't read them)</summary>
@@ -122,6 +128,11 @@ export function NodesPage({ contract }: { contract: string }) {
                     <td>
                       {n.node} {n.type && <span className="hint">{n.type}</span>}{" "}
                       {n.cordoned && <span className="chip">cordoned</span>}{" "}
+                      {n.spot && (
+                        <>
+                          <span className="chip">spot</span>{" "}
+                        </>
+                      )}
                       {n.pinned && (
                         <>
                           <span className="chip">pinned</span>{" "}
