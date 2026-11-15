@@ -51,6 +51,7 @@ Name = Field(max_length=253)
 # console and, from slice 15.4, the Hub MCP's model: a name of another shape is no name
 NAME = re.compile(r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?")
 KIND = re.compile(r"[A-Za-z][A-Za-z0-9]{0,62}")
+WORKLOAD = re.compile(f"{KIND.pattern}/{NAME.pattern}")  # a pod's, as its Actuator names it
 
 
 class PodFacts(BaseModel):
@@ -74,6 +75,9 @@ class PodFacts(BaseModel):
     allowed: int | None = Field(None, ge=0)
     started: float | None = None  # when it started, by its status: a duration counts from it
     placed: bool = False  # it carries its cluster's Placement preference (slice 15.2a)
+    # its Workload as the Actuator's webhook names it, `Kind/name` (slice 15.2b): from the
+    # pod itself, so a pod newer than the Hub's last read of the nodes still has one
+    workload: str | None = Field(None, max_length=64 + 254)
 
 
 class Report(BaseModel):
@@ -91,14 +95,17 @@ class Report(BaseModel):
 
 def sent(r: Report) -> dict[str, Any]:
     """A report as an Actuator posts it: `placing` and a pod's `placed` (slice 15.2a)
-    only when true, so a Hub from before them, whose report refuses a field it doesn't
-    know, takes the report of an Actuator that doesn't place."""
+    only when true, and its `workload` (15.2b) only when known, so a Hub from before
+    them, whose report refuses a field it doesn't know, takes the report of an Actuator
+    that doesn't place (only a Hub that knows them gives an Actuator a Placement)."""
     body = r.model_dump()
     if not r.placing:
         del body["placing"]
     for p in body["pods"]:
         if not p["placed"]:
             del p["placed"]
+        if p["workload"] is None:  # slice 15.2b, the same way
+            del p["workload"]
     return body
 
 
@@ -114,6 +121,8 @@ def unreal(r: Report) -> str | None:
     for p in r.pods:
         named = [p.namespace, p.pod, p.node, *([] if p.budget is None else [p.budget])]
         if not all(NAME.fullmatch(n) for n in named):  # what Kubernetes itself refuses
+            return "pods"
+        if p.workload is not None and not WORKLOAD.fullmatch(p.workload):
             return "pods"
         names = [*p.empty_dir, *p.in_memory, *p.host_path, *p.annotations.values()]
         if any(len(n) > 253 for n in names) or set(p.annotations) - set(ANNOTATIONS):
@@ -497,6 +506,9 @@ def verdicts(
             if p["node"] != n["node"] or p["namespace"] not in cluster.namespaces:
                 continue
             w = whose.get((p["namespace"], p["pod"]))
+            if p.get("workload"):  # slice 15.2b: its Actuator's, from the pod itself
+                kind, _, name = p["workload"].partition("/")
+                w = {"kind": kind, "name": name}
             made = changes(p, cluster.autoscaler, now, w)
             if made:
                 rules = [rule for rule, _ in _found(p, cluster.autoscaler, now)]

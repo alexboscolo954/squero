@@ -82,6 +82,7 @@ def test_each_fact_is_sent_as_it_is_and_never_a_verdict() -> None:
     plain = {"namespace": "shop", "pod": "api-1", "node": "n1", "kind": "ReplicaSet"}
     plain |= {"name": "owner", "empty_dir": [], "in_memory": [], "host_path": []}
     plain |= {"annotations": {}, "budget": None, "allowed": None, "started": None, "placed": False}
+    plain |= {"workload": None}  # slice 15.2b: only with a Placement
     assert facts(kpod(by=None)) == plain | {"kind": "", "name": ""}
     assert facts(kpod(by="Cluster")) == plain | {"kind": "Cluster"}  # a custom controller's
     owned = kpod()
@@ -385,14 +386,21 @@ def test_what_an_actuator_builds_is_never_refused(settings: Settings, database_u
     safe = "cluster_autoscaler.kubernetes.io__safe_to_evict"
     full = kpod("p" * 253, by=None, volumes=[EMPTY, RAM, HOST], **{safe: "x" * 400})
     full.status.start_time = datetime.fromtimestamp(NOW, UTC)
+    named = kpod("api-x", labels={"app": "api", "pod-template-hash": "h"}, **{safe: "false"})
+    named.metadata.owner_references[0].name = "api-h"  # a Deployment's: its Workload named
     core, policy = apis(
-        {"shop": [[full, kpod("b", by="Cluster")]]}, {"shop": [budget("b" * 253, 0, app="api")]}
+        {"shop": [[full, kpod("b", by="Cluster"), named]]},
+        {"shop": [budget("b" * 253, 0, app="api")]},
     )
-    report = actuator.blocking(core, policy, ["shop"], NOW)
-    assert len(report.pods) == 2 and blockers.unreal(report) is None
+    # with a Placement (slice 15.2b): `placing`, `placed` and a pod's `workload` go too
+    report = actuator.blocking(core, policy, ["shop"], NOW, "squero.io/pinned=yes")
+    assert len(report.pods) == 3 and blockers.unreal(report) is None
+    assert report.placing and report.pods[0].workload == "Deployment/api"
     app = hub(settings, database_url, actuated("acme", A_TOKEN))
     with TestClient(app) as c:
-        sent = c.post("/actuator/blockers", headers=as_actuator(A_TOKEN), json=report.model_dump())
+        sent = c.post(
+            "/actuator/blockers", headers=as_actuator(A_TOKEN), json=blockers.sent(report)
+        )
     assert sent.status_code == 204
     odd = report.model_copy(
         update={"pods": [report.pods[0].model_copy(update={"started": float("inf")})]}

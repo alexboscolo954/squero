@@ -1832,16 +1832,17 @@ def create_app(
     async def placement(cid: str, cluster: contracts.Cluster) -> actuator.Placing | None:
         """The cluster's Placement for its Actuator (slice 15.2a): the Workloads whose pods
         block a node for a reason set in their spec, by its last report and the last read
-        of its nodes. None: off, or no usable report or read, so what it knew stays."""
+        of its nodes. None: off. No list (`workloads` None) without a usable report or
+        read: the Actuator keeps the last it got."""
         if not (p := cluster.placement):
             return None
         names = {cluster.name}
         read = (await store().latest_rooms(cid, names)).get(cluster.name)
         report = (await store().latest_blockers(cid, names)).get(cluster.name)
-        if read is None or read.get("problem") or blockers.gap(report, cluster, time.time()):
-            return None
-        verdict = blockers.verdicts(read, report, cluster, time.time())
-        return actuator.Placing(label=p.label, taint=p.taint, workloads=blockers.placing(verdict))
+        known = None
+        if read and not read.get("problem") and not blockers.gap(report, cluster, time.time()):
+            known = blockers.placing(blockers.verdicts(read, report, cluster, time.time()))
+        return actuator.Placing(label=p.label, taint=p.taint, workloads=known)
 
     # slice 15.3c: whether each cluster's Actuator applies types, as last stored: the store
     # is written only when a pull says otherwise

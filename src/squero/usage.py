@@ -620,7 +620,7 @@ def rooms(prom: Prom, t: Target, at: float, pinned: str | None = None) -> dict[s
     `problem` when no node is read; the caller refuses a store shared with another
     Contract that has no cluster labels (`SHARED_STORE`), as for list prices."""
     pin_key, _, pin_value = (pinned or "").partition("=")
-    shown = "label_" + re.sub(r"[^a-zA-Z0-9_]", "_", pin_key)  # as kube-state-metrics names it
+    shown = ksm_label(pin_key)
     scoped = [f"{k}={_string(v)}" for k, v in sorted(t.labels.items())]
 
     def of(metric: str, *extra: str) -> str:

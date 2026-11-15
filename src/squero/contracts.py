@@ -659,8 +659,12 @@ NO_TEAM = "(no team)"
 
 
 def ksm_label(key: str) -> str:
-    """kube-state-metrics' name for a pod label on kube_pod_labels."""
-    return "label_" + re.sub(r"[^a-zA-Z0-9_]", "_", key)
+    """kube-state-metrics' name for a label on kube_pod_labels and kube_node_labels: every
+    character Prometheus doesn't take as `_`, then snake case (`example.com/PinnedPool`
+    is `label_example_com_pinned_pool`, as a real kube-state-metrics showed in 15.2b's
+    live check; before it a key with a capital letter was never found)."""
+    safe = re.sub(r"[^a-zA-Z0-9_]", "_", key)
+    return "label_" + re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", safe).lower()
 
 
 class TeamRule(Strict):

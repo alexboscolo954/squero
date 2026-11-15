@@ -256,6 +256,18 @@ Once an hour the Actuator also tells the Hub which pods in the Contract's namesp
 - **Names are checked.** The Hub refuses a report whose namespace, pod, node or PodDisruptionBudget name is not shaped like a Kubernetes name (what Kubernetes itself would refuse), since these strings reach the console and the Hub MCP's model.
 - **What it could not read** it says: a namespace it is not bound in, or whose read failed, is left out of the namespaces it lists, and the Hub then gives that namespace's nodes no verdict. Over 1000 pods, or over the megabyte the Hub's proxy lets through, the report is cut there and says so.
 - **When.** Hourly, after everything else in its minute and on its own: a failure there costs no resize and no Rollback. A report that didn't reach the Hub goes again in five minutes; one the Hub refused (an older Hub has no such route) waits the hour. The Hub stores a cluster's latest only, dated by its own clock, and refuses a report that names a namespace outside the cluster's.
+- **With Placement** (from 0.55.0) the report also says that the Actuator places, and per pod whether it carries Placement's preference and its Workload as the webhook names it (`Deployment/api`, from the pod's owners and labels), so the list doesn't wait for the Hub's next read of a new pod. Sent only once the Hub has given it a Placement: an older Hub refuses a field it doesn't know.
+
+## Placement: gathering the pods that can't move
+
+A pod that blocks its node's removal keeps that node whatever it asks. Where the Contract names a cluster's [Placement](optimizer.md#placement) label, the Actuator's webhook gives each new pod of a Workload the Hub lists (one whose pods block a node for a reason set in their spec) a preference for the nodes carrying it, the **Pinned nodes**, and a toleration of their taint where the Contract names one ([ADR 0006](adr/0006-placement-is-a-preference.md)).
+
+- **A preference, never a requirement.** One preferred node affinity term of weight 100, added after the pod's own terms; nothing the pod has is replaced, and nothing is added where it prefers that label already. With no room on a Pinned node, the pod starts elsewhere.
+- **The toleration** goes on the placed pods only, and only for the taint the Contract names: `key=value:Effect` is tolerated `Equal`, `key:Effect` `Exists`. Tainting the Pinned nodes keeps other pods off them, which leaves room there for the ones that can't move.
+- **Never a running pod.** A pod's affinity can't change once it exists, and the Actuator never evicts or restarts for Placement: a running pod moves at its Workload's next rollout or restart, which a person does when the Nodes page says "Restart shop/Deployment/api to free it".
+- **Said on the Workload.** An Event `Placed` when a Workload joins the list ("Placement: its new pods prefer the nodes labelled squero.io/pinned=yes"), `PlacementEnded` when it leaves; its running pods keep what they have. After the Actuator restarts, its first list says them again.
+- **Stopped** by the Kill switch and the pause annotation, as everything the webhook does. A list the Hub can't make now (no fresh report, no read of the nodes) leaves the last one in place; the Contract's Placement removed ends it.
+- **No new permission**: a JSON Patch on a pod's creation and Events, which it already writes. A DaemonSet's pods are never placed.
 
 ## Stopping it: pause, Hub down
 
@@ -265,6 +277,6 @@ A person in the client's cluster stops the Actuator on one Workload (a Deploymen
 kubectl -n shop annotate deployment api squero-actuator/pause=true   # --overwrite ... =false, or remove it, to lift it
 ```
 
-The Actuator reads it each minute: nothing is resized on that Workload (no approval, no Automation, no catch-up, a rollout stops where it is), and its webhook lets its new pods start from their template, as under the Kill switch. A rollback still happens, and nothing is reverted at once. An approval meanwhile waits, and applies once the pause is lifted if it is still current. To stop it everywhere, scale the Actuator to zero (the webhook fails open).
+The Actuator reads it each minute: nothing is resized on that Workload (no approval, no Automation, no catch-up, a rollout stops where it is), and its webhook lets its new pods start from their template, as under the Kill switch: no Placement either. A rollback still happens, and nothing is reverted at once. An approval meanwhile waits, and applies once the pause is lifted if it is still current. To stop it everywhere, scale the Actuator to zero (the webhook fails open).
 
 While the Hub doesn't answer, the Actuator keeps what it holds and changes nothing new (rollbacks and hand-backs go on). After 15 minutes it says so once, a `HubUnreachable` Warning Event on its ConfigMap in its own namespace (`kubectl -n squero-actuator get events`).

@@ -294,13 +294,14 @@ class Boost(BaseModel):
 
 class Placing(BaseModel):
     """The cluster's Placement (slice 15.2a): its Pinned nodes' label (`key=value`) and
-    taint, and the Workloads whose new pods prefer them, `namespace/Kind/name`."""
+    taint, and the Workloads whose new pods prefer them, `namespace/Kind/name`; None:
+    not known now (no usable report or read of the nodes), the last list stays."""
 
     model_config = ConfigDict(extra="ignore")
 
     label: str
     taint: str | None = None
-    workloads: list[str] = []
+    workloads: list[str] | None = None
 
 
 class Desired(BaseModel):
@@ -338,8 +339,8 @@ class Desired(BaseModel):
     # sent under the Kill switch too (a read is no change). None, as from an older Hub:
     # nothing is reported
     blockers: list[str] | None = None
-    # slice 15.2a: the cluster's Placement, from its last usable report of Blockers. None:
-    # off, or no usable report (what it knew stays). Read by no Actuator yet: 15.2b acts on it
+    # slice 15.2a: the cluster's Placement; None: off (as from an older Hub). Not sent
+    # under the Kill switch, where the Actuator keeps what it had and places nothing
     placement: Placing | None = None
 
 
@@ -1228,13 +1229,15 @@ def selects(s: Any, labels: dict[str, str]) -> bool:
     return all(labels.get(k) == v for k, v in (s.match_labels or {}).items())
 
 
-def pod_facts(p: Any, budgets: list[Any]) -> blockers.PodFacts | None:
+def pod_facts(p: Any, budgets: list[Any], label: str | None = None) -> blockers.PodFacts | None:
     """A pod's facts for the Hub's Blocker rules (slice 15.1b), or None for one that
     blocks no one's removal of its node: not on a node yet, finished or on its way out,
     a DaemonSet's or the node's own static pod (they stay with it), or with no fact at
     all. `budgets`: its namespace's PodDisruptionBudgets; the one covering it that
     allows the fewest disruptions is named, one whose status isn't written yet as
-    allowing none. Facts only: which of them block is the Hub's to say."""
+    allowing none. Facts only: which of them block is the Hub's to say. With the
+    cluster's Placement `label` (slice 15.2b): whether the pod carries its preference,
+    and its Workload as the webhook names it, where it names one."""
     meta, spec = p.metadata, p.spec
     noted = meta.annotations or {}
     if not spec.node_name or p.status.phase in ("Succeeded", "Failed"):
@@ -1266,17 +1269,42 @@ def pod_facts(p: Any, budgets: list[Any]) -> blockers.PodFacts | None:
         budget=budget,
         allowed=allowed,
         started=p.status.start_time.timestamp() if p.status.start_time else None,
+        placed=carries(p, label or ""),  # no label: no key matches
     )
     told = bool(f.empty_dir or f.host_path or f.annotations) or allowed == 0
     told = told or f.kind not in blockers.BUILT_IN
-    return f if told or (f.namespace == "kube-system" and budget is None) else None
+    if not (told or (f.namespace == "kube-system" and budget is None)):
+        return None
+    if not label:  # only to a Hub that gave it a Placement: an older one refuses the field
+        return f
+    owners = {o.kind: o.name for o in meta.owner_references or []}
+    of = workload_of(owners, meta.labels or {})
+    return f.model_copy(update={"workload": "/".join(of)}) if of else f
 
 
-def blocking(core: Any, policy: Any, namespaces: list[str], now: float) -> blockers.Report:
+def carries(p: Any, label: str) -> bool:
+    """Whether a pod prefers the nodes with `label` (`key=value`), as Placement's
+    preference does (slice 15.2b): its own or the webhook's, the same fact."""
+    affinity = p.spec.affinity
+    node = affinity.node_affinity if affinity else None
+    terms = (node.preferred_during_scheduling_ignored_during_execution if node else None) or []
+    key, _, value = label.partition("=")
+    return any(
+        e.key == key and e.operator == "In" and value in (e.values or [])
+        for t in terms
+        if t.preference
+        for e in t.preference.match_expressions or []
+    )
+
+
+def blocking(
+    core: Any, policy: Any, namespaces: list[str], now: float, label: str | None = None
+) -> blockers.Report:
     """The Blocker facts of `namespaces`' pods (slice 15.1b), read a page at a time. A
     namespace it may not read, or whose read fails, is left out of `namespaces`: the Hub
     then knows what it wasn't told. Over `MAX_PODS`, or over the size the Hub's proxy
-    lets through: cut there, and said."""
+    lets through: cut there, and said. With the cluster's Placement `label` (slice
+    15.2b) it says it places, and which pods carry the preference."""
     read, found = [], []
     for ns in sorted(set(namespaces)):
         try:
@@ -1284,7 +1312,7 @@ def blocking(core: Any, policy: Any, namespaces: list[str], now: float) -> block
             here, token = [], None
             while True:
                 page = core.list_namespaced_pod(ns, limit=PAGE, _continue=token)
-                here += [f for p in page.items if (f := pod_facts(p, budgets))]
+                here += [f for p in page.items if (f := pod_facts(p, budgets, label))]
                 token = page.metadata._continue if page.metadata else None
                 if not token:
                     break
@@ -1299,6 +1327,7 @@ def blocking(core: Any, policy: Any, namespaces: list[str], now: float) -> block
         namespaces=read,
         truncated=len(found) > blockers.MAX_PODS,
         pods=found[: blockers.MAX_PODS],
+        placing=label is not None,
     )
     while report.pods and len(report.model_dump_json()) > blockers.MAX_BYTES:
         fewer = report.pods[: len(report.pods) * 3 // 4]  # long names: cut by size too
@@ -1929,6 +1958,7 @@ def mutation(
     boosts: dict[str, float] | None = None,
     bursts: dict[str, dict[str, Any]] | None = None,
     nodes: dict[str, str] | None = None,
+    placing: Placing | None = None,
 ) -> list[Any]:
     """The JSON Patch giving a new pod of a workload the requests applied to it: only
     where its container still asks what the template asked then (a person's change wins),
@@ -1942,7 +1972,8 @@ def mutation(
     its CPU limit times its factor (the Startup boost, slice 13.4), its own limit kept in
     the pod's `BOOST` annotation; never a pod that already carries one (its template's),
     nor one with pod-level resources. A container in `bursts` starts at its Burst's CPU
-    limit (slice 13.3b) while its own is still its template's then, a boost on top of it."""
+    limit (slice 13.3b) while its own is still its template's then, a boost on top of it.
+    A pod of a Workload `placing` lists prefers its Pinned nodes (slice 15.2b, `placed`)."""
     ns = req.get("namespace") or ""
     if req.get("operation") != "CREATE" or ns == own or ns.startswith("kube-"):
         return []
@@ -2045,6 +2076,9 @@ def mutation(
         if more:
             assert top is not None
             own_limits[mine] = top  # what it is given back to: its Burst's while that lasts
+    listed = placing.workloads or [] if placing else []
+    if placing and f"{ns}/{kind}/{name}" in listed and kind != "DaemonSet":  # it stays put
+        ops += placed(pod, placing)
     if own_limits:
         value = json.dumps(own_limits, sort_keys=True)
         if notes is None:
@@ -2052,6 +2086,61 @@ def mutation(
         else:
             at = "/metadata/annotations/" + BOOST.replace("/", "~1")
             ops.append({"op": "add", "path": at, "value": value})
+    return ops
+
+
+PREFERRED = "preferredDuringSchedulingIgnoredDuringExecution"
+
+
+def placed(pod: dict[str, Any], placing: Placing) -> list[Any]:
+    """The JSON Patch that gives a new pod Placement (slice 15.2b): one preferred node
+    affinity term of weight 100 for the Pinned nodes' label, after the pod's own terms
+    and never in place of one (a preference, never a requirement: a pod with no room
+    there starts elsewhere), none where it prefers that label already; and a toleration
+    of their taint, where the Contract names one and the pod has none like it."""
+    spec = pod.get("spec") or {}
+    key, _, value = placing.label.partition("=")
+    term = {
+        "weight": 100,
+        "preference": {"matchExpressions": [{"key": key, "operator": "In", "values": [value]}]},
+    }
+    affinity = spec.get("affinity")
+    node = (affinity or {}).get("nodeAffinity")
+    terms = (node or {}).get(PREFERRED)
+    has = any(
+        e.get("key") == key and e.get("operator") == "In" and value in (e.get("values") or [])
+        for t in terms or []
+        for e in (t.get("preference") or {}).get("matchExpressions") or []
+    )
+    ops: list[Any] = []
+    if has:
+        pass
+    elif affinity is None:
+        ops.append(
+            {"op": "add", "path": "/spec/affinity", "value": {"nodeAffinity": {PREFERRED: [term]}}}
+        )
+    elif node is None:
+        ops.append(
+            {"op": "add", "path": "/spec/affinity/nodeAffinity", "value": {PREFERRED: [term]}}
+        )
+    elif terms is None:
+        ops.append(
+            {"op": "add", "path": f"/spec/affinity/nodeAffinity/{PREFERRED}", "value": [term]}
+        )
+    else:
+        ops.append(
+            {"op": "add", "path": f"/spec/affinity/nodeAffinity/{PREFERRED}/-", "value": term}
+        )
+    if placing.taint:
+        pair, _, effect = placing.taint.rpartition(":")
+        tkey, eq, tvalue = pair.partition("=")
+        tolerates = {"key": tkey, "operator": "Equal" if eq else "Exists", "effect": effect}
+        tolerates |= {"value": tvalue} if eq else {}
+        have = spec.get("tolerations")
+        if have is None:
+            ops.append({"op": "add", "path": "/spec/tolerations", "value": [tolerates]})
+        elif not any({k: t.get(k) for k in tolerates} == tolerates for t in have):
+            ops.append({"op": "add", "path": "/spec/tolerations/-", "value": tolerates})
     return ops
 
 
@@ -2065,13 +2154,18 @@ def admit(
     boosts: dict[str, float] | None = None,
     bursts: dict[str, dict[str, Any]] | None = None,
     nodes: dict[str, str] | None = None,
+    placing: Placing | None = None,
 ) -> dict[str, Any]:
     """The AdmissionReview answer: always allowed; a patch unless the Kill switch is on."""
     req = review.get("request") if isinstance(review, dict) else None
     req = req if isinstance(req, dict) else {}
     answer: dict[str, Any] = {"uid": req.get("uid", ""), "allowed": True}
     try:
-        ops = [] if killed else mutation(req, held, own, paused, stepped, boosts, bursts, nodes)
+        ops = (
+            []
+            if killed
+            else mutation(req, held, own, paused, stepped, boosts, bursts, nodes, placing)
+        )
     except Exception:  # fail open, as the webhook's failurePolicy does
         log.exception("webhook: pod left as it is")
         ops = []
@@ -2131,7 +2225,7 @@ def serve(a: "Actuator", cert: bytes, key: bytes, port: int = WEBHOOK_PORT) -> T
                 return
             answer = admit(
                 *(review, a.held, a.killed, a.namespace, a.paused, a.stepped, a.boosting),
-                *(a.bursts, a.node_types),
+                *(a.bursts, a.node_types, a.placement),
             )
             body = json.dumps(answer).encode()
             self.send_response(200)
@@ -2209,6 +2303,10 @@ class Actuator:
     blockers_due: float = 0.0  # when its next report of Blockers' facts goes (slice 15.1b)
     # slice 15.3b: each node's instance type, as the Hub last said it from a good read
     node_types: dict[str, str] = field(default_factory=dict)
+    # slice 15.2b: the cluster's Placement as the Hub last said it, its list the last one
+    # it knew; in memory, so a restart says its Workloads' Events again
+    placement: Placing | None = None
+    placed_news: list[tuple[str, str, str]] = field(default_factory=list)  # to say on them
 
     def load(self) -> None:
         try:
@@ -2306,8 +2404,11 @@ class Actuator:
             }
         if desired is not None and desired.node_types is not None:  # else as last said
             self.node_types = desired.node_types
+        if desired is not None and not desired.kill_switch:  # else kept as last said
+            self.place(desired.placement)
         wanted = (desired.sizings + desired.automated) if desired else []
         mine = {*self.held, *self.stepped, *self.boosts, *self.bursts}
+        mine |= set(self.placement.workloads or []) if self.placement else set()  # 15.2b
         self.pauses({*mine, *(f"{w.namespace}/{w.kind}/{w.name}" for w in wanted)})
         done: list[Actuation] = []
         undoing = any("unfinished" in h for h in self.held.values())  # saved once finished too
@@ -2370,11 +2471,41 @@ class Actuator:
         if done or rolling or undoing:
             self.save()  # before reporting: a restart sends again what the Hub didn't take
         self.send()
+        try:  # on its own: an Event never costs a Rollback (slice 15.2b)
+            self.say_placed()
+        except Exception:
+            log.exception("saying Placement's Events failed")
         if desired is not None and desired.blockers is not None:
             try:  # last and on its own: a read for a report never costs a Rollback
                 self.blocked(desired.blockers, time.time())
             except Exception:
                 log.exception("reporting its Blockers failed")
+
+    def place(self, given: Placing | None) -> None:
+        """Take the Hub's Placement (slice 15.2b): None, off; a list that isn't known now
+        keeps the last one. Each Workload that joins the list or leaves it is said on it
+        later in the minute (`say_placed`): its new pods prefer the Pinned nodes, or no
+        longer do; its running pods keep what they have."""
+        had = set((self.placement.workloads or []) if self.placement else [])
+        if given is not None and given.workloads is None:
+            given = given.model_copy(update={"workloads": sorted(had)})
+        now = set((given.workloads or []) if given else [])
+        also = f", tolerating {given.taint}" if given and given.taint else ""
+        for key in sorted(now - had):
+            assert given is not None
+            said = f"Placement: its new pods prefer the nodes labelled {given.label}{also}"
+            self.placed_news.append((key, "Placed", said))
+        for key in sorted(had - now):
+            said = "Placement ended: its new pods are placed as before; running ones keep theirs"
+            self.placed_news.append((key, "PlacementEnded", said))
+        self.placement = given
+
+    def say_placed(self) -> None:
+        """The Events `place` left to say, each on its Workload; one refused is only logged."""
+        news, self.placed_news = self.placed_news, []
+        for key, reason, message in news:
+            ns, kind, name = key.split("/", 2)
+            post(self.core, ns, ("apps/v1", kind, name), reason, message, False)
 
     def blocked(self, namespaces: list[str], now: float) -> None:
         """Report the Blocker facts of `namespaces` to the Hub once an hour (slice 15.1b).
@@ -2383,7 +2514,9 @@ class Actuator:
         if now < self.blockers_due:
             return
         self.blockers_due = now + BLOCKERS_EVERY
-        report = blocking(self.core, self.policy, namespaces, now)
+        # placing nothing under the Kill switch: no Workload to restart is named then
+        label = self.placement.label if self.placement and not self.killed else None
+        report = blocking(self.core, self.policy, namespaces, now, label)
         try:
             r = self.http.post("/actuator/blockers", json=blockers.sent(report))
             r.raise_for_status()

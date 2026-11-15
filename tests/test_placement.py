@@ -114,6 +114,23 @@ def test_a_read_made_with_another_label_pins_nothing_until_the_next_run() -> Non
     assert blockers.pinned(fresh, actuated("acme", A_TOKEN).clusters[0]) == set()
 
 
+def test_a_label_key_is_named_as_kube_state_metrics_names_it() -> None:
+    """As a real kube-state-metrics (kube-prometheus-stack 92.11.0) showed it: snake case."""
+    assert contracts.ksm_label("squero.io/pinned") == "label_squero_io_pinned"
+    assert contracts.ksm_label("example.com/PinnedPool") == "label_example_com_pinned_pool"
+    assert (
+        usage.ksm_label("eks.amazonaws.com/capacityType") == "label_eks_amazonaws_com_capacity_type"
+    )
+    assert (
+        usage.ksm_label("node.kubernetes.io/instance-type")
+        == "label_node_kubernetes_io_instance_type"
+    )
+    fake = cluster()
+    fake.add("kube_node_labels", 1, node="n2", label_example_com_pinned_pool="Yes")
+    got = usage.rooms(_prom(fake, SHOP), SHOP, NOW, "example.com/PinnedPool=Yes")
+    assert [n["node"] for n in got["nodes"] if n["pinned"]] == ["n2"]
+
+
 def test_the_hourly_run_reads_the_clusters_pinned_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = cluster()
     fake.add("kube_node_labels", 1, node="n2", label_squero_io_pinned="yes")
@@ -362,13 +379,14 @@ def test_the_hub_sends_each_actuator_its_own_clusters_placement(
         def desired(token: str) -> Any:
             return c.get("/actuator/desired", headers=as_actuator(token)).json()["placement"]
 
-        assert desired(A_TOKEN) is None  # no read of its nodes yet
+        unknown = {"label": "squero.io/pinned=yes", "taint": None, "workloads": None}
+        assert desired(A_TOKEN) == unknown  # no read of its nodes yet: the last list stays
         sql(
             database_url,
             ("insert into cluster_rooms values ('acme', 'test', 1, %s)", (json.dumps(ours),)),
             ("insert into cluster_rooms values ('bank', 'test', 1, %s)", (json.dumps(theirs),)),
         )
-        assert desired(A_TOKEN) is None  # no report yet: what it knew stays
+        assert desired(A_TOKEN) == unknown  # no report yet: the same
 
         def post(token: str, *pods: dict[str, Any]) -> None:
             body = {"at": NOW, "namespaces": ["shop"], "pods": list(pods)}
