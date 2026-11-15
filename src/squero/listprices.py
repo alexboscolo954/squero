@@ -274,8 +274,8 @@ def _spot_of(cluster: Cluster, facts: dict[str, Any] | None) -> tuple[bool, str]
     count = sum(bool(n.get("spot")) for n in facts["nodes"])
     if not count:
         return False, (
-            f", no node carries {label} as kube-state-metrics shows it: allowlist it in its "
-            "--metric-labels-allowlist, or every node is priced on-demand"
+            f", no node carries {label} as kube-state-metrics shows it: none is on spot now, "
+            "or the label isn't in its --metric-labels-allowlist; every node is priced on-demand"
         )
     return True, f", spot x{cluster.spot.discount:g} on {count} of {len(facts['nodes'])} nodes"
 

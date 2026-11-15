@@ -761,8 +761,9 @@ def nodes_report(
                 said = f"its nodes were not read with {s.label} yet: the next hourly run does"
             elif not count and not read.get("problem"):
                 said = (
-                    f"no node carries {s.label} as kube-state-metrics shows it: allowlist it "
-                    "in its --metric-labels-allowlist, or every node is priced on-demand"
+                    f"no node carries {s.label} as kube-state-metrics shows it: none is on spot "
+                    "now, or the label isn't in its --metric-labels-allowlist; every node is "
+                    "priced on-demand"
                 )
             spot = {"label": s.label, "discount": s.discount, "nodes": count, "note": said}
         nodes = []

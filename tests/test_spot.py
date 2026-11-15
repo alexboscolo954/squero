@@ -162,8 +162,8 @@ def test_no_node_carrying_the_label_says_to_allowlist_it() -> None:
     prices, notes = listprices.resolve(listed(spot=SPOT), nodes, ROWS, NOW)
     assert prices["test"].cpu * 4 + prices["test"].memory * 16 == pytest.approx(0.192)
     assert (
-        "no node carries karpenter.sh/capacity-type=spot as kube-state-metrics shows it"
-        in notes[0]["note"]
+        "no node carries karpenter.sh/capacity-type=spot as kube-state-metrics shows it: none is "
+        "on spot now, or the label isn't in its --metric-labels-allowlist" in notes[0]["note"]
     )
 
 
@@ -288,7 +288,10 @@ def test_the_nodes_page_marks_spot_nodes_and_says_when_none_shows() -> None:
     assert [n.spot for n in got.clusters[0].nodes] == [False, True]
     none = read_of(room_node("a")) | {"spot": SPOT["label"]}
     (bare,) = sizing.nodes_report({"test": none}, c, {}, NOW)
-    assert bare["spot"]["note"].startswith("no node carries karpenter.sh/capacity-type=spot")
+    assert bare["spot"]["note"].startswith(
+        "no node carries karpenter.sh/capacity-type=spot as kube-state-metrics shows it: none is "
+        "on spot now"
+    )
     (old,) = sizing.nodes_report({"test": read_of(a)}, c, {}, NOW)
     assert old["spot"]["note"].startswith("its nodes were not read with")
     (plain,) = sizing.nodes_report({"test": read}, typed(), {}, NOW)

@@ -365,14 +365,16 @@ def test_a_steered_workloads_pause_is_read_and_the_kill_switch_steers_nothing() 
 
 def test_its_report_says_it_steers_only_with_spot_nodes_and_never_under_the_kill_switch() -> None:
     seen: list[httpx.Request] = []
-    a = an_actuator_of_blockers([204, 204, 204], seen)
+    a = an_actuator_of_blockers([204, 204, 204, 204], seen)
     a.blocked(["shop"], 0.0)
-    a.spot = spotting(API)
+    a.spot = Spotting(label=LABEL, workloads=None)  # its list not known yet: steers nothing
     a.blocked(["shop"], 10_000.0)
-    a.killed = True
+    a.spot = spotting(API)
     a.blocked(["shop"], 20_000.0)
+    a.killed = True
+    a.blocked(["shop"], 30_000.0)
     bodies = [json.loads(r.content) for r in seen]
-    assert ["spotting" in b for b in bodies] == [False, True, False]
+    assert ["spotting" in b for b in bodies] == [False, False, True, False]
 
 
 def test_the_webhook_over_tls_steers() -> None:

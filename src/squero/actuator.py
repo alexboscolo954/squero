@@ -2833,7 +2833,8 @@ class Actuator:
         self.blockers_due = now + BLOCKERS_EVERY
         # placing nothing under the Kill switch: no Workload to restart is named then
         label = self.placement.label if self.placement and not self.killed else None
-        spotting = self.spot is not None and not self.killed  # slice 16.2b, the same way
+        # slice 16.2b, the same way, and only once it knows its list: before, it steers nothing
+        spotting = self.spot is not None and self.spot.workloads is not None and not self.killed
         report = blocking(self.core, self.policy, namespaces, now, label, spotting)
         try:
             r = self.http.post("/actuator/blockers", json=blockers.sent(report))
