@@ -484,6 +484,28 @@
             "title": "Namespace",
             "type": "string"
           },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "placement": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Placement"
+          },
           "pod": {
             "title": "Pod",
             "type": "string"
@@ -817,6 +839,16 @@
             },
             "title": "Nodes",
             "type": "array"
+          },
+          "placement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlacementShown"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "problem": {
             "anyOf": [
@@ -2558,6 +2590,11 @@
             "title": "Own",
             "type": "array"
           },
+          "pinned": {
+            "default": false,
+            "title": "Pinned",
+            "type": "boolean"
+          },
           "pods": {
             "title": "Pods",
             "type": "integer"
@@ -2712,6 +2749,60 @@
           "clusters"
         ],
         "title": "Nodes",
+        "type": "object"
+      },
+      "PlacementShown": {
+        "description": "A cluster's Placement (slice 15.2a).",
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "pinned": {
+            "title": "Pinned",
+            "type": "integer"
+          },
+          "placing": {
+            "title": "Placing",
+            "type": "boolean"
+          },
+          "taint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taint"
+          },
+          "workloads": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Workloads",
+            "type": "array"
+          }
+        },
+        "required": [
+          "label",
+          "pinned",
+          "workloads",
+          "placing"
+        ],
+        "title": "PlacementShown",
         "type": "object"
       },
       "Point": {
@@ -3003,7 +3094,7 @@
         "type": "object"
       },
       "Removal": {
-        "description": "Whether a node could be removed (slice 15.1b), by its cluster's `rules`.",
+        "description": "Whether a node could be removed (slice 15.1b), by its cluster's `rules`; `pinned`:\none of the cluster's Pinned nodes (slice 15.2a), its Blockers expected.",
         "properties": {
           "blockers": {
             "default": [],
@@ -3013,11 +3104,22 @@
             "title": "Blockers",
             "type": "array"
           },
+          "restart": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Restart"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "state": {
             "enum": [
               "blocked",
               "clear",
-              "unknown"
+              "unknown",
+              "pinned"
             ],
             "title": "State",
             "type": "string"
@@ -3083,6 +3185,34 @@
           "basis"
         ],
         "title": "Resource",
+        "type": "object"
+      },
+      "Restart": {
+        "description": "What frees a blocked node once its Actuator places (slice 15.2a).",
+        "properties": {
+          "why_not": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why Not"
+          },
+          "workloads": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Workloads",
+            "type": "array"
+          }
+        },
+        "required": [
+          "workloads"
+        ],
+        "title": "Restart",
         "type": "object"
       },
       "RevertIn": {

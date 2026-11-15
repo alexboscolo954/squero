@@ -465,7 +465,10 @@ def nodes_report(
     `after` the Contract's stored Sizings (`rows`) are applied, each with its capacity
     and its monthly cost under the Contract's prices (pass it with its effective ones);
     None where the read can't say (a problem, or one from before 15.4). `judged`: how
-    many nodes got each verdict, so that "none could go" shows what was not judged."""
+    many nodes got each verdict, so that "none could go" shows what was not judged.
+    `placement` (slice 15.2a), where the Contract names the cluster's label: the label
+    and taint, how many nodes carry it, the Workloads its Actuator is told to place,
+    whether it places them (its last report says so), and a `note` when no node does."""
     out = []
     for cl in c.clusters:
         read = found.get(cl.name)
@@ -481,8 +484,26 @@ def nodes_report(
             price = c.price(cl.name)
             went = {"now": _worth(first, read, price), "after": _worth(later, read, price)}
         judged = {state: 0 for state in ("clear", "blocked", "unknown")}
+        if cl.placement:
+            judged["pinned"] = 0
         for v in verdict.values():
             judged[v["state"]] += 1
+        placement = None
+        pins = blockers.pinned(read, cl)
+        if p := cl.placement:
+            note = None
+            if read.get("placement") != p.label:
+                note = f"its nodes were not read with {p.label} yet: the next hourly run does"
+            elif not pins and not read.get("problem"):
+                note = (
+                    f"no node carries {p.label} as kube-state-metrics shows it: label the "
+                    "nodes, and allowlist the label in its --metric-labels-allowlist"
+                )
+            placement = {
+                **{"label": p.label, "taint": p.taint, "pinned": len(pins), "note": note},
+                **{"workloads": blockers.placing(verdict)},
+                **{"placing": bool(report and report.get("placing"))},
+            }
         nodes = []
         for n in read["nodes"]:
             mine = {res: sum(p[res] for p in n["own"]) for res in ("cpu", "memory")}
@@ -491,6 +512,7 @@ def nodes_report(
             nodes.append(
                 {
                     **n,
+                    "pinned": n["node"] in pins,
                     "verdict": verdict[n["node"]],
                     "room": room,
                     "mine": {"pods": len(n["own"]), **mine},
@@ -503,7 +525,7 @@ def nodes_report(
                 **{"rules": blockers.RULES[cl.autoscaler]},
                 **{"settings": blockers.SETTINGS[cl.autoscaler]},  # slice 15.6
                 **{"reported": report["received"] if report else None},
-                **{"could_go": went, "judged": judged},
+                **{"could_go": went, "judged": judged, "placement": placement},
                 **{"problem": read.get("problem"), "largest": largest_room(read), "nodes": nodes},
             }
         )

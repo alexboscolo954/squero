@@ -155,6 +155,7 @@ def test_an_actuator_gets_only_its_own_clusters_current_approved_deployments(
         "burst_expires": None,
         "blockers": ["shop"],  # slice 15.1b: under the Kill switch too
         "node_types": None,  # slice 15.3b: no Sizing here has types
+        "placement": None,  # slice 15.2a: the cluster has none
     }
     assert old.json()["sizings"] == [{**wanted, "name": "api", "cpu": 0.115, "memory": None}]
     known = ("Deployment", "StatefulSet", "DaemonSet")  # what 0.44.0 names
@@ -190,6 +191,7 @@ def test_the_kill_switch_and_a_later_run_leave_nothing_to_apply(
         "burst_expires": None,
         "blockers": ["shop"],  # slice 15.1b: under the Kill switch too
         "node_types": None,  # slice 15.3b: no Sizing here has types
+        "placement": None,  # slice 15.2a: the cluster has none
     }
     assert superseded == {
         "kill_switch": False,
@@ -207,6 +209,7 @@ def test_the_kill_switch_and_a_later_run_leave_nothing_to_apply(
         "burst_expires": None,
         "blockers": ["shop"],  # slice 15.1b: under the Kill switch too
         "node_types": None,  # slice 15.3b: no Sizing here has types
+        "placement": None,  # slice 15.2a: the cluster has none
     }
 
 
@@ -1526,6 +1529,7 @@ def test_an_actuator_gets_the_newest_sizings_of_what_its_contract_automates(
         "burst_expires": None,
         "blockers": ["shop"],  # slice 15.1b: under the Kill switch too
         "node_types": None,  # slice 15.3b: no Sizing here has types
+        "placement": None,  # slice 15.2a: the cluster has none
     }
 
 

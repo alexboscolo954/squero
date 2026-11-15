@@ -388,14 +388,25 @@ class BlockingPod(BaseModel):
     workload: str | None = None  # `Deployment/web`, where its owners resolve
     reasons: list[str]
     changes: list[BlockerChange] = []
+    placement: str | None = None  # the Workload it is placed by, `ns/Kind/name` (15.2a)
+    note: str | None = None  # placed, yet running off the Pinned nodes
+
+
+class Restart(BaseModel):
+    """What frees a blocked node once its Actuator places (slice 15.2a)."""
+
+    workloads: list[str]  # to restart, `ns/Kind/name`; none: it wouldn't free it
+    why_not: str | None = None
 
 
 class Removal(BaseModel):
-    """Whether a node could be removed (slice 15.1b), by its cluster's `rules`."""
+    """Whether a node could be removed (slice 15.1b), by its cluster's `rules`; `pinned`:
+    one of the cluster's Pinned nodes (slice 15.2a), its Blockers expected."""
 
-    state: Literal["blocked", "clear", "unknown"]
+    state: Literal["blocked", "clear", "unknown", "pinned"]
     why: str | None = None  # of `unknown`
     blockers: list[BlockingPod] = []
+    restart: Restart | None = None
 
 
 class Share(BaseModel):
@@ -411,6 +422,7 @@ class Node(BaseModel):
 
     node: str
     type: str  # its instance type, "" when the label is not allowlisted
+    pinned: bool = False  # it carries the cluster's Placement label (slice 15.2a)
     taints: list[str]  # key=value:effect
     cordoned: bool
     allocatable: dict[str, float]
@@ -441,6 +453,17 @@ class Scenarios(BaseModel):
     after: CouldGo  # once the stored Sizings are applied
 
 
+class PlacementShown(BaseModel):
+    """A cluster's Placement (slice 15.2a)."""
+
+    label: str
+    taint: str | None = None
+    pinned: int  # nodes carrying the label
+    note: str | None = None  # when none does
+    workloads: list[str]  # its Actuator is told to place, `ns/Kind/name`
+    placing: bool  # its Actuator places them, by its last report
+
+
 class ClusterNodes(BaseModel):
     cluster: str
     at: float  # the run that read them
@@ -450,6 +473,7 @@ class ClusterNodes(BaseModel):
     reported: float | None = None  # when the Hub got its Actuator's last report
     could_go: Scenarios | None = None  # None: its read can't say
     judged: dict[str, int] = {}  # how many nodes got each verdict
+    placement: PlacementShown | None = None  # None: off
     problem: str | None = None  # why there are none
     largest: dict[str, float] | None = None  # the Room after DaemonSets that caps Sizings
     nodes: list[Node]

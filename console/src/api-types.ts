@@ -640,6 +640,10 @@ export interface components {
             changes: components["schemas"]["BlockerChange"][];
             /** Namespace */
             namespace: string;
+            /** Note */
+            note?: string | null;
+            /** Placement */
+            placement?: string | null;
             /** Pod */
             pod: string;
             /** Reasons */
@@ -749,6 +753,7 @@ export interface components {
             } | null;
             /** Nodes */
             nodes: components["schemas"]["Node"][];
+            placement?: components["schemas"]["PlacementShown"] | null;
             /** Problem */
             problem?: string | null;
             /** Reported */
@@ -1311,6 +1316,11 @@ export interface components {
             others: components["schemas"]["Share"];
             /** Own */
             own: components["schemas"]["NodePod"][];
+            /**
+             * Pinned
+             * @default false
+             */
+            pinned: boolean;
             /** Pods */
             pods: number;
             /** Requests */
@@ -1364,6 +1374,24 @@ export interface components {
             clusters: components["schemas"]["ClusterNodes"][];
             /** Currency */
             currency?: string | null;
+        };
+        /**
+         * PlacementShown
+         * @description A cluster's Placement (slice 15.2a).
+         */
+        PlacementShown: {
+            /** Label */
+            label: string;
+            /** Note */
+            note?: string | null;
+            /** Pinned */
+            pinned: number;
+            /** Placing */
+            placing: boolean;
+            /** Taint */
+            taint?: string | null;
+            /** Workloads */
+            workloads: string[];
         };
         /** Point */
         Point: {
@@ -1461,7 +1489,8 @@ export interface components {
         };
         /**
          * Removal
-         * @description Whether a node could be removed (slice 15.1b), by its cluster's `rules`.
+         * @description Whether a node could be removed (slice 15.1b), by its cluster's `rules`; `pinned`:
+         *     one of the cluster's Pinned nodes (slice 15.2a), its Blockers expected.
          */
         Removal: {
             /**
@@ -1469,11 +1498,12 @@ export interface components {
              * @default []
              */
             blockers: components["schemas"]["BlockingPod"][];
+            restart?: components["schemas"]["Restart"] | null;
             /**
              * State
              * @enum {string}
              */
-            state: "blocked" | "clear" | "unknown";
+            state: "blocked" | "clear" | "unknown" | "pinned";
             /** Why */
             why?: string | null;
         };
@@ -1488,6 +1518,16 @@ export interface components {
             held?: components["schemas"]["HeldByHpa"] | null;
             /** Target */
             target: number;
+        };
+        /**
+         * Restart
+         * @description What frees a blocked node once its Actuator places (slice 15.2a).
+         */
+        Restart: {
+            /** Why Not */
+            why_not?: string | null;
+            /** Workloads */
+            workloads: string[];
         };
         /** RevertIn */
         RevertIn: {

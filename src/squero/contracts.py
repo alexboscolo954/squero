@@ -97,6 +97,25 @@ RELAY_HOLDS = (
 )
 
 
+# A Kubernetes label key (an optional DNS-subdomain prefix and a name) and a non-empty value
+LABEL_KEY = (
+    r"([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?"
+    r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?"
+)
+LABEL_VALUE = r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?"
+
+
+class Placement(Strict):
+    """Placement (slice 15.2a): `label`, `key=value`, marks the cluster's Pinned nodes,
+    kept for the pods that can't move; `taint`, `key[=value]:effect`, the one they carry,
+    if any, whose toleration the webhook gives the pods it places, and no other."""
+
+    label: str = Field(pattern=rf"^{LABEL_KEY}={LABEL_VALUE}$")
+    taint: str | None = Field(
+        None, pattern=rf"^{LABEL_KEY}(={LABEL_VALUE})?:(NoSchedule|PreferNoSchedule|NoExecute)$"
+    )
+
+
 class Cluster(Strict):
     name: Slug
     namespaces: list[str] = Field(min_length=1)
@@ -131,6 +150,15 @@ class Cluster(Strict):
     # This cluster runs an Actuator (slice 12.1), which pulls with this secret's value.
     # Its own token, never the Relay's: the Relay stays read-only. Direct or Relay alike.
     actuator_token_secret: str | None = None
+    # Placement (slice 15.2a): its Actuator's webhook prefers these nodes for the pods
+    # that block a node; none: off
+    placement: Placement | None = None
+
+    @model_validator(mode="after")
+    def _placing(self) -> "Cluster":
+        if self.placement and not self.actuator_token_secret:
+            raise ValueError(f"cluster {self.name!r}: placement needs an actuator_token_secret")
+        return self
 
     @model_validator(mode="after")
     def _one_source(self) -> "Cluster":

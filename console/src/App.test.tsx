@@ -954,6 +954,46 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
   expect(edge?.textContent).toContain("node series would cross Contracts");
   expect(edge?.querySelector("table")).toBeNull();
   expect(screen.getByText("Nodes", { selector: "nav a" }).getAttribute("aria-current")).toBe("page");
+  expect(kind?.querySelector(".placement")).toBeNull(); // no Placement: nothing said of it
+});
+
+test("Nodes shows a cluster's Placement, its Pinned nodes and which Workload to restart", async () => {
+  history.replaceState(null, "", "/app/?view=nodes");
+  const base = { type: "", taints: [], cordoned: false, daemonsets: { cpu: 0, memory: 0 }, pods: 1, bound: 0, allocatable: { cpu: 4, memory: 16 * GI },
+    requests: { cpu: 1, memory: GI }, room: { cpu: 3, memory: 15 * GI }, mine: { pods: 1, cpu: 1, memory: GI }, others: { pods: 0, cpu: 0, memory: 0 }, own: [] };
+  const keeps = (pod: string, more = {}) => ({ namespace: "shop", pod, workload: "Deployment/api", reasons: ["annotated safe-to-evict: false"],
+    placement: "shop/Deployment/api", ...more });
+  const restart = (workloads: string[], why_not: string | null = null) => ({ workloads, why_not });
+  answer({
+    "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]],
+    "/api/v1/contracts/demo-shop/nodes": [
+      200,
+      { currency: null, clusters: [{ cluster: "kind", at: 1_700_000_000, autoscaler: "cluster-autoscaler", problem: null, largest: null, could_go: null,
+        rules: "Cluster Autoscaler's rules", reported: 1_700_000_600, judged: { clear: 0, blocked: 2, unknown: 0, pinned: 1 },
+        placement: { label: "squero.io/pinned=yes", taint: "squero.io/pinned=yes:NoSchedule", pinned: 1, note: null, workloads: ["shop/Deployment/api"], placing: true },
+        nodes: [
+          { ...base, node: "p1", pinned: true, verdict: { state: "pinned", why: null, blockers: [keeps("api-0", { changes: [] })] } },
+          { ...base, node: "w1", verdict: { state: "blocked", why: null, restart: restart(["shop/Deployment/api"]),
+            blockers: [keeps("api-1", { note: "placed, on w1: the pinned nodes had no room when it started" })] } },
+          { ...base, node: "w2", verdict: { state: "blocked", why: null, restart: restart([], "pod shop/web-1 would still hold it"),
+            blockers: [keeps("api-2"), { namespace: "shop", pod: "web-1", reasons: ["PodDisruptionBudget web allows no disruption"], placement: null }] } },
+        ] }] },
+    ],
+  });
+  const { container: page } = render(<App />);
+  await screen.findByText("demo-shop: Nodes");
+  expect(page.querySelector(".placement")?.textContent).toBe(
+    "Placement: pods that can't move prefer the nodes labelled squero.io/pinned=yes (1 pinned), tolerating squero.io/pinned=yes:NoSchedule. Placed: shop/Deployment/api. ",
+  );
+  const rows = [...page.querySelectorAll("tbody tr")];
+  expect(rows[0]?.firstElementChild?.querySelector(".chip")?.textContent).toBe("pinned");
+  expect(rows[1]?.firstElementChild?.querySelector(".chip")).toBeNull();
+  const verdicts = rows.map((tr) => tr.lastElementChild?.textContent);
+  expect(verdicts[0]).toBe("no: pinned, kept for pods that can't moveshop/api-0: annotated safe-to-evict: falseplaced");
+  expect(verdicts[1]).toContain("placed, on w1: the pinned nodes had no room when it started.");
+  expect(verdicts[1]).toContain("Restart shop/Deployment/api to free it.");
+  expect(verdicts[2]).toContain("A restart wouldn't free it: pod shop/web-1 would still hold it.");
+  expect(rows[0]?.querySelector("details.change")).toBeNull();
 });
 
 test("Health shows each integration now, the error as text, spend against the budget, secrets by name", async () => {

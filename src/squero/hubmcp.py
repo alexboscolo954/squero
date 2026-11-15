@@ -118,7 +118,7 @@ def _by_type(c: webapp.Container) -> dict[str, Any]:
 
 MAX_BLOCKERS = 5  # a node's Blockers given to the model, one per Workload; the rest counted
 MAX_PODS = 3  # of one Blocker's pods named
-ORDER = {"blocked": 0, "unknown": 1, "clear": 2}
+ORDER = {"blocked": 0, "unknown": 1, "clear": 2, "pinned": 3}
 
 
 def _blockers(found: list[webapp.BlockingPod]) -> list[dict[str, Any]]:
@@ -135,8 +135,28 @@ def _blockers(found: list[webapp.BlockingPod]) -> list[dict[str, Any]]:
         entry: dict[str, Any] = {"of": whose, "pods": names[:MAX_PODS]}
         entry |= {"more_pods": max(0, len(names) - MAX_PODS), "reasons": [s[:300] for s in said]}
         entry["changes"] = [{"change": c.change, "manifest": c.manifest} for c in pods[0].changes]
+        if pods[0].placement:  # slice 15.2a
+            entry["placed_by"] = pods[0].placement
+            notes = sorted({b.note for b in pods if b.note})
+            entry |= {"note": notes[0]} if notes else {}
         out.append(entry)
     return out
+
+
+MAX_PLACED = 20  # of a cluster's placed Workloads named; the rest counted (slice 15.2a)
+
+
+def _restart(r: webapp.Restart) -> dict[str, Any]:
+    """A node's restart advice, its Workloads capped as a Blocker's pods are."""
+    said = r.workloads[:MAX_BLOCKERS]
+    more = max(0, len(r.workloads) - MAX_BLOCKERS)
+    return {"workloads": said, "more_workloads": more, "why_not": (r.why_not or "")[:300] or None}
+
+
+def _placement(p: webapp.PlacementShown) -> dict[str, Any]:
+    """A cluster's Placement, its placed Workloads capped."""
+    more = max(0, len(p.workloads) - MAX_PLACED)
+    return p.model_dump() | {"workloads": p.workloads[:MAX_PLACED], "more_workloads": more}
 
 
 def _nodes(cl: webapp.ClusterNodes, top: int) -> dict[str, Any]:
@@ -155,6 +175,7 @@ def _nodes(cl: webapp.ClusterNodes, top: int) -> dict[str, Any]:
                 **{"why": n.verdict.why, "blockers": blockers[:MAX_BLOCKERS]},
                 **{"more_blockers": max(0, len(blockers) - MAX_BLOCKERS)},
             }
+            | ({"restart": _restart(n.verdict.restart)} if n.verdict.restart else {})
         )
     went = cl.could_go.model_dump(mode="json") if cl.could_go else None
     return {
@@ -162,6 +183,7 @@ def _nodes(cl: webapp.ClusterNodes, top: int) -> dict[str, Any]:
         **{"autoscaler": cl.autoscaler, "rules": cl.rules, "reported": _date(cl.reported)},
         **{"autoscaler_settings_to_check": cl.settings},
         **{"judged": cl.judged, "could_go": went, "largest_room": cl.largest},
+        **{"placement": _placement(cl.placement) if cl.placement else None},
         **{"nodes": nodes, "more_nodes": max(0, len(listed) - top)},
     }
 
@@ -482,20 +504,26 @@ def build(
         applied, with their capacity and monthly cost: an upper bound (affinity and
         spread rules are not seen) and a figure of its own, never part of Savings or
         waste; None when the read can't say. judged: how many nodes are blocked, clear
-        or unknown, so "none could go" of nodes nobody judged is no finding. nodes: the
-        blocked ones first, `top` of them, each with its room (allocatable less every
-        pod's requests; cpu in cores, memory in bytes), its pods (own_pods are the
-        Contract's; not_visible_pods are outside its namespaces, never named) and
-        could_be_removed: blocked, with its blockers by `rules`; clear; or unknown,
-        with why. Each blocker is one Workload's pods (`of`), why they keep the node,
-        and the changes that would remove it: what to change and what it costs, with a
-        manifest to copy where the change adds something (it belongs in the client's
-        own manifests: no tool here writes it anywhere; for a Contract that masks,
-        the names in it are placeholders here and real on the console's Nodes page);
+        or unknown (or pinned), so "none could go" of nodes nobody judged is no finding.
+        placement: where the cluster has Placement, its label, how many nodes carry it
+        (Pinned nodes: kept for pods that can't move, never removed), the Workloads its
+        Actuator is told to place (their new pods prefer the Pinned nodes) and whether it
+        places them yet. nodes: the blocked ones first, `top` of them, each with its
+        room (allocatable less every pod's requests; cpu in cores, memory in bytes), its
+        pods (own_pods are the Contract's; not_visible_pods are outside its namespaces,
+        never named) and could_be_removed: blocked, with its blockers by `rules`; clear;
+        unknown, with why; or pinned, its blockers expected there. A blocked node's
+        restart, once its Actuator places: the Workloads whose restart frees it (their
+        new pods land on the Pinned nodes), or why_not; nothing here restarts one. Each
+        blocker is one Workload's pods (`of`), why they keep the node, placed_by where
+        its Workload is placed, and the changes that would remove it: what to change and
+        what it costs, with a manifest to copy where the change adds something (it belongs
+        in the client's own manifests: no tool here writes it anywhere; for a Contract that
+        masks, the names in it are placeholders here and real on the console's Nodes page);
         words only where it would undo something the client set on purpose.
-        autoscaler_settings_to_check: the autoscaler's own settings that decide the
-        same for the whole cluster, with their documented defaults; the Hub can't read
-        the cluster's. Nothing here removes a node or changes a cluster."""
+        autoscaler_settings_to_check: the autoscaler's own settings that decide the same for
+        the whole cluster, with their documented defaults; the Hub can't read the cluster's.
+        Nothing here removes a node or changes a cluster."""
         c = resolve(contract)
 
         async def work() -> dict[str, Any]:

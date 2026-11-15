@@ -81,7 +81,7 @@ def test_a_pod_with_nothing_to_tell_is_not_sent() -> None:
 def test_each_fact_is_sent_as_it_is_and_never_a_verdict() -> None:
     plain = {"namespace": "shop", "pod": "api-1", "node": "n1", "kind": "ReplicaSet"}
     plain |= {"name": "owner", "empty_dir": [], "in_memory": [], "host_path": []}
-    plain |= {"annotations": {}, "budget": None, "allowed": None, "started": None}
+    plain |= {"annotations": {}, "budget": None, "allowed": None, "started": None, "placed": False}
     assert facts(kpod(by=None)) == plain | {"kind": "", "name": ""}
     assert facts(kpod(by="Cluster")) == plain | {"kind": "Cluster"}  # a custom controller's
     owned = kpod()

@@ -1829,6 +1829,20 @@ def create_app(
                 out.append(r)
         return out, status.get(cluster.name) or {}
 
+    async def placement(cid: str, cluster: contracts.Cluster) -> actuator.Placing | None:
+        """The cluster's Placement for its Actuator (slice 15.2a): the Workloads whose pods
+        block a node for a reason set in their spec, by its last report and the last read
+        of its nodes. None: off, or no usable report or read, so what it knew stays."""
+        if not (p := cluster.placement):
+            return None
+        names = {cluster.name}
+        read = (await store().latest_rooms(cid, names)).get(cluster.name)
+        report = (await store().latest_blockers(cid, names)).get(cluster.name)
+        if read is None or read.get("problem") or blockers.gap(report, cluster, time.time()):
+            return None
+        verdict = blockers.verdicts(read, report, cluster, time.time())
+        return actuator.Placing(label=p.label, taint=p.taint, workloads=blockers.placing(verdict))
+
     # slice 15.3c: whether each cluster's Actuator applies types, as last stored: the store
     # is written only when a pull says otherwise
     knows: dict[tuple[str, str], bool] = {}
@@ -1913,6 +1927,7 @@ def create_app(
         return actuator.Desired(
             kill_switch=False,
             node_types=node_types,
+            placement=await placement(cid, cluster),
             blockers=cluster.namespaces,  # slice 15.1b: where to report Blockers' facts of
             eviction=by_id[cid].actuator.evicting(datetime.now(UTC)),
             sizings=approved,

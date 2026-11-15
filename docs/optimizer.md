@@ -324,6 +324,29 @@ A Sizing frees capacity, but money is saved only when a node leaves. For each cl
 - **The digest** has one line when a node could go, now or after the Sizings: `Nodes that could go: up to 1 now (120.00 EUR/month), up to 2 after the Sizings (240.00 EUR/month); 3 not judged. An upper bound, not Savings.`
 - **Computed when asked**, from the stored read, the Actuator's stored report and the stored Sizings, so it always agrees with the verdicts shown beside it (300 nodes of 30 pods take about 0.2 seconds).
 - **The Hub MCP's `nodes`** is the first place an Actuator's strings reach a model. They go out redacted and masked like everything else of the Contract's; a report whose namespace, pod, node or budget name is not shaped like a Kubernetes name is refused when it arrives, and a controller's kind or a volume's name that isn't shaped like one is counted, not repeated.
+- **Pinned nodes** (with [Placement](#placement)) never go, and no moving pod is counted to land on one.
+
+### Placement
+
+Pods that can't move keep whatever node they land on. **Placement** gathers them on a few nodes the client keeps for them, the **Pinned nodes**, so the rest can go. The Contract names the nodes' label per cluster, and the taint they carry if any:
+
+```yaml
+clusters:
+  - name: prod
+    actuator_token_secret: prod-actuator
+    placement:
+      label: squero.io/pinned=yes          # key=value, on the nodes kept for them
+      taint: squero.io/pinned=yes:NoSchedule   # optional: tolerated by the pods placed only
+```
+
+- **Only with an Actuator** on that cluster: its webhook adds, to each new pod of a placed Workload, a preference for the label (one preferred node affinity term, weight 100, after the pod's own) and, with a taint, its toleration. A preference, never a requirement: a pod with no room on a Pinned node starts elsewhere. That part comes with 15.2b; until then the Hub shows the Pinned nodes and which Workloads it will place, and says nothing about restarting.
+- **Which Workloads.** Those whose pods block a node for a reason set in their spec: `safe-to-evict: "false"`, `do-not-disrupt: "true"`, local storage, emptyDir data (each under the rules of the cluster's autoscaler, as for [Blockers](#blockers-could-a-node-be-removed)), on any node, Pinned ones included, so a Workload that has moved keeps the preference at its next rollout. Not for a PodDisruptionBudget that allows no disruption or a timed `do-not-disrupt`: both come and go (a budget allows none during any rollout), and placed for them a Workload would fill the Pinned nodes with pods that can move. Not a pod with no controller or a custom one's, which have no Workload the webhook can name, nor a DaemonSet's. Of a Deployment, StatefulSet, Argo Rollout or CronJob, in the Contract's namespaces, from the Actuator's last report (none for two hours: the Actuator keeps what it last got).
+- **No approval per Workload**: the Contract's field is the consent, as for Reflexes. The pause annotation and the Kill switch stop it.
+- **A Pinned node's verdict is pinned**: its Blockers are shown as expected, with no change to remove them.
+- **What frees a node.** A running pod's affinity can't be changed, and the Actuator never evicts for Placement: a pod already running moves at its Workload's next rollout or restart. Once the cluster's Actuator places (its report says so), a blocked node says which Workloads to restart to free it ("Restart shop/Deployment/api to free it"), when every Blocker on it is a placed Workload's pod and the Pinned nodes have room for every pod of those Workloads not on one already (a restart moves them all): each pod whole, CPU, memory and a pod slot, largest first, on a Pinned node that takes pods, whatever its taints. Otherwise it says why not: "pod shop/web-1 would still hold it", or "the pinned nodes lack room: about 1.2 cores and 3.0 GiB short". Each node on its own: two nodes' advice may count on the same room. A placed pod that started off the Pinned nodes says "placed, on worker2: the pinned nodes had no room when it started".
+- **Seen through kube-state-metrics.** A node label reaches Prometheus only when allowlisted (`--metric-labels-allowlist=nodes=[squero.io/pinned]`, or `[*]`). Where no node shows it, the Nodes page and the Hub MCP's `nodes` say so. A label set or changed in the Contract counts from the next hourly run's read; until then no node is pinned and the page says the nodes were not read with it yet.
+- **With Karpenter**, a preference is treated as required when it picks a node to launch and relaxed only when that can't be met, so put the label on a NodePool's template.
+- **Shown** on the Nodes page (the cluster's label, how many nodes carry it, the Workloads placed, whether its Actuator places them) and in the Hub MCP's `nodes` (`placement`, `placed_by` on a blocker, `restart` on a node). The digest's line is unchanged.
 
 ## The optimizer lab
 

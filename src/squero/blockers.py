@@ -12,7 +12,13 @@ Read-only: nothing is evicted for it.
 
 The nodes that could go (`could_go`, slice 15.4): clear ones whose pods fit, pod by pod,
 in the Room of the others with the same taints; `after` gives the same read with the
-requests the ready Sizings would leave. Every gap means the node stays."""
+requests the ready Sizings would leave. Every gap means the node stays.
+
+Placement (slice 15.2a): where the Contract names a cluster's label, the Hub lists for
+its Actuator the Workloads whose pods block a node for a reason set in their spec
+(`placing`), whose new pods its webhook will prefer the Pinned nodes for; a Pinned node
+is expected to be blocked, never goes and receives no moving pod; and a blocked node
+says which Workloads to restart to free it once the Actuator places."""
 
 import math
 import re
@@ -67,6 +73,7 @@ class PodFacts(BaseModel):
     budget: str | None = Field(None, max_length=253)
     allowed: int | None = Field(None, ge=0)
     started: float | None = None  # when it started, by its status: a duration counts from it
+    placed: bool = False  # it carries its cluster's Placement preference (slice 15.2a)
 
 
 class Report(BaseModel):
@@ -79,6 +86,20 @@ class Report(BaseModel):
     namespaces: list[str] = Field(max_length=1000)
     truncated: bool = False
     pods: list[PodFacts]
+    placing: bool = False  # its webhook places pods (slice 15.2a): restarting one moves it
+
+
+def sent(r: Report) -> dict[str, Any]:
+    """A report as an Actuator posts it: `placing` and a pod's `placed` (slice 15.2a)
+    only when true, so a Hub from before them, whose report refuses a field it doesn't
+    know, takes the report of an Actuator that doesn't place."""
+    body = r.model_dump()
+    if not r.placing:
+        del body["placing"]
+    for p in body["pods"]:
+        if not p["placed"]:
+            del p["placed"]
+    return body
 
 
 def unreal(r: Report) -> str | None:
@@ -420,6 +441,34 @@ def seen(
     return {"state": "unknown", "why": gap, "blockers": []}
 
 
+def gap(report: dict[str, Any] | None, cluster: "Cluster", now: float) -> str | None:
+    """Why a cluster has no usable report, or None: it has one."""
+    if not cluster.actuator_token_secret:
+        return "the cluster runs no Actuator"
+    if report is None:
+        return "its Actuator has reported no Blockers yet"
+    if now - report["received"] > STALE:
+        at = datetime.fromtimestamp(report["received"], UTC).strftime("%Y-%m-%d %H:%M UTC")
+        return f"its Actuator's last report is from {at}"
+    return None
+
+
+# Placement (slice 15.2a): the Blockers set in a pod's spec, which stay with it wherever
+# it runs (a budget allowing no disruption and a timed do-not-disrupt come and go: placed
+# for them, a Workload would be placed mid-rollout), and the kinds of Workload the
+# Actuator's webhook names a new pod by (a custom controller's pod it can't name)
+PLACED_BY = ("safe_false", "do_not_disrupt", "local_storage", "emptydir")
+PLACED_KINDS = ("Deployment", "StatefulSet", "Rollout", "CronJob")
+
+
+def _placement(p: dict[str, Any], w: dict[str, str] | None, rules: list[str]) -> str | None:
+    """The Workload a blocking pod is placed by, `namespace/Kind/name` as the Actuator
+    keys it, or None: not placed (no such Blocker, or no Workload the webhook names)."""
+    if not w or w["kind"] not in PLACED_KINDS or not set(rules) & set(PLACED_BY):
+        return None
+    return f"{p['namespace']}/{w['kind']}/{w['name']}"
+
+
 def verdicts(
     read: dict[str, Any], report: dict[str, Any] | None, cluster: "Cluster", now: float
 ) -> dict[str, dict[str, Any]]:
@@ -427,19 +476,19 @@ def verdicts(
     with the pods that block it and why, `clear`, or `unknown` with why. `report`: its
     Actuator's latest, with the time the Hub `received` it (the clock its age goes by:
     the Actuator's own is not trusted). Without a usable one (no Actuator, none yet,
-    one too old): what Prometheus shows (`seen`)."""
-    gap = None
-    if not cluster.actuator_token_secret:
-        gap = "the cluster runs no Actuator"
-    elif report is None:
-        gap = "its Actuator has reported no Blockers yet"
-    elif now - report["received"] > STALE:
-        at = datetime.fromtimestamp(report["received"], UTC).strftime("%Y-%m-%d %H:%M UTC")
-        gap = f"its Actuator's last report is from {at}"
+    one too old): what Prometheus shows (`seen`).
+
+    With the cluster's Placement (slice 15.2a): a Pinned node's verdict is `pinned`, its
+    Blockers expected, with no change to remove them; each blocking pod says the
+    Workload it is placed by (`placement`), from a usable report only, and one that
+    carries the preference but runs elsewhere says so (`note`); and once the Actuator
+    places (`report.placing`), a blocked node says which Workloads to restart to free
+    it, or why that wouldn't (`restart`)."""
+    missing = gap(report, cluster, now)
     out: dict[str, dict[str, Any]] = {}
     for n in read.get("nodes") or []:
-        if gap or report is None:
-            out[n["node"]] = seen(n, read, cluster.autoscaler, gap or "")
+        if missing or report is None:
+            out[n["node"]] = seen(n, read, cluster.autoscaler, missing or "")
             continue
         found = []
         whose = {(p["namespace"], p["pod"]): p.get("workload") for p in n["own"]}
@@ -450,10 +499,16 @@ def verdicts(
             w = whose.get((p["namespace"], p["pod"]))
             made = changes(p, cluster.autoscaler, now, w)
             if made:
+                rules = [rule for rule, _ in _found(p, cluster.autoscaler, now)]
+                placed = _placement(p, w, rules)
+                note = None
+                if placed and p.get("placed") and n["node"] not in pinned(read, cluster):
+                    note = f"placed, on {n['node']}: the pinned nodes had no room when it started"
                 found.append(
                     {
                         **{"namespace": p["namespace"], "pod": p["pod"], "workload": _named(w)},
                         **{"reasons": [c["reason"] for c in made], "changes": made},
+                        **({"placement": placed, "note": note} if cluster.placement else {}),
                     }
                 )
         own = [p for p in n["own"] if not p.get("bound")]
@@ -472,7 +527,106 @@ def verdicts(
             why = f"{hidden} {'pod' if hidden == 1 else 'pods'} not visible"
         state = "blocked" if found else "unknown" if why else "clear"
         out[n["node"]] = {"state": state, "why": why, "blockers": found}
+    if not cluster.placement:
+        return out
+    pins = pinned(read, cluster)
+    for n in read.get("nodes") or []:
+        v = out[n["node"]]
+        if n["node"] in pins:
+            kept = [{**b, "changes": []} for b in v["blockers"]]
+            out[n["node"]] = {"state": "pinned", "why": None, "blockers": kept}
+        elif v["state"] == "blocked" and not missing and report and report.get("placing"):
+            v["restart"] = _restart(v["blockers"], read, pins, cluster.placement.label)
     return out
+
+
+def pinned(read: dict[str, Any], cluster: "Cluster") -> set[str]:
+    """The cluster's Pinned nodes in a read (slice 15.2a): none without Placement, or in
+    a read made with another label (or before 15.2a), until the next hourly run."""
+    if not cluster.placement or read.get("placement") != cluster.placement.label:
+        return set()
+    return {n["node"] for n in read.get("nodes") or [] if n.get("pinned")}
+
+
+SAID = 3  # pods named in a restart's why_not; the rest counted
+
+
+def placing(verdict: dict[str, dict[str, Any]]) -> list[str]:
+    """The Workloads a cluster's Actuator places (slice 15.2a), `namespace/Kind/name`:
+    every one whose pods block a node, Pinned ones included, so that a Workload that has
+    moved keeps its preference at its next rollout."""
+    return sorted({b.get("placement") for v in verdict.values() for b in v["blockers"]} - {None})
+
+
+def _restart(
+    found: list[dict[str, Any]], read: dict[str, Any], pins: set[str], label: str
+) -> dict[str, Any]:
+    """Which Workloads to restart so that a blocked node (its Blockers `found`) is freed,
+    their new pods preferring the Pinned nodes (`pins`, slice 15.2a), or why that
+    wouldn't free it: a Blocker
+    that isn't placed, or Pinned nodes without the room for every pod of those Workloads
+    not on one already (a restart moves them all), placed pod by pod as `could_go` does,
+    on Pinned nodes that take pods, whatever their taints (a placed pod tolerates the
+    Placement's). Each node on its own: two nodes' advice may count on the same room."""
+    held = [f"{b['namespace']}/{b['pod']}" for b in found if not b.get("placement")]
+    if held:
+        more = f" and {len(held) - SAID} more" if len(held) > SAID else ""
+        return {
+            "workloads": [],
+            "why_not": f"pod {', '.join(held[:SAID])}{more} would still hold it",
+        }
+    named = {b["placement"] for b in found}
+    nodes = read.get("nodes") or []
+    kept = [m for m in nodes if m["node"] in pins]
+    if not kept:
+        why = f"no node carries the label {label}, as kube-state-metrics shows it"
+        return {"workloads": [], "why_not": why}
+    free = {
+        m["node"]: [
+            m["allocatable"]["cpu"] - m["requests"]["cpu"],
+            m["allocatable"]["memory"] - m["requests"]["memory"],
+            m["slots"] - m["pods"],
+        ]
+        for m in sorted(kept, key=lambda m: m["node"])
+        if m.get("slots") is not None
+        and all(r in m["allocatable"] for r in ("cpu", "memory"))
+        and not _closed(m)
+    }
+    moving = [
+        p
+        for m in nodes
+        if m["node"] not in pins
+        for p in m["own"]
+        if not p.get("bound")
+        and (w := p.get("workload"))
+        and f"{p['namespace']}/{w['kind']}/{w['name']}" in named
+    ]
+    moving.sort(key=lambda p: (-p["cpu"], -p["memory"], p["namespace"], p["pod"]))
+    short = {  # what they ask beyond the Pinned nodes' room, all together
+        res: sum(q[res] for q in moving) - sum(max(0.0, f[i]) for f in free.values())
+        for i, res in enumerate(("cpu", "memory"))
+    }
+    for p in moving:
+        fit = next(
+            (
+                left
+                for left in free.values()
+                if left[0] >= p["cpu"] - 1e-9 and left[1] >= p["memory"] - 1e-9 and left[2] >= 1
+            ),
+            None,
+        )
+        if fit is None:
+            parts = [f"{short['cpu']:.1f} cores"] if short["cpu"] > 0.05 else []
+            if short["memory"] > 0.05 * 2**30:
+                parts.append(f"{short['memory'] / 2**30:.1f} GiB")
+            why = (
+                f"the pinned nodes lack room: about {' and '.join(parts)} short"
+                if parts
+                else f"no pinned node has room for pod {p['namespace']}/{p['pod']} whole"
+            )
+            return {"workloads": [], "why_not": why}
+        fit[0], fit[1], fit[2] = fit[0] - p["cpu"], fit[1] - p["memory"], fit[2] - 1
+    return {"workloads": sorted(named), "why_not": None}
 
 
 # --- the nodes that could go (slice 15.4) ----------------------------------------------
@@ -587,7 +741,7 @@ def could_go(read: dict[str, Any], verdict: dict[str, dict[str, Any]]) -> list[s
             n["slots"] - n["pods"],
         ]
         for n in nodes
-        if whole(n) and not _closed(n)
+        if whole(n) and not _closed(n) and verdict[n["node"]]["state"] != "pinned"
     }
     group = {n["node"]: _group(n) for n in nodes}
     candidates = [

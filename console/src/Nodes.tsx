@@ -1,12 +1,36 @@
 /** Nodes (slice 15.1a): each cluster's nodes and their Room, as the latest hourly run read
  * them. Pods outside the Contract's namespaces are a count and a sum, never named. Each
  * node's verdict (slice 15.1b): whether it could be removed, by its cluster's rules, going
- * by its Actuator's hourly report of Blockers. */
+ * by its Actuator's hourly report of Blockers. Placement (slice 15.2a): the cluster's Pinned
+ * nodes, the Workloads placed on them, and which to restart to free a node. */
 import * as api from "./api";
 import { useLoaded } from "./Checks";
 import { cores, gib, money, when } from "./format";
 
 const both = (v: { cpu?: number; memory?: number }) => `${cores(v.cpu ?? 0)}, ${gib(v.memory ?? 0)}`;
+
+type Blocker = NonNullable<api.Nodes["clusters"][number]["nodes"][number]["verdict"]["blockers"]>[number];
+
+function Blockers({ found }: { found: Blocker[] }) {
+  return (
+    <ul>
+      {found.map((b) => (
+        <li key={`${b.namespace}/${b.pod}`}>
+          {b.namespace}/{b.pod}: {b.reasons.join("; ")}
+          {b.placement && <span className="chip">placed</span>}
+          {b.note && <div className="hint">{b.note}.</div>}
+          {(b.changes ?? []).map((c, i) => (
+            <details key={i} className="change">
+              <summary>To remove it: {c.reason}</summary>
+              <div className="hint">{c.change}.</div>
+              {c.manifest && <pre>{c.manifest}</pre>}
+            </details>
+          ))}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 export function NodesPage({ contract }: { contract: string }) {
   const [data, error] = useLoaded(api.nodes, contract);
@@ -31,6 +55,15 @@ export function NodesPage({ contract }: { contract: string }) {
             Whether a node could be removed goes by {c.rules}; its Actuator's last report of Blockers:{" "}
             {when(c.reported)}.
           </p>
+          {c.placement && (
+            <p className="hint placement">
+              Placement: pods that can't move prefer the nodes labelled {c.placement.label} ({c.placement.pinned}{" "}
+              pinned){c.placement.taint && `, tolerating ${c.placement.taint}`}.{" "}
+              {c.placement.note && <span className="notice">{c.placement.note}. </span>}
+              Placed: {c.placement.workloads.length ? c.placement.workloads.join(", ") : "none"}.{" "}
+              {!c.placement.placing && "Its Actuator doesn't place them yet."}
+            </p>
+          )}
           {(c.settings ?? []).length > 0 && (
             <details className="settings">
               <summary>Its autoscaler's own settings to check (the Hub can't read them)</summary>
@@ -89,6 +122,11 @@ export function NodesPage({ contract }: { contract: string }) {
                     <td>
                       {n.node} {n.type && <span className="hint">{n.type}</span>}{" "}
                       {n.cordoned && <span className="chip">cordoned</span>}{" "}
+                      {n.pinned && (
+                        <>
+                          <span className="chip">pinned</span>{" "}
+                        </>
+                      )}
                       {n.taints.map((t) => (
                         <span key={t} className="chip">{t}</span>
                       ))}
@@ -116,23 +154,22 @@ export function NodesPage({ contract }: { contract: string }) {
                     <td>
                       {n.verdict.state === "clear" && "yes: nothing on it blocks"}
                       {n.verdict.state === "unknown" && <span className="hint">unknown: {n.verdict.why}</span>}
+                      {n.verdict.state === "pinned" && (
+                        <>
+                          no: pinned, kept for pods that can't move
+                          <Blockers found={n.verdict.blockers ?? []} />
+                        </>
+                      )}
                       {n.verdict.state === "blocked" && (
                         <>
                           <span className="bad">blocked</span>
-                          <ul>
-                            {(n.verdict.blockers ?? []).map((b) => (
-                              <li key={`${b.namespace}/${b.pod}`}>
-                                {b.namespace}/{b.pod}: {b.reasons.join("; ")}
-                                {(b.changes ?? []).map((c, i) => (
-                                  <details key={i} className="change">
-                                    <summary>To remove it: {c.reason}</summary>
-                                    <div className="hint">{c.change}.</div>
-                                    {c.manifest && <pre>{c.manifest}</pre>}
-                                  </details>
-                                ))}
-                              </li>
+                          <Blockers found={n.verdict.blockers ?? []} />
+                          {n.verdict.restart &&
+                            (n.verdict.restart.workloads.length ? (
+                              <div className="restart">Restart {n.verdict.restart.workloads.join(", ")} to free it.</div>
+                            ) : (
+                              <div className="hint">A restart wouldn't free it: {n.verdict.restart.why_not}.</div>
                             ))}
-                          </ul>
                         </>
                       )}
                     </td>

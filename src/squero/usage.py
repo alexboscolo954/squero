@@ -591,7 +591,7 @@ SHARED_STORE = (
 POD_REQUESTS = "kube_pod_container_resource_requests"
 
 
-def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
+def rooms(prom: Prom, t: Target, at: float, pinned: str | None = None) -> dict[str, Any]:
     """The cluster's nodes with what their Room is made of (slice 15.1a), from
     kube-state-metrics as it is at `at`: per node its allocatable, taints, whether it is
     cordoned, its instance type where the label is allowlisted, and the requests of the
@@ -614,8 +614,13 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
     at) and `slots`, the pods it may hold (None where not read); each of `own` with its
     `containers`' requests one by one and its `workload` (None where its owners don't
     resolve), so its Sizings can be applied to it container by container.
+    `pinned` (slice 15.2a): the cluster's Placement label, `key=value`; each node says
+    whether it carries it, as kube-state-metrics shows it (a label it doesn't allowlist
+    is on no node).
     `problem` when no node is read; the caller refuses a store shared with another
     Contract that has no cluster labels (`SHARED_STORE`), as for list prices."""
+    pin_key, _, pin_value = (pinned or "").partition("=")
+    shown = "label_" + re.sub(r"[^a-zA-Z0-9_]", "_", pin_key)  # as kube-state-metrics names it
     scoped = [f"{k}={_string(v)}" for k, v in sorted(t.labels.items())]
 
     def of(metric: str, *extra: str) -> str:
@@ -721,6 +726,7 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
             {
                 "node": name,
                 "type": next((have[k] for k in TYPE_LABELS if have.get(k)), ""),
+                "pinned": bool(pinned) and have.get(shown) == pin_value,
                 "taints": sorted(taints.get(name, [])),
                 "cordoned": name in cordoned,
                 "allocatable": allocatable.get(name, {}),
@@ -743,6 +749,7 @@ def rooms(prom: Prom, t: Target, at: float) -> dict[str, Any]:
         "nodes": out,
         "problem": problem,
         "budgets": [{"namespace": ns, "budget": name} for ns, name in budgets],
+        "placement": pinned,  # the label it was read with (slice 15.2a)
     }
 
 
@@ -1000,7 +1007,8 @@ def collect(
             out.rooms[t.cluster] = {"nodes": [], "problem": SHARED_STORE}
         else:
             try:
-                out.rooms[t.cluster] = rooms(prom, t, end)
+                pinned = cluster.placement.label if cluster.placement else None
+                out.rooms[t.cluster] = rooms(prom, t, end, pinned)
             except UsageError as e:
                 out.rooms[t.cluster] = {"nodes": [], "problem": str(e)}
             if cluster.actuator_token_secret:  # slice 15.3b: what it applies each type by

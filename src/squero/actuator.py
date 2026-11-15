@@ -292,6 +292,17 @@ class Boost(BaseModel):
     factor: float = Field(ge=1.5, le=4)
 
 
+class Placing(BaseModel):
+    """The cluster's Placement (slice 15.2a): its Pinned nodes' label (`key=value`) and
+    taint, and the Workloads whose new pods prefer them, `namespace/Kind/name`."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    label: str
+    taint: str | None = None
+    workloads: list[str] = []
+
+
 class Desired(BaseModel):
     kill_switch: bool
     sizings: list[Wanted]  # Approved Sizings
@@ -327,6 +338,9 @@ class Desired(BaseModel):
     # sent under the Kill switch too (a read is no change). None, as from an older Hub:
     # nothing is reported
     blockers: list[str] | None = None
+    # slice 15.2a: the cluster's Placement, from its last usable report of Blockers. None:
+    # off, or no usable report (what it knew stays). Read by no Actuator yet: 15.2b acts on it
+    placement: Placing | None = None
 
 
 class Actuation(BaseModel):
@@ -2371,7 +2385,7 @@ class Actuator:
         self.blockers_due = now + BLOCKERS_EVERY
         report = blocking(self.core, self.policy, namespaces, now)
         try:
-            r = self.http.post("/actuator/blockers", json=report.model_dump())
+            r = self.http.post("/actuator/blockers", json=blockers.sent(report))
             r.raise_for_status()
         except httpx.HTTPError as e:
             code = e.response.status_code if isinstance(e, httpx.HTTPStatusError) else None
