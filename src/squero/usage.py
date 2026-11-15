@@ -719,6 +719,10 @@ def rooms(
         one = each.setdefault(who, {}).setdefault(label(m, "container"), {})
         one[m.get("resource", "")] = float(s["value"][1])
     pod_owners = prom.instant(selector("kube_pod_owner", t), at)
+    claims = {
+        (label(s["metric"], "namespace"), label(s["metric"], "pod"))
+        for s in prom.instant(selector("kube_pod_spec_volumes_persistentvolumeclaims_info", t), at)
+    }
     owned = resolve(  # its pods' Workloads, as the Sizings name them
         pod_owners,
         prom.instant(selector("kube_replicaset_owner", t), at),
@@ -742,6 +746,7 @@ def rooms(
         mine: dict[str, Any] = {"cpu": 0.0, "memory": 0.0} | asks.get(who, {})
         mine["bound"] = m.get("created_by_kind") in ("DaemonSet", "Node")
         mine["kind"] = controller.get(who)  # None: no owner series of it, so not known
+        mine["pvc"] = who in claims  # a persistent volume: never a spot candidate (16.1c)
         mine["containers"] = [
             {"name": name, "cpu": 0.0, "memory": 0.0} | asked
             for name, asked in sorted(each.get(who, {}).items())
@@ -796,6 +801,7 @@ def rooms(
         "budgets": [{"namespace": ns, "budget": name} for ns, name in budgets],
         "placement": pinned,  # the label it was read with (slice 15.2a)
         "spot": spot,  # and its spot label's (slice 16.1a)
+        "pvc": True,  # its pods say whether they claim a persistent volume (slice 16.1c)
     }
 
 

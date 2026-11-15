@@ -102,6 +102,7 @@ API_1 = {"namespace": "shop", "pod": "api-1", "cpu": 0.5, "memory": 1.0 * GI, "b
 # slice 15.4: each container's own requests, and the pod's Workload where its owners resolve
 ONE = {"containers": [{"name": "app", "cpu": 0.5, "memory": 1.0 * GI}]}
 ONE["workload"] = {"kind": "ReplicaSet", "name": "owner"}  # a ReplicaSet with no owner series
+ONE["pvc"] = False  # slice 16.1c: whether it claims a persistent volume
 
 
 def test_each_node_is_read_with_what_its_room_is_made_of() -> None:
@@ -125,7 +126,7 @@ def test_each_node_is_read_with_what_its_room_is_made_of() -> None:
         "own": [  # each with its controller's kind (slice 15.1c)
             {**API_1, "kind": "ReplicaSet", **ONE},
             {"namespace": "shop", "pod": "db-0", "cpu": 1.0, "memory": 4.0 * GI}
-            | {"bound": False, "kind": "StatefulSet"}
+            | {"bound": False, "kind": "StatefulSet", "pvc": False}
             | {"workload": {"kind": "StatefulSet", "name": "owner"}}
             | {"containers": [{"name": "app", "cpu": 1.0, "memory": 4.0 * GI}]},
         ],
@@ -157,8 +158,9 @@ def test_a_pod_outside_the_contracts_namespaces_only_reaches_the_hub_in_a_sum() 
         if "kube_pod" in q and 'namespace=~"shop"' not in q:
             assert q.startswith(("sum by (node, exported_node", "count by (node, exported_node")), q
     # its own by name: its pods, their requests, its budgets at 0 (slice 15.1c), and
-    # the three owner series that give each pod its Workload (slice 15.4)
-    assert sum('namespace=~"shop"' in q for q in fake.queries) == 6
+    # the three owner series that give each pod its Workload (slice 15.4), and their
+    # persistent volumes (slice 16.1c)
+    assert sum('namespace=~"shop"' in q for q in fake.queries) == 7
 
 
 def test_only_running_and_pending_pods_hold_requests() -> None:
@@ -200,7 +202,7 @@ def test_a_pod_asking_nothing_is_still_the_contracts_own_and_one_on_no_node_is_n
     pod(fake, "waiting-1", on="", phase="Pending")  # not scheduled yet
     (n1,) = read(fake)["nodes"]
     bare = {"namespace": "shop", "pod": "bare-1", "cpu": 0.0, "memory": 0.0, "bound": False}
-    bare |= {"kind": "ReplicaSet", "containers": []}
+    bare |= {"kind": "ReplicaSet", "containers": [], "pvc": False}
     bare["workload"] = {"kind": "ReplicaSet", "name": "owner"}
     assert n1["own"] == [bare]
     assert (n1["pods"], n1["requests"]) == (1, {"cpu": 0.0, "memory": 0.0})
@@ -236,6 +238,7 @@ def test_no_node_read_is_a_problem_and_a_cordoned_node_says_so() -> None:
         "budgets": [],
         "placement": None,  # slice 15.2a: read with no Placement label
         "spot": None,  # slice 16.1a: nor a spot label
+        "pvc": True,  # slice 16.1c: its pods say whether they claim a volume
     }
     fake = FakePrometheus()
     node(fake, "n1")
@@ -694,6 +697,7 @@ def test_the_nodes_route_gives_the_contracts_own_clusters(
     (shown,) = body["clusters"]
     assert (shown["cluster"], shown["at"], shown["autoscaler"]) == ("test", NOW, None)
     assert [n["node"] for n in shown["nodes"]] == ["n1", "n2"]
-    assert shown["nodes"][0]["own"][0] == {**API_1, "kind": "ReplicaSet", **ONE}
+    sent = {k: v for k, v in ONE.items() if k != "pvc"}  # read for candidates, not shown
+    assert shown["nodes"][0]["own"][0] == {**API_1, "kind": "ReplicaSet", **sent}
     assert shown["nodes"][0]["verdict"]["state"] == "unknown"
     assert shown["nodes"][0]["others"]["pods"] == 2 and "theirs" not in json.dumps(body)

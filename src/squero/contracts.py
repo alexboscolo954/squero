@@ -488,6 +488,18 @@ def _off(v: Any) -> Any:
 PolicyName = Annotated[str, BeforeValidator(_off)]
 
 
+SPOT_KINDS = ("Deployment", "Rollout")  # a Spot ratio's (slice 16.1c); CronJobs with 16.3
+NEVER_SPOT = ("StatefulSet", "DaemonSet", "Job")
+
+
+class SpotRule(Strict):
+    """A Spot ratio and its On-demand minimum (slice 16.1c), on the Sizing rule that
+    picks a Workload."""
+
+    ratio: float = Field(gt=0, le=1)
+    on_demand: int = Field(ge=1)
+
+
 class SizingRule(Strict):
     """Which policy a Workload's containers get. Every field set must match; namespace
     and name take globs (`checkout-*`)."""
@@ -503,6 +515,8 @@ class SizingRule(Strict):
     # the Startup boost (slice 13.4): its containers' new pods start with their CPU limit
     # times this, until the pod is Ready
     startup_boost: float | None = Field(None, ge=1.5, le=4)
+    # the Spot ratio (slice 16.1c): its Deployments' and Rollouts' replicas on spot nodes
+    spot: SpotRule | None = None
 
     @model_validator(mode="after")
     def _matches_something(self) -> "SizingRule":
@@ -512,6 +526,12 @@ class SizingRule(Strict):
             raise ValueError("automate: a rule with policy off has no Sizings to apply")
         if self.startup_boost and not self.automate:
             raise ValueError("startup_boost: only on a rule with automate")
+        if self.spot and self.container is not None:
+            raise ValueError("spot: a Workload's, not a container's: a rule without container")
+        if self.spot and self.kind in NEVER_SPOT:
+            raise ValueError(f"spot: a {self.kind} never runs on spot")
+        if self.spot and self.kind == "CronJob":
+            raise ValueError("spot: CronJobs on spot come with slice 16.3")
         return self
 
     def matches(self, cluster: str, namespace: str, kind: str, name: str, container: str) -> bool:
@@ -625,6 +645,14 @@ class SizingConfig(Strict):
             (r for r in self.rules if r.matches(cluster, namespace, kind, name, container)), None
         )
         return rule.startup_boost if rule else None
+
+    def spot(self, cluster: str, namespace: str, kind: str, name: str) -> SpotRule | None:
+        """A Workload's Spot ratio (slice 16.1c): the first rule without `container` that
+        matches it says, whatever its kind (one that can't run on spot is told so where it
+        is shown). Whether its cluster can place it is Contract.spot_for's to check."""
+        # a rule naming a container matches no Workload as a whole (no container "")
+        rule = next((r for r in self.rules if r.matches(cluster, namespace, kind, name, "")), None)
+        return rule.spot if rule else None
 
     def policy(self, name: str) -> Policy | None:
         """The settings for a policy name; None for `off`."""
@@ -882,12 +910,19 @@ class Contract(Strict):
             if outside := sorted(set(self.deploy_checks.namespaces) - spaces):
                 raise ValueError(f"deploy_checks namespaces not in any cluster: {outside}")
         actuated = {c.name for c in self.clusters if c.actuator_token_secret}
+        spotted = {c.name for c in self.clusters if c.spot} & actuated  # slice 16.1c
         for i, r in enumerate(self.sizing.rules):
             if r.cluster is not None and r.cluster not in groups["cluster"]:
                 raise ValueError(f"sizing rule {i + 1}: no cluster {r.cluster!r}")
             if r.automate and not (actuated if r.cluster is None else actuated & {r.cluster}):
                 where = f"cluster {r.cluster!r} has" if r.cluster else "no cluster has"
                 raise ValueError(f"sizing rule {i + 1} automates: {where} no actuator_token_secret")
+            if r.spot and not (spotted if r.cluster is None else spotted & {r.cluster}):
+                where = f"cluster {r.cluster!r}" if r.cluster else "a cluster"
+                raise ValueError(
+                    f"sizing rule {i + 1} sets spot: {where} needs both a spot label and an "
+                    "actuator_token_secret"
+                )
         if self.actuator.eviction and not actuated:
             raise ValueError("actuator: eviction, but no cluster has an actuator_token_secret")
         if (self.actuator.reflexes.oom or self.actuator.reflexes.burst) and not actuated:
@@ -971,6 +1006,15 @@ class Contract(Strict):
             held.append("gcp")
         want = cluster.provider or (held[0] if len(held) == 1 else None)
         return want if want in held else None
+
+    def spot_for(self, cluster: str, namespace: str, kind: str, name: str) -> SpotRule | None:
+        """A Workload's Spot ratio where its cluster can place it (slice 16.1c): one that
+        names its spot label and runs an Actuator; elsewhere a rule's `spot` is no
+        setting of it."""
+        cl = next((c for c in self.clusters if c.name == cluster), None)
+        if cl is None or cl.spot is None or not cl.actuator_token_secret:
+            return None
+        return self.sizing.spot(cluster, namespace, kind, name)
 
     def price(self, cluster: str) -> ClusterPrices | None:
         """A cluster's unit prices: its own, else the Contract's; None when unpriced."""

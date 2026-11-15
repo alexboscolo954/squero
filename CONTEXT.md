@@ -261,6 +261,14 @@ What a cloud charges on demand per hour for an instance type in a region, from i
 A node carrying the cluster's spot label (`spot.label` in the Contract; a node without it is on-demand), priced at the cluster's spot discount: the share of its on-demand price it costs (0.35: it pays 35%). The cluster's one CPU and one GiB price blend its spot and on-demand nodes, by size, each hour: a typed price is then the on-demand rate, a list price each spot node's at the discount. Every pod costs the cluster's blended price, wherever it runs; a Node that could go is priced at its own rate. Seen through kube-state-metrics, which shows a node label only when allowlisted; where no node shows it, every node is priced on-demand.
 _Avoid_: preemptible node, spot instance (the cloud's own words for the machine)
 
+**Spot ratio**:
+The share of a Workload's replicas steered to Spot nodes, set on the Sizing rule that picks it (`spot: {ratio, on_demand}`), for a Deployment or Rollout on a cluster that names its spot label and runs an Actuator; with its On-demand minimum it gives the replicas meant for each: on-demand the larger of the minimum and the share that isn't spot, rounded up (0.7 with 2: 10 replicas give 3 and 7, 4 give 2 and 2). A Workload with fewer than 2 replicas, or one that blocks a node, gets none on spot. It is the Operator's setting, not tied to Automation.
+_Avoid_: spot percentage, spot share
+
+**On-demand minimum**:
+The replicas of a Workload under a Spot ratio kept off Spot nodes whatever the ratio, 1 or more, so no Workload is ever all on spot. Phase 14's Floor is another thing: the fewest replicas an autoscaler should keep.
+_Avoid_: on-demand floor, base capacity
+
 **Bill**:
 What the cloud says a cluster's compute cost each UTC day, read from its billing API (AWS Cost Explorer, Azure Cost Management or GCP's billing export in BigQuery, usage before credits, lines carrying the cluster's `billing` tag, spot ones included). The Hub sets it beside the estimate (the cluster's node-hours at its unit prices, a Spot node's hours at its own rate): within 5% it reconciles, else it is flagged; when fewer than 90% of the window's hours were sampled it gives the gap but no verdict. A Bill never changes a shown cost.
 

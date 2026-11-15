@@ -474,6 +474,51 @@ class SpotShown(BaseModel):
     note: str | None = None  # when none does
 
 
+class Sides(BaseModel):
+    on_demand: int
+    spot: int
+
+
+class Candidate(BaseModel):
+    """A Workload that could run on spot (slice 16.1c), with its what-if: 70% of its
+    replicas on spot, 2 on-demand at least."""
+
+    namespace: str
+    kind: str
+    name: str
+    replicas: float  # on average, in its latest Sizings
+    requests: dict[str, float]  # one pod's: cpu (cores), memory (bytes)
+    on_demand: int
+    spot: int
+    saving: float | None = None  # a month, an upper bound; None: not priced
+
+
+class Candidates(BaseModel):
+    workloads: list[Candidate]  # by saving, the first MAX_CANDIDATES
+    more: int = 0  # not shown
+    saving: float | None = None  # of every one, never summed with Savings
+    note: str | None = None  # why there is no money, or no list
+
+
+class SpotWorkload(BaseModel):
+    """A live Workload under a Spot ratio (slice 16.1c)."""
+
+    namespace: str
+    kind: str
+    name: str
+    replicas: int  # live
+    ratio: float
+    on_demand: int  # its On-demand minimum
+    why: str | None = None  # why none is meant for spot
+    intended: Sides | None = None  # None: a kind that never runs on spot
+    actual: Sides | None = None  # None: its nodes not read with the spot label
+
+
+class SpotWorkloads(BaseModel):
+    workloads: list[SpotWorkload]
+    note: str | None = None
+
+
 class ClusterNodes(BaseModel):
     cluster: str
     at: float  # the run that read them
@@ -485,6 +530,8 @@ class ClusterNodes(BaseModel):
     judged: dict[str, int] = {}  # how many nodes got each verdict
     placement: PlacementShown | None = None  # None: off
     spot: SpotShown | None = None  # None: every node on-demand (slice 16.1a)
+    candidates: Candidates | None = None  # None: its read can't say (slice 16.1c)
+    spot_workloads: SpotWorkloads | None = None  # None: no Workload under a Spot ratio
     problem: str | None = None  # why there are none
     largest: dict[str, float] | None = None  # the Room after DaemonSets that caps Sizings
     nodes: list[Node]

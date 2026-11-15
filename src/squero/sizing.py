@@ -32,7 +32,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 from squero import blockers, listprices, usage
-from squero.contracts import BUILTIN, ClusterPrices, Contract, Policy
+from squero.contracts import BUILTIN, SPOT_KINDS, ClusterPrices, Contract, Policy, SpotRule
 from squero.slack import clean
 from squero.usage import NEEDS_FOR, Bounds, ContainerUsage, Divides, Workload
 
@@ -371,6 +371,151 @@ def rates(read: dict[str, Any], c: Contract, cluster: str) -> dict[str, float]:
     return {n["node"]: (spot if n.get("spot") else 1.0) / share for n in read["nodes"]}
 
 
+WHAT_IF = SpotRule(ratio=0.7, on_demand=2)  # a candidate's (slice 16.1c)
+SIDES = ("on_demand", "spot")
+MAX_CANDIDATES = 20  # shown per cluster, by saving; the total counts every one
+
+
+def spot_split(replicas: int, rule: SpotRule) -> tuple[int, int]:
+    """A Workload's replicas meant for on-demand and for spot nodes under a Spot ratio
+    (slice 16.1c): on-demand the larger of its On-demand minimum and the share that isn't
+    spot, rounded up (rounded first: 10 * 0.3 is 3.0000000000000004), never more than
+    there are."""
+    rest = math.ceil(round(replicas * (1 - rule.ratio), 9))
+    on_demand = min(replicas, max(rule.on_demand, rest))
+    return on_demand, replicas - on_demand
+
+
+def _live(read: dict[str, Any]) -> dict[tuple[str, str, str], list[bool]]:
+    """Each Workload's live pods in a read of the nodes, whether each runs on spot."""
+    out: dict[tuple[str, str, str], list[bool]] = {}
+    for n in read.get("nodes") or []:
+        for p in n["own"]:
+            if w := p.get("workload"):
+                out.setdefault((p["namespace"], w["kind"], w["name"]), []).append(
+                    bool(n.get("spot"))
+                )
+    return out
+
+
+def spot_workloads(
+    read: dict[str, Any], c: Contract, cluster: str, blocking: set[tuple[str, str]]
+) -> dict[str, Any] | None:
+    """Each live Workload under a Spot ratio its cluster can place (slice 16.1c): its
+    replicas meant for each kind of node (`intended`) and where they run (`actual`, None
+    in a read made without the cluster's spot label), or `why` it gets none on spot: a
+    kind that can't, fewer than 2 replicas, or a node it blocks (`blocking`, by
+    namespace and `Kind/name`). None where no Workload is under one."""
+    cl = next(x for x in c.clusters if x.name == cluster)
+    known = cl.spot is not None and read.get("spot") == cl.spot.label
+    out = []
+    for (ns, kind, name), on in sorted(_live(read).items()):
+        rule = c.spot_for(cluster, ns, kind, name)
+        if rule is None:
+            continue
+        n, why = len(on), None
+        if kind == "CronJob":
+            why = "CronJobs on spot come with slice 16.3"
+        elif kind not in SPOT_KINDS:
+            why = f"a {kind} never runs on spot"
+        elif (ns, f"{kind}/{name}") in blocking:
+            why = "it blocks a node: none on spot"
+        elif n < 2:
+            why = "fewer than 2 replicas: none on spot"
+        meant = spot_split(n, rule) if why is None else (n, 0)
+        runs = (on.count(False), on.count(True))
+        out.append(
+            {
+                **{"namespace": ns, "kind": kind, "name": name, "replicas": n},
+                **{"ratio": rule.ratio, "on_demand": rule.on_demand, "why": why},
+                "intended": dict(zip(SIDES, meant, strict=True)) if kind in SPOT_KINDS else None,
+                "actual": dict(zip(SIDES, runs, strict=True)) if known else None,
+            }
+        )
+    if not out:
+        return None
+    return {"workloads": out, "note": "placed from slice 16.2: until then nothing is placed"}
+
+
+def candidates(
+    read: dict[str, Any],
+    c: Contract,
+    cluster: str,
+    rows: list[dict[str, Any]],
+    blocking: set[tuple[str, str]],
+) -> dict[str, Any] | None:
+    """Where a cluster's Workloads could run on spot (slice 16.1c): each Deployment or
+    Rollout whose what-if puts a replica on spot (3 or more on average in its latest
+    Sizings, `rows`, rounded half up: 2 stay on-demand), no pod
+    claiming a persistent volume, none blocking a node (`blocking`), and under no Spot
+    ratio, with its what-if (WHAT_IF: 70% on spot, 2 on-demand at least): the replicas
+    each way and, where the cluster names its spot nodes and has a price, what its spot
+    replicas would save a month at a spot node's rate against the on-demand one. An
+    upper bound, never summed with Savings. None where the read can't say (a problem)."""
+    if read.get("problem"):
+        return None
+    if not read.get("pvc"):
+        return {"workloads": [], "more": 0, "saving": None, "note": (
+            "its nodes were read before the Hub read their volumes: the next hourly run does"
+        )}  # fmt: skip
+    cl = next(x for x in c.clusters if x.name == cluster)
+    claim = {
+        (p["namespace"], p["workload"]["kind"], p["workload"]["name"])
+        for n in read["nodes"]
+        for p in n["own"]
+        if p.get("pvc") and p.get("workload")
+    }
+    asked: dict[tuple[str, str, str], dict[str, float]] = {}
+    for r in rows:
+        if r["cluster"] != cluster or r["kind"] not in SPOT_KINDS:
+            continue
+        w = asked.setdefault((r["namespace"], r["kind"], r["name"]), {"pods": 0.0})
+        w["pods"] = max(w["pods"], r.get("pods") or 0.0)
+        for res in ("cpu", "memory"):
+            w[res] = w.get(res, 0.0) + ((r.get("requests") or {}).get(res) or 0.0)
+    price, note = c.price(cluster), None
+    rate = None
+    if cl.spot is None:
+        note = "set the cluster's spot to price it"
+    elif price is None:
+        note = "no price for this cluster"
+    else:
+        share, against = c._spot_shares.get(cluster, (1.0, cl.spot.discount))
+        rate = (ClusterPrices(cpu=price.cpu / share, memory=price.memory / share), against)
+    found: list[dict[str, Any]] = []
+    for (ns, kind, name), w in asked.items():
+        if (
+            (ns, kind, name) in claim
+            or (ns, f"{kind}/{name}") in blocking
+            or c.spot_for(cluster, ns, kind, name)
+        ):
+            continue
+        replicas = math.floor(w["pods"] + 0.5)  # half up: 2.5 is 3
+        on_demand, spot = spot_split(replicas, WHAT_IF)
+        if not spot:  # 2 replicas stay on-demand: nothing for the what-if to move
+            continue
+        saving = None
+        if rate is not None:
+            each = monthly(rate[0], cpu=w["cpu"], memory=w["memory"])
+            saving = spot * each * max(0.0, 1 - rate[1])
+        found.append(
+            {
+                **{"namespace": ns, "kind": kind, "name": name, "replicas": round(w["pods"], 1)},
+                **{"requests": {"cpu": w["cpu"], "memory": w["memory"]}},  # one pod's
+                **{"on_demand": on_demand, "spot": spot, "saving": saving},
+            }
+        )
+    found.sort(key=lambda f: (-(f["saving"] or 0.0), -f["spot"] * f["requests"]["cpu"],
+                              f["namespace"], f["name"]))  # fmt: skip
+    total = sum(f["saving"] for f in found) if rate is not None else None
+    return {
+        "workloads": found[:MAX_CANDIDATES],
+        "more": max(0, len(found) - MAX_CANDIDATES),
+        "saving": total,
+        "note": note if found else None,  # no money to speak of without a candidate
+    }
+
+
 def _sized_type(
     kind: str,
     g: ContainerUsage,
@@ -495,7 +640,9 @@ def nodes_report(
     whether it places them (its last report says so), and a `note` when no node does.
     `spot` (slice 16.1a), where it names the cluster's spot label: the label, the
     discount, how many nodes carry it, and a `note` when none does; a node that could go
-    is priced at its own rate, a spot node's at the discount."""
+    is priced at its own rate, a spot node's at the discount. `candidates` and
+    `spot_workloads` (slice 16.1c): where its Workloads could run on spot, and those
+    under a Spot ratio, intended against actual."""
     out = []
     for cl in c.clusters:
         read = found.get(cl.name)
@@ -513,6 +660,13 @@ def nodes_report(
                 "now": _worth(first, read, price, rate),
                 "after": _worth(later, read, price, rate),
             }
+        usable = report is not None and not blockers.gap(report, cl, now)
+        blocking = {
+            (b["namespace"], b["workload"])
+            for v in verdict.values()
+            for b in v["blockers"]
+            if usable and b.get("workload")
+        }  # slice 16.1c: named by its Actuator's report, never Prometheus' guess
         judged = {state: 0 for state in ("clear", "blocked", "unknown")}
         if cl.placement:
             judged["pinned"] = 0
@@ -568,6 +722,8 @@ def nodes_report(
                 **{"settings": blockers.SETTINGS[cl.autoscaler]},  # slice 15.6
                 **{"reported": report["received"] if report else None},
                 **{"could_go": went, "judged": judged, "placement": placement, "spot": spot},
+                **{"candidates": candidates(read, c, cl.name, rows or [], blocking)},
+                **{"spot_workloads": spot_workloads(read, c, cl.name, blocking)},
                 **{"problem": read.get("problem"), "largest": largest_room(read), "nodes": nodes},
             }
         )

@@ -32,6 +32,58 @@ function Blockers({ found }: { found: Blocker[] }) {
   );
 }
 
+type Cluster = api.Nodes["clusters"][number];
+
+/** Where a cluster's Workloads could run on spot, and those under a Spot ratio (slice 16.1c). */
+function Spotting({ c, currency }: { c: Cluster; currency?: string | null }) {
+  const found = c.candidates;
+  const under = c.spot_workloads;
+  return (
+    <>
+      {under && (
+        <div className="spot-workloads">
+          <p className="hint">
+            Under a Spot ratio: {under.note && <span className="notice">{under.note}.</span>}
+          </p>
+          <ul>
+            {under.workloads.map((w) => (
+              <li key={`${w.namespace}/${w.kind}/${w.name}`}>
+                {w.namespace}/{w.kind}/{w.name}: {w.replicas} replicas
+                {w.intended && `, meant ${w.intended.on_demand} on-demand and ${w.intended.spot} on spot`}
+                {w.actual ? `, running ${w.actual.on_demand} and ${w.actual.spot}` : ", where they run not read yet"}
+                {w.why && <span className="hint"> ({w.why})</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {found && (found.workloads.length > 0 || found.note) && (
+        <details className="candidates">
+          <summary>
+            Could run on spot: {found.workloads.length + (found.more ?? 0)}
+            {currency && found.saving != null && `, up to ${money(found.saving, currency)}`}
+            {found.note && <span className="notice"> ({found.note})</span>}
+          </summary>
+          <p className="hint">
+            Each with 70% of its replicas on spot and 2 on-demand at least: an upper bound, saved only where a spot
+            pool exists and the autoscaler moves nodes to it. Not part of Savings.
+          </p>
+          <ul>
+            {found.workloads.map((w) => (
+              <li key={`${w.namespace}/${w.kind}/${w.name}`}>
+                {w.namespace}/{w.kind}/{w.name}: {w.replicas} replicas of {both(w.requests)}, {w.spot} on spot and{" "}
+                {w.on_demand} on-demand
+                {currency && w.saving != null && `: ${money(w.saving, currency)}`}
+              </li>
+            ))}
+            {(found.more ?? 0) > 0 && <li className="hint">and {found.more} more</li>}
+          </ul>
+        </details>
+      )}
+    </>
+  );
+}
+
 export function NodesPage({ contract }: { contract: string }) {
   const [data, error] = useLoaded(api.nodes, contract);
   if (error) return <p className="notice">The Hub didn't answer: {error}</p>;
@@ -70,6 +122,7 @@ export function NodesPage({ contract }: { contract: string }) {
               {c.spot.note && <span className="notice">{c.spot.note}.</span>}
             </p>
           )}
+          <Spotting c={c} currency={data.currency} />
           {(c.settings ?? []).length > 0 && (
             <details className="settings">
               <summary>Its autoscaler's own settings to check (the Hub can't read them)</summary>

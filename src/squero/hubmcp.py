@@ -159,6 +159,15 @@ def _placement(p: webapp.PlacementShown) -> dict[str, Any]:
     return p.model_dump() | {"workloads": p.workloads[:MAX_PLACED], "more_workloads": more}
 
 
+def _spotted(s: webapp.SpotWorkloads) -> dict[str, Any]:
+    """A cluster's Workloads under a Spot ratio, capped as placed ones are (slice 16.1c)."""
+    more = max(0, len(s.workloads) - MAX_PLACED)
+    return s.model_dump() | {
+        "workloads": [w.model_dump() for w in s.workloads[:MAX_PLACED]],
+        "more_workloads": more,
+    }
+
+
 def _nodes(cl: webapp.ClusterNodes, top: int) -> dict[str, Any]:
     """A cluster's nodes for the `nodes` tool (slice 15.4): blocked first, `top` of them,
     each with its Room and its verdict. The pods' names and the reasons came from the
@@ -186,6 +195,8 @@ def _nodes(cl: webapp.ClusterNodes, top: int) -> dict[str, Any]:
         **{"judged": cl.judged, "could_go": went, "largest_room": cl.largest},
         **{"placement": _placement(cl.placement) if cl.placement else None},
         **{"spot": cl.spot.model_dump() if cl.spot else None},
+        **{"spot_candidates": cl.candidates.model_dump() if cl.candidates else None},
+        **{"spot_workloads": _spotted(cl.spot_workloads) if cl.spot_workloads else None},
         **{"nodes": nodes, "more_nodes": max(0, len(listed) - top)},
     }
 
@@ -510,6 +521,12 @@ def build(
         spot: where the cluster names spot nodes, their label, the discount they are priced
         at (the share of on-demand they cost) and how many nodes carry it; each node says
         whether it is spot, and a node that could go is priced at its own rate.
+        spot_candidates: Deployments and Rollouts that could run on spot (2 or more
+        replicas on average, no persistent volume, blocking no node, under no Spot ratio),
+        each with a what-if of 70% of its replicas on spot and 2 on-demand at least, and
+        where the cluster names spot nodes what that would save a month: an upper bound,
+        a figure of its own, never part of Savings. spot_workloads: those under a Spot
+        ratio, the replicas intended on-demand and on spot against where they run.
         placement: where the cluster has Placement, its label, how many nodes carry it
         (Pinned nodes: kept for pods that can't move, never removed), the Workloads its
         Actuator is told to place (their new pods prefer the Pinned nodes) and whether it

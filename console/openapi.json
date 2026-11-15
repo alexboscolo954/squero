@@ -581,6 +581,107 @@
         "title": "Brief",
         "type": "object"
       },
+      "Candidate": {
+        "description": "A Workload that could run on spot (slice 16.1c), with its what-if: 70% of its\nreplicas on spot, 2 on-demand at least.",
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "on_demand": {
+            "title": "On Demand",
+            "type": "integer"
+          },
+          "replicas": {
+            "title": "Replicas",
+            "type": "number"
+          },
+          "requests": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Requests",
+            "type": "object"
+          },
+          "saving": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Saving"
+          },
+          "spot": {
+            "title": "Spot",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "namespace",
+          "kind",
+          "name",
+          "replicas",
+          "requests",
+          "on_demand",
+          "spot"
+        ],
+        "title": "Candidate",
+        "type": "object"
+      },
+      "Candidates": {
+        "properties": {
+          "more": {
+            "default": 0,
+            "title": "More",
+            "type": "integer"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "saving": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Saving"
+          },
+          "workloads": {
+            "items": {
+              "$ref": "#/components/schemas/Candidate"
+            },
+            "title": "Workloads",
+            "type": "array"
+          }
+        },
+        "required": [
+          "workloads"
+        ],
+        "title": "Candidates",
+        "type": "object"
+      },
       "Change": {
         "properties": {
           "cost": {
@@ -797,6 +898,16 @@
             ],
             "title": "Autoscaler"
           },
+          "candidates": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Candidates"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "cluster": {
             "title": "Cluster",
             "type": "string"
@@ -888,6 +999,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/SpotShown"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spot_workloads": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SpotWorkloads"
               },
               {
                 "type": "null"
@@ -3355,6 +3476,24 @@
         "title": "Share",
         "type": "object"
       },
+      "Sides": {
+        "properties": {
+          "on_demand": {
+            "title": "On Demand",
+            "type": "integer"
+          },
+          "spot": {
+            "title": "Spot",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "on_demand",
+          "spot"
+        ],
+        "title": "Sides",
+        "type": "object"
+      },
       "SpentCost": {
         "properties": {
           "accrued": {
@@ -3406,6 +3545,103 @@
           "nodes"
         ],
         "title": "SpotShown",
+        "type": "object"
+      },
+      "SpotWorkload": {
+        "description": "A live Workload under a Spot ratio (slice 16.1c).",
+        "properties": {
+          "actual": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Sides"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "intended": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Sides"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "on_demand": {
+            "title": "On Demand",
+            "type": "integer"
+          },
+          "ratio": {
+            "title": "Ratio",
+            "type": "number"
+          },
+          "replicas": {
+            "title": "Replicas",
+            "type": "integer"
+          },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why"
+          }
+        },
+        "required": [
+          "namespace",
+          "kind",
+          "name",
+          "replicas",
+          "ratio",
+          "on_demand"
+        ],
+        "title": "SpotWorkload",
+        "type": "object"
+      },
+      "SpotWorkloads": {
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "workloads": {
+            "items": {
+              "$ref": "#/components/schemas/SpotWorkload"
+            },
+            "title": "Workloads",
+            "type": "array"
+          }
+        },
+        "required": [
+          "workloads"
+        ],
+        "title": "SpotWorkloads",
         "type": "object"
       },
       "Taught": {

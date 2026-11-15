@@ -671,6 +671,45 @@ export interface components {
             /** Title */
             title: string;
         };
+        /**
+         * Candidate
+         * @description A Workload that could run on spot (slice 16.1c), with its what-if: 70% of its
+         *     replicas on spot, 2 on-demand at least.
+         */
+        Candidate: {
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Namespace */
+            namespace: string;
+            /** On Demand */
+            on_demand: number;
+            /** Replicas */
+            replicas: number;
+            /** Requests */
+            requests: {
+                [key: string]: number;
+            };
+            /** Saving */
+            saving?: number | null;
+            /** Spot */
+            spot: number;
+        };
+        /** Candidates */
+        Candidates: {
+            /**
+             * More
+             * @default 0
+             */
+            more: number;
+            /** Note */
+            note?: string | null;
+            /** Saving */
+            saving?: number | null;
+            /** Workloads */
+            workloads: components["schemas"]["Candidate"][];
+        };
         /** Change */
         Change: {
             cost?: components["schemas"]["Cost"] | null;
@@ -737,6 +776,7 @@ export interface components {
             at: number;
             /** Autoscaler */
             autoscaler?: string | null;
+            candidates?: components["schemas"]["Candidates"] | null;
             /** Cluster */
             cluster: string;
             could_go?: components["schemas"]["Scenarios"] | null;
@@ -766,6 +806,7 @@ export interface components {
              */
             settings: string[];
             spot?: components["schemas"]["SpotShown"] | null;
+            spot_workloads?: components["schemas"]["SpotWorkloads"] | null;
         };
         /** ClusterStatus */
         ClusterStatus: {
@@ -1586,6 +1627,13 @@ export interface components {
             /** Pods */
             pods: number;
         };
+        /** Sides */
+        Sides: {
+            /** On Demand */
+            on_demand: number;
+            /** Spot */
+            spot: number;
+        };
         /** SpentCost */
         SpentCost: {
             /** Accrued */
@@ -1606,6 +1654,35 @@ export interface components {
             nodes: number;
             /** Note */
             note?: string | null;
+        };
+        /**
+         * SpotWorkload
+         * @description A live Workload under a Spot ratio (slice 16.1c).
+         */
+        SpotWorkload: {
+            actual?: components["schemas"]["Sides"] | null;
+            intended?: components["schemas"]["Sides"] | null;
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Namespace */
+            namespace: string;
+            /** On Demand */
+            on_demand: number;
+            /** Ratio */
+            ratio: number;
+            /** Replicas */
+            replicas: number;
+            /** Why */
+            why?: string | null;
+        };
+        /** SpotWorkloads */
+        SpotWorkloads: {
+            /** Note */
+            note?: string | null;
+            /** Workloads */
+            workloads: components["schemas"]["SpotWorkload"][];
         };
         /** Taught */
         Taught: {
