@@ -270,6 +270,18 @@ A pod that blocks its node's removal keeps that node whatever it asks. Where the
 - **Stopped** by the Kill switch and the pause annotation, as everything the webhook does. A list the Hub can't make now (no fresh report, no read of the nodes) leaves the last one in place; the Contract's Placement removed ends it.
 - **No new permission**: a JSON Patch on a pod's creation and Events, which it already writes. A DaemonSet's pods are never placed.
 
+## Spot: steering replicas
+
+Where the Contract names a cluster's [spot nodes](optimizer.md#spot-nodes) and a Sizing rule sets a [Spot ratio](optimizer.md#spot-ratios-and-candidates), the Actuator's webhook puts each new replica of the Workloads the Hub lists on a side, by ReplicaSet (from 0.57.0, slice 16.2b; [ADR 0006](adr/0006-placement-is-a-preference.md)):
+
+- **On-demand first.** While fewer of the ReplicaSet's pods are on-demand than its ratio keeps there (`{ratio: 0.7, on_demand: 2}`: 3 of 10, 2 of 4; all of one that blocks a node), a new pod is **required off the spot nodes**: a `NotIn` on the spot label, which a node without it meets, added to each of the pod's own required terms (they are ORed: one beside them would loosen them). This is the one requirement the webhook ever adds; it can leave a pod Pending only where no on-demand node has room, as the Workload's own manifest would. It also gets `controller.kubernetes.io/pod-deletion-cost: "1"`, so a scale-down takes spot replicas first, unless the pod sets its own.
+- **Then spot**: a preferred node affinity of weight 100 for the spot label, after the pod's own terms, and a toleration of the spot `taint` where the Contract names one (AKS taints its spot nodes). With no spot room the pod starts on-demand by itself; nothing needs to fall back.
+- **Counted by a label.** Each pod it steers carries `squero.io/capacity: on-demand` or `spot`. Each minute it lists the steered Workloads' pods, one list a namespace, and counts each ReplicaSet's: by that label, else by its node (the spot nodes the Hub sent), a Pending one without the label as neither, terminating and finished ones not at all. It reads a ReplicaSet's `spec.replicas` at its first admission in the minute, and again once the pods counted reach it (a rollout grows a ReplicaSet in seconds); a ReplicaSet counted full is listed again at admission (a replacement for a pod lost since, a spot interruption). Both reads have one second; one that fails or is slow places nothing. A dry run is decided and never counted.
+- **Left alone**: a pod whose own spec settles its side (a `nodeSelector` or a required affinity on the spot label's key), a paused Workload, everything under the Kill switch. Its running pods are never changed, evicted or restarted: a Workload below its minimum (the Nodes page's risk) is repaired at its next rollout or restart.
+- **Said on the Workload**: an Event `SpotPlaced` when it joins the list ("Spot: 70% of its new replicas prefer the nodes labelled karpenter.sh/capacity-type=spot, at least 2 kept off them"), `SpotEnded` when it leaves. Its report then says it steers (`spotting`), so the Hub drops "its Actuator doesn't place them yet".
+- **No new permission**: the ReplicaSet `get` and pod `list` it already has, a JSON Patch on a pod's creation, and Events.
+- **Autoscalers.** Karpenter launches on-demand where a NodePool allowing both has no spot; on Cluster Autoscaler a preference isn't counted when it picks a node group to grow, so whether new nodes are spot is its expander's setting.
+
 ## Stopping it: pause, Hub down
 
 A person in the client's cluster stops the Actuator on one Workload (a Deployment, StatefulSet, DaemonSet, Argo Rollout or CronJob) with an annotation:

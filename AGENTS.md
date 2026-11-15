@@ -34,7 +34,7 @@ Read next, in this order when you need depth:
 | [`docs/safety.md`](docs/safety.md) | The full safety model. |
 | [`docs/development.md`](docs/development.md) | Testing, evals and their results, MCP servers on their own, design notes. |
 | [`docs/roadmap.md`](docs/roadmap.md) | What is built, what is next ("## Next"), every decision, and "How every slice ships". It is the source of truth for project state. |
-| [`docs/adr/`](docs/adr) | Six decisions that are hard to reverse (0001 Category is a root-cause class, 0002 Hub and Relay with the Hub's own read/write list, 0003 Contract data in private git, 0004 standing approval for Sizings, 0005 Reflexes may raise limits, Sizings never do, 0006 Placement is a preference, never a requirement, and never moves a running pod). |
+| [`docs/adr/`](docs/adr) | Six decisions that are hard to reverse (0001 Category is a root-cause class, 0002 Hub and Relay with the Hub's own read/write list, 0003 Contract data in private git, 0004 standing approval for Sizings, 0005 Reflexes may raise limits, Sizings never do, 0006 Placement is a preference, never a requirement, and never moves a running pod, with one requirement for spot: an On-demand minimum is kept off spot nodes). |
 
 ## 2. Setup and commands
 

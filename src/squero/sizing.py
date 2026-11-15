@@ -32,7 +32,15 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 from squero import blockers, listprices, usage
-from squero.contracts import BUILTIN, SPOT_KINDS, ClusterPrices, Contract, Policy, SpotRule
+from squero.contracts import (
+    BUILTIN,
+    SPOT_KINDS,
+    ClusterPrices,
+    Contract,
+    Policy,
+    SpotRule,
+    on_demand_of,
+)
 from squero.slack import clean
 from squero.usage import NEEDS_FOR, Bounds, ContainerUsage, Divides, Workload
 
@@ -381,8 +389,7 @@ def spot_split(replicas: int, rule: SpotRule) -> tuple[int, int]:
     (slice 16.1c): on-demand the larger of its On-demand minimum and the share that isn't
     spot, rounded up (rounded first: 10 * 0.3 is 3.0000000000000004), never more than
     there are."""
-    rest = math.ceil(round(replicas * (1 - rule.ratio), 9))
-    on_demand = min(replicas, max(rule.on_demand, rest))
+    on_demand = on_demand_of(replicas, rule.ratio, rule.on_demand)
     return on_demand, replicas - on_demand
 
 
@@ -475,13 +482,18 @@ def spot_workloads(
             why = "fewer than 2 replicas: none on spot"
         meant = spot_split(n, rule) if why is None else (n, 0)
         runs = (on.count(False), on.count(True))
+        # below its minimum, not its share: pods from before it was steered are no risk;
+        # every replica where all are meant on-demand (it blocks a node, or has no more
+        # replicas than its minimum)
+        every = why is not None or n <= rule.on_demand
+        least = n if every else rule.on_demand
         risk = None
-        if spotting and known and kind in SPOT_KINDS and runs[0] < meant[0]:
-            if meant[0] < rule.on_demand or why is not None:  # every replica meant on-demand
-                risk = f"{runs[0]} of its {n} on-demand, where all are meant to be"
-            else:
-                risk = f"{runs[0]} on-demand, below its minimum of {rule.on_demand}"
-            risk += ": restart it to repair"
+        if spotting and known and kind in SPOT_KINDS and runs[0] < least:
+            risk = (
+                f"{runs[0]} of its {n} on-demand, where all are meant to be"
+                if every
+                else f"{runs[0]} on-demand, below its minimum of {rule.on_demand}"
+            ) + ": restart it to repair"
         out.append(
             {
                 **{"namespace": ns, "kind": kind, "name": name, "replicas": n},

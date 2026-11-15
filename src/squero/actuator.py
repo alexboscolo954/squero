@@ -65,6 +65,7 @@ PodDisruptionBudget covers, is never evicted: its rollout fails as with eviction
 """
 
 import base64
+import copy
 import json
 import logging
 import math
@@ -97,6 +98,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from squero import blockers
+from squero.contracts import on_demand_of
 
 log = logging.getLogger("squero.actuator")
 
@@ -1328,7 +1330,12 @@ def carries(p: Any, label: str) -> bool:
 
 
 def blocking(
-    core: Any, policy: Any, namespaces: list[str], now: float, label: str | None = None
+    core: Any,
+    policy: Any,
+    namespaces: list[str],
+    now: float,
+    label: str | None = None,
+    spotting: bool = False,
 ) -> blockers.Report:
     """The Blocker facts of `namespaces`' pods (slice 15.1b), read a page at a time. A
     namespace it may not read, or whose read fails, is left out of `namespaces`: the Hub
@@ -1358,6 +1365,7 @@ def blocking(
         truncated=len(found) > blockers.MAX_PODS,
         pods=found[: blockers.MAX_PODS],
         placing=label is not None,
+        spotting=spotting,  # slice 16.2b: only a Hub that sent spot nodes is told
     )
     while report.pods and len(report.model_dump_json()) > blockers.MAX_BYTES:
         fewer = report.pods[: len(report.pods) * 3 // 4]  # long names: cut by size too
@@ -1989,6 +1997,7 @@ def mutation(
     bursts: dict[str, dict[str, Any]] | None = None,
     nodes: dict[str, str] | None = None,
     placing: Placing | None = None,
+    steering: Callable[[dict[str, Any], str, str, str, bool], list[Any]] | None = None,
 ) -> list[Any]:
     """The JSON Patch giving a new pod of a workload the requests applied to it: only
     where its container still asks what the template asked then (a person's change wins),
@@ -2003,7 +2012,10 @@ def mutation(
     the pod's `BOOST` annotation; never a pod that already carries one (its template's),
     nor one with pod-level resources. A container in `bursts` starts at its Burst's CPU
     limit (slice 13.3b) while its own is still its template's then, a boost on top of it.
-    A pod of a Workload `placing` lists prefers its Pinned nodes (slice 15.2b, `placed`)."""
+    A pod of a Workload `placing` lists prefers its Pinned nodes (slice 15.2b, `placed`).
+    Last, `steering` puts a pod of a Workload under a Spot ratio on its side (slice 16.2b),
+    given the pod as the rest leaves it, its namespace, Workload and whether the review is
+    a dry run (counted then is never created)."""
     ns = req.get("namespace") or ""
     if req.get("operation") != "CREATE" or ns == own or ns.startswith("kube-"):
         return []
@@ -2116,6 +2128,8 @@ def mutation(
         else:
             at = "/metadata/annotations/" + BOOST.replace("/", "~1")
             ops.append({"op": "add", "path": at, "value": value})
+    if steering:  # last, on the pod as the rest leaves it: both may add an affinity
+        ops += steering(added(pod, ops), ns, kind, name, bool(req.get("dryRun")))
     return ops
 
 
@@ -2174,6 +2188,112 @@ def placed(pod: dict[str, Any], placing: Placing) -> list[Any]:
     return ops
 
 
+REQUIRED = "requiredDuringSchedulingIgnoredDuringExecution"
+ROLLOUT_HASH = "rollouts-pod-template-hash"
+CAPACITY = "squero.io/capacity"  # the side its webhook put a pod on (slice 16.2b)
+DELETION_COST = "controller.kubernetes.io/pod-deletion-cost"
+SIDES = ("on-demand", "spot")
+SPOT_BUDGET = 1.2  # seconds for both reads at admission: the API server gives the webhook 2
+
+
+def added(pod: dict[str, Any], ops: list[Any]) -> dict[str, Any]:
+    """A copy of the pod as the webhook's own JSON Patch leaves it: `add`s only, at the
+    paths it builds (a list only ever appended to, `-`; `~1` for a key's `/`)."""
+    out = copy.deepcopy(pod)
+    for op in ops:
+        *path, last = [p.replace("~1", "/").replace("~0", "~") for p in op["path"].split("/")[1:]]
+        node: Any = out
+        for p in path:
+            node = node[int(p)] if isinstance(node, list) else node[p]
+        if isinstance(node, list):
+            node.append(op["value"])
+        else:
+            node[last] = op["value"]
+    return out
+
+
+def escape(key: str) -> str:
+    """A map key as a JSON Patch path segment."""
+    return key.replace("~", "~0").replace("/", "~1")
+
+
+def settled(pod: dict[str, Any], key: str) -> bool:
+    """Whether a pod's own spec already decides whether it runs on spot nodes (slice
+    16.2b): a nodeSelector or a required node affinity on the spot label's `key`."""
+    spec = pod.get("spec") or {}
+    if key in (spec.get("nodeSelector") or {}):
+        return True
+    needs = ((spec.get("affinity") or {}).get("nodeAffinity") or {}).get(REQUIRED) or {}
+    return any(
+        e.get("key") == key
+        for t in needs.get("nodeSelectorTerms") or []
+        for e in t.get("matchExpressions") or []
+    )
+
+
+def steered(pod: dict[str, Any], side: str, spot: "Spotting") -> list[Any]:
+    """The JSON Patch that puts a new pod on its side (slice 16.2b, ADR 0006), against
+    the pod as the webhook's other changes already left it. Both get the `CAPACITY` label
+    the minute's count goes by. On-demand: required off the spot nodes (`NotIn`, which a
+    node without the label meets), in each of the pod's own required terms, which are
+    ORed, so a term beside them would loosen them; and a deletion cost of 1, so a
+    scale-down takes spot replicas first, unless the pod sets its own. Spot: a preference
+    for the spot nodes and their taint's toleration, as Placement's (`placed`)."""
+    meta = pod.get("metadata") or {}
+    ops: list[Any] = []
+    if meta.get("labels") is None:
+        ops.append({"op": "add", "path": "/metadata/labels", "value": {CAPACITY: side}})
+    else:
+        ops.append({"op": "add", "path": f"/metadata/labels/{escape(CAPACITY)}", "value": side})
+    if side == "spot":
+        return ops + placed(pod, Placing(label=spot.label, taint=spot.taint))
+    key, _, value = spot.label.partition("=")
+    off = {"key": key, "operator": "NotIn", "values": [value]}
+    affinity = (pod.get("spec") or {}).get("affinity")
+    node = (affinity or {}).get("nodeAffinity")
+    terms = ((node or {}).get(REQUIRED) or {}).get("nodeSelectorTerms") or []
+    needs = {REQUIRED: {"nodeSelectorTerms": [{"matchExpressions": [off]}]}}
+    if affinity is None:
+        ops.append({"op": "add", "path": "/spec/affinity", "value": {"nodeAffinity": needs}})
+    elif node is None:
+        ops.append({"op": "add", "path": "/spec/affinity/nodeAffinity", "value": needs})
+    elif not terms:
+        ops.append({"op": "add", "path": f"/spec/affinity/nodeAffinity/{REQUIRED}",
+                    "value": needs[REQUIRED]})  # fmt: skip
+    else:
+        at = f"/spec/affinity/nodeAffinity/{REQUIRED}/nodeSelectorTerms"
+        for i, t in enumerate(terms):
+            if t.get("matchExpressions") is None:
+                ops.append({"op": "add", "path": f"{at}/{i}/matchExpressions", "value": [off]})
+            else:
+                ops.append({"op": "add", "path": f"{at}/{i}/matchExpressions/-", "value": off})
+    notes = meta.get("annotations")
+    if notes is None:
+        ops.append({"op": "add", "path": "/metadata/annotations", "value": {DELETION_COST: "1"}})
+    elif DELETION_COST not in notes:
+        at = f"/metadata/annotations/{escape(DELETION_COST)}"
+        ops.append({"op": "add", "path": at, "value": "1"})
+    return ops
+
+
+def sides(pods: list[Any], spot_nodes: set[str] | None) -> dict[str, int]:
+    """How many of a ReplicaSet's live pods run on each side (slice 16.2b): by the label
+    its webhook gave them; one it didn't place by its node, where the spot nodes are
+    known; a Pending one without the label, or any where they aren't, as neither.
+    Terminating and finished pods are gone already."""
+    out = dict.fromkeys(SIDES, 0)
+    for p in pods:
+        if p.metadata.deletion_timestamp or p.status.phase in ("Succeeded", "Failed"):
+            continue
+        side = (p.metadata.labels or {}).get(CAPACITY)
+        node = p.spec.node_name
+        if side not in SIDES and node and spot_nodes is not None:
+            side = "spot" if node in spot_nodes else "on-demand"
+        if side in SIDES:
+            out[side] += 1
+    return out
+
+
 def admit(
     review: Any,
     held: dict[str, dict[str, Any]],
@@ -2185,6 +2305,7 @@ def admit(
     bursts: dict[str, dict[str, Any]] | None = None,
     nodes: dict[str, str] | None = None,
     placing: Placing | None = None,
+    steering: Callable[[dict[str, Any], str, str, str, bool], list[Any]] | None = None,
 ) -> dict[str, Any]:
     """The AdmissionReview answer: always allowed; a patch unless the Kill switch is on."""
     req = review.get("request") if isinstance(review, dict) else None
@@ -2194,7 +2315,7 @@ def admit(
         ops = (
             []
             if killed
-            else mutation(req, held, own, paused, stepped, boosts, bursts, nodes, placing)
+            else mutation(req, held, own, paused, stepped, boosts, bursts, nodes, placing, steering)
         )
     except Exception:  # fail open, as the webhook's failurePolicy does
         log.exception("webhook: pod left as it is")
@@ -2256,6 +2377,8 @@ def serve(a: "Actuator", cert: bytes, key: bytes, port: int = WEBHOOK_PORT) -> T
             answer = admit(
                 *(review, a.held, a.killed, a.namespace, a.paused, a.stepped, a.boosting),
                 *(a.bursts, a.node_types, a.placement),
+                # only with a list: a cluster without spot pays nothing for it
+                a.steer_pod if a.spot and a.spot.workloads else None,
             )
             body = json.dumps(answer).encode()
             self.send_response(200)
@@ -2337,6 +2460,14 @@ class Actuator:
     # it knew; in memory, so a restart says its Workloads' Events again
     placement: Placing | None = None
     placed_news: list[tuple[str, str, str]] = field(default_factory=list)  # to say on them
+    # slice 16.2b: the cluster's spot nodes as the Hub last said them, its list and nodes
+    # the last it knew; per ReplicaSet (`ns/name`) its replicas (None: read at the next
+    # admission) and its pods on each side, recounted each minute and kept up with the
+    # webhook's admissions, which run in threads of their own: under `spot_lock`
+    spot: Spotting | None = None
+    spot_counts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    spot_lock: threading.Lock = field(default_factory=threading.Lock)
+    spot_seq: dict[str, int] = field(default_factory=dict)  # admissions counted, per key
 
     def load(self) -> None:
         try:
@@ -2436,9 +2567,15 @@ class Actuator:
             self.node_types = desired.node_types
         if desired is not None and not desired.kill_switch:  # else kept as last said
             self.place(desired.placement)
+            self.steer(desired.spot)  # slice 16.2b
         wanted = (desired.sizings + desired.automated) if desired else []
         mine = {*self.held, *self.stepped, *self.boosts, *self.bursts}
         mine |= set(self.placement.workloads or []) if self.placement else set()  # 15.2b
+        mine |= (
+            {f"{w.namespace}/{w.kind}/{w.name}" for w in (self.spot.workloads or [])}
+            if self.spot
+            else set()
+        )  # 16.2b
         self.pauses({*mine, *(f"{w.namespace}/{w.kind}/{w.name}" for w in wanted)})
         done: list[Actuation] = []
         undoing = any("unfinished" in h for h in self.held.values())  # saved once finished too
@@ -2505,6 +2642,11 @@ class Actuator:
             self.say_placed()
         except Exception:
             log.exception("saying Placement's Events failed")
+        if not self.killed:
+            try:  # on its own too: a count is the webhook's, never a Rollback's (16.2b)
+                self.recount()
+            except Exception:
+                log.exception("counting the steered pods failed")
         if desired is not None and desired.blockers is not None:
             try:  # last and on its own: a read for a report never costs a Rollback
                 self.blocked(desired.blockers, time.time())
@@ -2530,6 +2672,151 @@ class Actuator:
             self.placed_news.append((key, "PlacementEnded", said))
         self.placement = given
 
+    def steer(self, given: Spotting | None) -> None:
+        """Take the Hub's spot nodes (slice 16.2b): None, none; a list or nodes not known
+        now keep the last. Each Workload that joins the list or leaves it is said on it
+        later in the minute, as Placement's are."""
+        had = (
+            {f"{w.namespace}/{w.kind}/{w.name}": w for w in (self.spot.workloads or [])}
+            if self.spot
+            else {}
+        )
+        if given is not None and self.spot is not None:
+            if given.workloads is None:
+                given = given.model_copy(update={"workloads": self.spot.workloads})
+            if given.nodes is None:
+                given = given.model_copy(update={"nodes": self.spot.nodes})
+        now = (
+            {f"{w.namespace}/{w.kind}/{w.name}": w for w in (given.workloads or [])}
+            if given
+            else {}
+        )
+        for key in sorted(now.keys() - had.keys()):
+            assert given is not None
+            w = now[key]
+            said = (
+                f"Spot: none of its new replicas on the nodes labelled {given.label}, its pods "
+                "blocking a node" if not w.ratio else
+                f"Spot: {w.ratio:.0%} of its new replicas prefer the nodes labelled "
+                f"{given.label}, at least {w.on_demand} kept off them"
+            )  # fmt: skip
+            self.placed_news.append((key, "SpotPlaced", said))
+        for key in sorted(had.keys() - now.keys()):
+            said = "Spot ended: its new replicas are placed as before; running ones keep theirs"
+            self.placed_news.append((key, "SpotEnded", said))
+        self.spot = given
+
+    def steer_pod(self, pod: dict[str, Any], ns: str, kind: str, name: str, dry: bool) -> list[Any]:
+        """A new pod's side (slice 16.2b), by its ReplicaSet: on-demand while fewer of its
+        pods are than the Spot ratio keeps there, then spot. Its replicas are read once a
+        minute, and again once the pods counted reach them (a rollout grows its new
+        ReplicaSet within the minute); a ReplicaSet counted full is recounted, its pods
+        listed (a replacement for a pod lost since: the Operator's choice). Both reads
+        share SPOT_BUDGET, well inside the webhook's 2 s: one that fails or is slow places
+        nothing. A count read meanwhile is never laid over admissions counted since
+        (`spot_seq`). The patch is built, then counted (unless a dry run), under the lock."""
+        spot = self.spot
+        w = next(
+            (x for x in spot.workloads or [] if (x.namespace, x.kind, x.name) == (ns, kind, name)),
+            None,
+        ) if spot else None  # fmt: skip
+        meta = pod.get("metadata") or {}
+        rs = next((o.get("name") for o in meta.get("ownerReferences") or []
+                   if o.get("kind") == "ReplicaSet"), None)  # fmt: skip
+        if spot is None or w is None or not rs or settled(pod, spot.label.partition("=")[0]):
+            return []
+        key = f"{ns}/{rs}"
+        with self.spot_lock:
+            c = self.spot_counts.get(key)
+            stale = c is None or c["replicas"] is None or sum(c[s] for s in SIDES) >= c["replicas"]
+            seq = self.spot_seq.get(key, 0)
+        fresh, replicas = None, 0
+        if stale:
+            start = time.monotonic()
+            try:
+                replicas = (
+                    self.apps.read_namespaced_replica_set(
+                        rs, ns, _request_timeout=SPOT_BUDGET
+                    ).spec.replicas
+                    or 0
+                )
+                if c is None or sum(c[s] for s in SIDES) >= replicas:
+                    left = SPOT_BUDGET - (time.monotonic() - start)
+                    if left < 0.1:
+                        raise TimeoutError("no time left to list its pods")
+                    fresh = self.counted(meta.get("labels") or {}, ns, rs, spot, left)
+            except Exception as e:  # slow or refused: the pod as it is
+                log.warning("spot: %s/%s not read, its pod left as it is: %s", ns, rs, e)
+                return []
+        with self.spot_lock:
+            c = self.spot_counts.setdefault(key, {"replicas": None, **dict.fromkeys(SIDES, 0)})
+            if stale:
+                c["replicas"] = replicas
+            if fresh is not None and self.spot_seq.get(key, 0) == seq:
+                c.update(fresh)
+            target = on_demand_of(c["replicas"], w.ratio, w.on_demand)
+            side = "on-demand" if c["on-demand"] < target else "spot"
+            ops = steered(pod, side, spot)
+            if not dry:
+                c[side] += 1
+                self.spot_seq[key] = self.spot_seq.get(key, 0) + 1
+        return ops
+
+    def counted(
+        self, labels: dict[str, str], ns: str, rs: str, spot: Spotting, timeout: float
+    ) -> dict[str, int]:
+        """A ReplicaSet's pods on each side, listed at admission by its template's hash."""
+        hashed = [f"{k}={labels[k]}" for k in ("pod-template-hash", ROLLOUT_HASH) if labels.get(k)]
+        found = self.core.list_namespaced_pod(
+            ns, label_selector=hashed[0] if hashed else None, _request_timeout=timeout
+        ).items
+        mine = [
+            p
+            for p in found
+            if any(
+                o.kind == "ReplicaSet" and o.name == rs for o in p.metadata.owner_references or []
+            )
+        ]
+        return sides(mine, set(spot.nodes) if spot.nodes is not None else None)
+
+    def recount(self) -> None:
+        """Each steered Workload's ReplicaSets' pods on each side, counted again (slice
+        16.2b), one list a namespace; a namespace it can't list keeps its counts, and so
+        does a ReplicaSet the webhook counted a pod of while it listed (`spot_seq`): the
+        next minute's count has it. Their replicas are read again at their next
+        admission."""
+        spot = self.spot
+        if spot is None or not spot.workloads:
+            with self.spot_lock:
+                self.spot_counts = {}
+            return
+        steered_ = {(w.namespace, w.kind, w.name) for w in spot.workloads}
+        nodes = set(spot.nodes) if spot.nodes is not None else None
+        with self.spot_lock:
+            before = dict(self.spot_seq)
+        counts: dict[str, dict[str, Any]] = {}
+        kept: set[str] = set()
+        for ns in sorted({w.namespace for w in spot.workloads}):
+            try:
+                pods = self.core.list_namespaced_pod(ns).items
+            except ApiException as e:
+                log.warning("spot: the pods of %s not counted: %s", ns, why(e))
+                kept.add(ns)
+                continue
+            by_rs: dict[str, list[Any]] = {}
+            for p in pods:
+                owners = {o.kind: o.name for o in p.metadata.owner_references or []}
+                of = workload_of(owners, p.metadata.labels or {})
+                if of and (ns, *of) in steered_ and owners.get("ReplicaSet"):
+                    by_rs.setdefault(owners["ReplicaSet"], []).append(p)
+            for rs, mine in by_rs.items():
+                counts[f"{ns}/{rs}"] = {"replicas": None, **sides(mine, nodes)}
+        with self.spot_lock:
+            old = self.spot_counts
+            moved = {k for k in old if self.spot_seq.get(k, 0) != before.get(k, 0)}
+            keep = {k: v for k, v in old.items() if k.split("/")[0] in kept or k in moved}
+            self.spot_counts = counts | keep
+
     def say_placed(self) -> None:
         """The Events `place` left to say, each on its Workload; one refused is only logged."""
         news, self.placed_news = self.placed_news, []
@@ -2546,7 +2833,8 @@ class Actuator:
         self.blockers_due = now + BLOCKERS_EVERY
         # placing nothing under the Kill switch: no Workload to restart is named then
         label = self.placement.label if self.placement and not self.killed else None
-        report = blocking(self.core, self.policy, namespaces, now, label)
+        spotting = self.spot is not None and not self.killed  # slice 16.2b, the same way
+        report = blocking(self.core, self.policy, namespaces, now, label, spotting)
         try:
             r = self.http.post("/actuator/blockers", json=blockers.sent(report))
             r.raise_for_status()

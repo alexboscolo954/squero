@@ -15,6 +15,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
@@ -503,6 +504,15 @@ class SpotRule(Strict):
 
     ratio: float = Field(gt=0, le=1)
     on_demand: int = Field(ge=1)
+
+
+def on_demand_of(replicas: int, ratio: float, minimum: int) -> int:
+    """How many of `replicas` a Spot ratio keeps on on-demand nodes (slices 16.1c and
+    16.2b, the Hub's intent and the Actuator's count alike): the larger of the On-demand
+    `minimum` and the share that isn't spot, rounded up (rounded first: 10 * 0.3 is
+    3.0000000000000004), never more than there are. A ratio of 0 keeps them all."""
+    rest = math.ceil(round(replicas * (1 - ratio), 9))
+    return min(replicas, max(minimum, rest))
 
 
 class SizingRule(Strict):

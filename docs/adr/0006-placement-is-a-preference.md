@@ -4,6 +4,8 @@ status: accepted
 
 # Placement is a preference, never a requirement, and never moves a running pod
 
+_Extended by slice 16.2b with one requirement, "not on a spot node", for a Workload's On-demand minimum._
+
 Until Phase 15 the Actuator changed how much a pod asks and never where it runs. **Placement** (15.2) is the first time it influences where: its webhook adds, to each new pod of a Workload whose pods keep a node from being removed for a reason set in their spec, a preference for the nodes the client keeps for such pods (the cluster's **Pinned nodes**, named by a label in the Contract), and a toleration of their taint where the Contract names one. Gathered there, they stop holding the other nodes, which the cluster's autoscaler can then remove.
 
 ## What it may and may not do
@@ -24,7 +26,17 @@ Until Phase 15 the Actuator changed how much a pod asks and never where it runs.
 
 - With Karpenter a preference is treated as required when it picks a node to launch, and relaxed only when that can't be met: the label should be on a NodePool's template, or Karpenter may launch a node for it.
 - On Cluster Autoscaler a preference isn't counted when it picks a node group to grow; Placement only ranks the nodes that exist.
-- Spot placement (16.2) adds the one requirement the webhook will make, "not on a spot node" for a Workload's On-demand minimum, and extends this ADR with it.
+- Spot placement (16.2) adds the one requirement the webhook makes, below.
+
+## The one requirement: "not on a spot node" (slice 16.2b)
+
+A Workload under a Spot ratio keeps its On-demand minimum off the spot nodes (and every replica of one that blocks a node). A preference can't promise that: a scheduler that finds room only on spot nodes would put them there, and an interruption would take the Workload's floor with it. So the webhook adds, for those replicas only, a required `NotIn` on the cluster's spot label, into each of the pod's own required terms (they are ORed: a term beside them would loosen them).
+
+- **Why it can't strand a pod the way Placement's could.** It narrows a pod to on-demand nodes, which every cluster has and which the pod could run on before; a pod Pending for it is one no on-demand node has room for, which its autoscaler grows as it would for any pod. Placement's requirement would have narrowed a pod to a handful of Pinned nodes.
+- **Everything else stays a preference**: the spot replicas prefer spot nodes (weight 100) and start on-demand when there is no spot room, so a fallback needs no code.
+- **Still never a running pod**, never an eviction, a restart or a rollout: a Workload below its minimum after interruptions is repaired at its next rollout, which the Hub names.
+- **Left alone**: a pod whose own spec already decides (a `nodeSelector` or a required term on the label's key): the client's choice wins.
+- It also adds a label (`squero.io/capacity`, the side it chose, which its count goes by) and `controller.kubernetes.io/pod-deletion-cost: "1"` to on-demand replicas, unless the pod sets its own, so a scale-down takes spot replicas first. Both are metadata on a new pod: no new permission.
 
 ## Considered Options
 

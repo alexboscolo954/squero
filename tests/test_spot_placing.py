@@ -188,7 +188,7 @@ def test_the_risk_reaches_the_console_and_the_hub_mcp() -> None:
     cl = webapp.Nodes.model_validate({"clusters": [got]}).clusters[0]
     assert cl.spot_workloads and cl.spot_workloads.workloads[0].risk
     mcp = hubmcp._nodes(cl, 20)
-    assert mcp["spot_workloads"]["workloads"][0]["risk"].startswith("0 on-demand")
+    assert mcp["spot_workloads"]["workloads"][0]["risk"].startswith("0 of its 2 on-demand")
 
 
 def test_only_workloads_under_a_spot_ratio_are_steered() -> None:
@@ -241,3 +241,14 @@ def test_a_minimum_above_the_replicas_means_all_on_demand() -> None:
     (w,) = got["spot_workloads"]["workloads"]
     assert w["why"] is None and w["intended"] == {"on_demand": 2, "spot": 0}
     assert w["risk"] == "1 of its 2 on-demand, where all are meant to be: restart it to repair"
+
+
+def test_a_workload_at_its_minimum_is_no_risk_whatever_its_share() -> None:
+    """Pods from before it was steered: 2 of 10 on-demand under 0.7 with 2 is no risk."""
+    api = [pod(f"api-{i}") for i in range(10)]
+    at = shown(FRESH | {"spotting": True}, node("a", *api[:2]), on_spot(node("s", *api[2:])))
+    assert at["workloads"][0]["risk"] is None
+    below = shown(FRESH | {"spotting": True}, node("a", api[0]), on_spot(node("s", *api[1:])))
+    assert (
+        below["workloads"][0]["risk"] == "1 on-demand, below its minimum of 2: restart it to repair"
+    )
