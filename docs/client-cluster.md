@@ -257,6 +257,7 @@ Once an hour the Actuator also tells the Hub which pods in the Contract's namesp
 - **What it could not read** it says: a namespace it is not bound in, or whose read failed, is left out of the namespaces it lists, and the Hub then gives that namespace's nodes no verdict. Over 1000 pods, or over the megabyte the Hub's proxy lets through, the report is cut there and says so.
 - **When.** Hourly, after everything else in its minute and on its own: a failure there costs no resize and no Rollback. A report that didn't reach the Hub goes again in five minutes; one the Hub refused (an older Hub has no such route) waits the hour. The Hub stores a cluster's latest only, dated by its own clock, and refuses a report that names a namespace outside the cluster's.
 - **With Placement** (from 0.55.0) the report also says that the Actuator places, and per pod whether it carries Placement's preference and its Workload as the webhook names it (`Deployment/api`, from the pod's owners and labels), so the list doesn't wait for the Hub's next read of a new pod. Sent only once the Hub has given it a Placement: an older Hub refuses a field it doesn't know.
+- **With spot nodes** (16.2b) it also says that its webhook steers replicas to them (`spotting`), sent only once the Hub has given it the cluster's spot nodes. The Hub sends it, from 16.2a, the Workloads under a [Spot ratio](optimizer.md#spot-ratios-and-candidates), the spot label and taint, and the nodes carrying the label; an older Actuator ignores them.
 
 ## Placement: gathering the pods that can't move
 

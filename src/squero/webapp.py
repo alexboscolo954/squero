@@ -512,6 +512,7 @@ class SpotWorkload(BaseModel):
     why: str | None = None  # why none is meant for spot
     intended: Sides | None = None  # None: a kind that never runs on spot
     actual: Sides | None = None  # None: its nodes not read with the spot label
+    risk: str | None = None  # fewer on-demand than its minimum, once placed (slice 16.2a)
 
 
 class SpotWorkloads(BaseModel):

@@ -1674,6 +1674,8 @@ export interface components {
             ratio: number;
             /** Replicas */
             replicas: number;
+            /** Risk */
+            risk?: string | null;
             /** Why */
             why?: string | null;
         };

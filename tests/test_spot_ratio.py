@@ -96,15 +96,6 @@ def test_a_workloads_ratio_is_the_first_rule_without_a_container_that_matches_it
     assert c.spot_for("nowhere", "shop", "Deployment", "api") is None
 
 
-def test_nothing_new_reaches_the_actuator() -> None:
-    from squero import actuator
-
-    rule = {"namespace": "shop", "policy": "production", "spot": RATIO}
-    keys = set(actuator.Desired.model_fields)  # what an Actuator is sent: 16.2 adds to it
-    assert not {k for k in keys if "spot" in k}
-    assert spotted(rule).sizing.rules[0].spot is not None
-
-
 # --- the numbers ------------------------------------------------------------------------
 
 
@@ -266,12 +257,13 @@ def test_a_workload_under_a_spot_ratio_shows_intended_against_actual() -> None:
     pods = [pod(f"api-{i}") for i in range(4)]
     a, b = node("a", *pods[:3]), node("b", pods[3]) | {"spot": True}
     got = shown(spotted(rule), stamped(a, b), [])["spot_workloads"]
-    assert got["note"] == "placed from slice 16.2: until then nothing is placed"
+    assert got["note"] == "its Actuator doesn't place them yet"
     assert got["workloads"] == [
         {
             **{"namespace": "shop", "kind": "Deployment", "name": "api", "replicas": 4},
             **{"ratio": 0.7, "on_demand": 2, "why": None},
             **{"intended": {"on_demand": 2, "spot": 2}, "actual": {"on_demand": 3, "spot": 1}},
+            "risk": None,
         }
     ]
     unread = shown(spotted(rule), stamped(a, b, label=None), [])["spot_workloads"]

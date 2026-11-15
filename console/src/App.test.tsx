@@ -1013,9 +1013,10 @@ test("Nodes shows the Workloads that could run on spot and those under a Spot ra
         rules: "Cluster Autoscaler's rules", reported: null, judged: {}, placement: null, nodes: [],
         spot: { label: "karpenter.sh/capacity-type=spot", discount: 0.35, nodes: 1, note: null },
         candidates: { workloads: [cand("api", 12.5), cand("web", 3)], more: 1, saving: 16, note: null },
-        spot_workloads: { note: "placed from slice 16.2: until then nothing is placed", workloads: [
+        spot_workloads: { note: null, workloads: [
           { namespace: "shop", kind: "Deployment", name: "cart", replicas: 10, ratio: 0.7, on_demand: 2, why: null,
-            intended: { on_demand: 3, spot: 7 }, actual: { on_demand: 10, spot: 0 } },
+            intended: { on_demand: 3, spot: 7 }, actual: { on_demand: 1, spot: 9 },
+            risk: "1 on-demand, below its minimum of 2: restart it to repair" },
           { namespace: "shop", kind: "StatefulSet", name: "db", replicas: 3, ratio: 0.7, on_demand: 2, why: "a StatefulSet never runs on spot",
             intended: null, actual: null },
         ] } }] },
@@ -1025,7 +1026,8 @@ test("Nodes shows the Workloads that could run on spot and those under a Spot ra
   await screen.findByText("demo-shop: Nodes");
   const under = [...page.querySelectorAll(".spot-workloads li")].map((li) => li.textContent);
   expect(under).toEqual([
-    "shop/Deployment/cart: 10 replicas, meant 3 on-demand and 7 on spot, running 10 and 0",
+    "shop/Deployment/cart: 10 replicas, meant 3 on-demand and 7 on spot, running 1 and 9" +
+      "1 on-demand, below its minimum of 2: restart it to repair.",
     "shop/StatefulSet/db: 3 replicas, where they run not read yet (a StatefulSet never runs on spot)",
   ]);
   expect(page.querySelector(".candidates summary")?.textContent).toBe("Could run on spot: 3, up to 16.00 EUR/month");

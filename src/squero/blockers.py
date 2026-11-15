@@ -91,6 +91,7 @@ class Report(BaseModel):
     truncated: bool = False
     pods: list[PodFacts]
     placing: bool = False  # its webhook places pods (slice 15.2a): restarting one moves it
+    spotting: bool = False  # and steers replicas to spot nodes (slice 16.2a)
 
 
 def sent(r: Report) -> dict[str, Any]:
@@ -101,6 +102,8 @@ def sent(r: Report) -> dict[str, Any]:
     body = r.model_dump()
     if not r.placing:
         del body["placing"]
+    if not r.spotting:  # slice 16.2a, the same way
+        del body["spotting"]
     for p in body["pods"]:
         if not p["placed"]:
             del p["placed"]

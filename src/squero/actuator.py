@@ -304,6 +304,33 @@ class Placing(BaseModel):
     workloads: list[str] | None = None
 
 
+class Spotted(BaseModel):
+    """A Workload under a Spot ratio (slice 16.2a): its replicas' share meant for spot
+    nodes and its On-demand minimum, which its webhook counts per ReplicaSet."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    namespace: str
+    kind: str
+    name: str
+    ratio: float
+    on_demand: int
+
+
+class Spotting(BaseModel):
+    """The cluster's spot nodes (slice 16.2a): their label (`key=value`) and taint, the
+    Workloads under a Spot ratio, none blocking a node (None: not known now, the last list
+    stays), and the nodes carrying the label as last read (None: not known), by which a
+    pod it didn't place counts."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    label: str
+    taint: str | None = None
+    workloads: list[Spotted] | None = None
+    nodes: list[str] | None = None
+
+
 class Desired(BaseModel):
     kill_switch: bool
     sizings: list[Wanted]  # Approved Sizings
@@ -342,6 +369,9 @@ class Desired(BaseModel):
     # slice 15.2a: the cluster's Placement; None: off (as from an older Hub). Not sent
     # under the Kill switch, where the Actuator keeps what it had and places nothing
     placement: Placing | None = None
+    # slice 16.2a: where the cluster names its spot nodes; None: none (as from an older
+    # Hub). Not sent under the Kill switch either. Read by no Actuator yet: 16.2b places
+    spot: Spotting | None = None
 
 
 class Actuation(BaseModel):

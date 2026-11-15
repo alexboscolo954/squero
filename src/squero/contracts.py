@@ -119,10 +119,15 @@ class Placement(Strict):
 class Spot(Strict):
     """Spot nodes (slice 16.1a): `label`, `key=value`, marks them (a node without it is
     on-demand); `discount`, what a spot node costs as a share of its on-demand price
-    (0.35: it pays 35%), as `list_prices.discount` is a multiplier."""
+    (0.35: it pays 35%), as `list_prices.discount` is a multiplier; `taint`,
+    `key[=value]:effect`, the one they carry, if any (AKS taints its spot nodes), whose
+    toleration the webhook gives the replicas it steers to them (slice 16.2a)."""
 
     label: str = Field(pattern=rf"^{LABEL_KEY}={LABEL_VALUE}$")
     discount: float = Field(gt=0, lt=1)
+    taint: str | None = Field(
+        None, pattern=rf"^{LABEL_KEY}(={LABEL_VALUE})?:(NoSchedule|PreferNoSchedule|NoExecute)$"
+    )
 
 
 class Cluster(Strict):

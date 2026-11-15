@@ -3594,6 +3594,17 @@
             "title": "Replicas",
             "type": "integer"
           },
+          "risk": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk"
+          },
           "why": {
             "anyOf": [
               {

@@ -1844,6 +1844,29 @@ def create_app(
             known = blockers.placing(blockers.verdicts(read, report, cluster, time.time()))
         return actuator.Placing(label=p.label, taint=p.taint, workloads=known)
 
+    async def spotting(cid: str, cluster: contracts.Cluster) -> actuator.Spotting | None:
+        """The cluster's spot nodes for its Actuator (slice 16.2a): the Workloads under a
+        Spot ratio it steers, by the last read of its nodes and its last report (none that
+        block a node), and the nodes carrying the label. None: the cluster names no spot
+        label. No list without a usable report or read: the Actuator keeps the last."""
+        if not (s := cluster.spot):
+            return None
+        names = {cluster.name}
+        read = (await store().latest_rooms(cid, names)).get(cluster.name)
+        report = (await store().latest_blockers(cid, names)).get(cluster.name)
+        now = time.time()
+        if not read or read.get("problem") or blockers.gap(report, cluster, now):
+            return actuator.Spotting(label=s.label, taint=s.taint)
+        found = sizing.spotted(read, by_id[cid], cluster.name, sizing.blocking_of(
+            read, report, cluster, now
+        ))  # fmt: skip
+        return actuator.Spotting(
+            label=s.label,
+            taint=s.taint,
+            workloads=[actuator.Spotted(**w) for w in found],
+            nodes=sizing.spot_nodes(read, s.label),
+        )
+
     # slice 15.3c: whether each cluster's Actuator applies types, as last stored: the store
     # is written only when a pull says otherwise
     knows: dict[tuple[str, str], bool] = {}
@@ -1929,6 +1952,7 @@ def create_app(
             kill_switch=False,
             node_types=node_types,
             placement=await placement(cid, cluster),
+            spot=await spotting(cid, cluster),
             blockers=cluster.namespaces,  # slice 15.1b: where to report Blockers' facts of
             eviction=by_id[cid].actuator.evicting(datetime.now(UTC)),
             sizings=approved,

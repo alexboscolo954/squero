@@ -52,6 +52,7 @@ function Spotting({ c, currency }: { c: Cluster; currency?: string | null }) {
                 {w.intended && `, meant ${w.intended.on_demand} on-demand and ${w.intended.spot} on spot`}
                 {w.actual ? `, running ${w.actual.on_demand} and ${w.actual.spot}` : ", where they run not read yet"}
                 {w.why && <span className="hint"> ({w.why})</span>}
+                {w.risk && <div className="notice">{w.risk}.</div>}
               </li>
             ))}
           </ul>
