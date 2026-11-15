@@ -284,11 +284,13 @@ def _typed(
     cluster: Cluster, typed: ClusterPrices, facts: dict[str, Any] | None, weight: float
 ) -> tuple[ClusterPrices, str, tuple[float, float] | None]:
     """A typed price with the cluster's spot nodes at their discount (slice 16.1a): read
-    as the on-demand rate, times what its nodes cost as a share of it (also returned;
-    None where spot isn't priced)."""
+    as the on-demand rate, times what its nodes cost as a share of it (also returned,
+    with a spot node's rate against an on-demand one's; 1.0 where none was priced, so the
+    Bill check can price spot hours of its window, slice 16.1b; None without `spot`)."""
     priced, said = _spot_of(cluster, facts)
     if not priced or cluster.spot is None or facts is None:
-        return typed, "typed prices" + said, None
+        unpriced = (1.0, cluster.spot.discount) if cluster.spot else None
+        return typed, "typed prices" + said, unpriced
     sizes = [(n["vcpu"], n["gib"], bool(n.get("spot"))) for n in facts["nodes"]]
     share, _ = spot_paid(sizes, weight, cluster.spot.discount)
     blended = ClusterPrices(cpu=typed.cpu * share, memory=typed.memory * share)
@@ -303,10 +305,11 @@ def resolve(
     shares: dict[str, tuple[float, float]] | None = None,
 ) -> tuple[dict[str, ClusterPrices], list[dict[str, str]]]:
     """Each cluster's prices (typed, else from the list) and, per cluster, where its
-    price came from or why it has none; in `shares`, each cluster's whose spot nodes
-    were priced, its price as a share of its nodes all on-demand, and a spot node's
-    against an on-demand one (slice 16.1a): a deal (`discount`) is an on-demand node's
-    only, so a spot node pays its own discount of the list price and no more."""
+    price came from or why it has none; in `shares`, each priced cluster's that sets
+    `spot`, its price as a share of its nodes all on-demand (1.0 where no spot node was
+    priced), and a spot node's against an on-demand one (slices 16.1a and 16.1b): a deal
+    (`discount`) is an on-demand node's only, so a spot node pays its own discount of the
+    list price and no more."""
     shares = {} if shares is None else shares
     assert c.list_prices is not None
     prices: dict[str, ClusterPrices] = {}
@@ -372,7 +375,7 @@ def _from_list(
     off = f", discount x{deal:g}" if deal != 1 else ""
     note = f"list price of {made} (1 vCPU = {w:g} GiB{off}), read {age:.0f} h ago{old}{said}"
     against = cluster.spot.discount / deal if cluster.spot else 1.0
-    share = (total / on_demand, against) if priced and on_demand else None
+    share = (total / on_demand, against) if cluster.spot and on_demand else None
     return ClusterPrices(cpu=w * memory, memory=memory), note, share
 
 

@@ -262,7 +262,7 @@ A node carrying the cluster's spot label (`spot.label` in the Contract; a node w
 _Avoid_: preemptible node, spot instance (the cloud's own words for the machine)
 
 **Bill**:
-What the cloud says a cluster's compute cost each UTC day, read from its billing API (AWS Cost Explorer, Azure Cost Management or GCP's billing export in BigQuery, usage before credits, lines carrying the cluster's `billing` tag). The Hub sets it beside the estimate (the cluster's node-hours at its unit prices): within 5% it reconciles, else it is flagged; when fewer than 90% of the window's hours were sampled it gives the gap but no verdict. A Bill never changes a shown cost.
+What the cloud says a cluster's compute cost each UTC day, read from its billing API (AWS Cost Explorer, Azure Cost Management or GCP's billing export in BigQuery, usage before credits, lines carrying the cluster's `billing` tag, spot ones included). The Hub sets it beside the estimate (the cluster's node-hours at its unit prices, a Spot node's hours at its own rate): within 5% it reconciles, else it is flagged; when fewer than 90% of the window's hours were sampled it gives the gap but no verdict. A Bill never changes a shown cost.
 
 **Savings**:
 What Sizings would save (available: the waste's cost) or saved (realized), in the Contract's own unit prices, or in cores and GiB when it has none. Realized Savings are a request lowered to within 10% of a Sizing shown before; for a DaemonSet applied per instance type, each type's pods' request against that type's Sizing.

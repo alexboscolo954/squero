@@ -32,7 +32,7 @@ BIGQUERY = "https://bigquery.googleapis.com/bigquery/v2/projects/{project}/queri
 BIGQUERY_SCOPE = "https://www.googleapis.com/auth/bigquery.readonly"
 # Compute Engine bills a VM's cores and RAM on their own SKUs (disks, network and IPs are
 # other lines of the same service): the estimate is vCPU and GiB hours, so only those
-# count, on demand (Spot arrives with Phase 16), usage before credits.
+# count, Spot ones ("Spot Preemptible ...") included (slice 16.1b), usage before credits.
 GCP_QUERY = """
 SELECT FORMAT_DATE('%Y-%m-%d', DATE(usage_start_time, 'UTC')) AS day, currency,
        SUM(cost) AS cost
@@ -41,7 +41,6 @@ WHERE usage_start_time >= @start AND usage_start_time < @end
   AND service.description = 'Compute Engine' AND cost_type = 'regular'
   AND (sku.description LIKE '% Instance Core running%'
        OR sku.description LIKE '% Instance Ram running%')
-  AND sku.description NOT LIKE 'Spot Preemptible%'
   AND EXISTS (SELECT 1 FROM UNNEST(labels) AS l WHERE l.key = @key AND l.value = @value)
 GROUP BY day, currency
 """
@@ -142,14 +141,20 @@ def azure_request(tag: str, start: str, end: str) -> dict[str, Any]:
     }  # fmt: skip
 
 
-def azure_parse(body: dict[str, Any]) -> Bill:
+def azure_parse(body: dict[str, Any], before: Bill | None = None) -> Bill:
+    """A page of rows, a day at a time. A day in two currencies (an EA account's spot
+    rows are priced in USD whatever its own, slice 16.1b), on this page or on one
+    `before`, is refused: the sum of two currencies is no amount."""
     props = body["properties"]
     names = [c["name"] for c in props["columns"]]
     cost, day, unit = (names.index(n) for n in ("PreTaxCost", "UsageDate", "Currency"))
     out: Bill = {}
     for row in props["rows"]:
         d = str(row[day])
-        out[f"{d[:4]}-{d[4:6]}-{d[6:]}"] = (float(row[cost]), row[unit], False)
+        key = f"{d[:4]}-{d[4:6]}-{d[6:]}"
+        if key in out or key in (before or {}):
+            raise ValueError(f"{key} was billed in two currencies")
+        out[key] = (float(row[cost]), row[unit], False)
     return out
 
 
@@ -186,7 +191,7 @@ def azure_fetch(
         resp = http.post(url, json=data, headers=headers)
         resp.raise_for_status()
         body = resp.json()
-        out |= azure_parse(body)
+        out |= azure_parse(body, out)
         url = body["properties"].get("nextLink")
     return fill_gaps(out, start)
 
@@ -354,8 +359,10 @@ async def report(
     prom: Callable[[usage.Target], usage.Prom] = usage.reader,
 ) -> list[dict[str, Any]]:
     """Per billed cluster: the period, the bill, the estimate at the Hub's prices, their
-    gap and whether it is within TOLERANCE, or `note` saying why there is none. Money
-    stays in the currency it was read in; nothing is converted."""
+    gap and whether it is within TOLERANCE, or `note` saying why there is none. Where a
+    cluster names its spot nodes, each hour's spot capacity is priced at a spot node's
+    rate and the rest at an on-demand one's (slice 16.1b), and `note` says their share.
+    Money stays in the currency it was read in; nothing is converted."""
     wanted = period(now, days)
     c = await listprices.effective(store, c, now)
     have, tries = await store.bills(c.id)
@@ -412,15 +419,32 @@ async def report(
         last = datetime.fromisoformat(wanted[-1]).replace(tzinfo=UTC).timestamp() + DAY - 1
         try:
             vcpu, gib, sampled = await asyncio.to_thread(usage.node_hours, prom(t), t, first, last)
+            spot_cpu, spot_gib = (
+                await asyncio.to_thread(usage.spot_hours, prom(t), t, cl.spot.label, first, last)
+                if cl.spot
+                else (0.0, 0.0)
+            )
         except usage.UsageError as e:
             row["note"] = f"the node-hours failed to read: {e}"
             continue
-        row["estimated"] = vcpu * price.cpu + gib * price.memory
+        # the price is blended by the latest mix: undone, then each hour at its own rate
+        share, against = c._spot_shares.get(cl.name, (1.0, 1.0))
+        on_spot = spot_cpu * price.cpu + spot_gib * price.memory
+        row["estimated"] = (vcpu * price.cpu + gib * price.memory - (1 - against) * on_spot) / share
         row["gap"] = gap(row["estimated"], row["billed"])
         row["within"] = row["gap"] is not None and abs(row["gap"]) <= TOLERANCE
         row["sampled"], row["coverage"] = sampled, min(sampled / row["hours"], 1.0)
+        notes = []
+        if cl.spot and spot_cpu:
+            notes.append(f"spot: {spot_cpu / vcpu:.0%} of the vCPU-hours, at x{against:.3g}")
+        elif cl.spot:
+            notes.append(
+                f"no node carried {cl.spot.label} in the window: if spot nodes ran, allowlist "
+                "it in kube-state-metrics' --metric-labels-allowlist"
+            )
         if sampled < row["hours"]:
-            row["note"] = f"the estimate rests on {sampled} of {row['hours']} sampled hours"
+            notes.append(f"the estimate rests on {sampled} of {row['hours']} sampled hours")
+        row["note"] = "; ".join(notes) or None
         if row["coverage"] < MIN_COVERAGE:
             row["within"] = None  # missing samples, not prices, make this gap: no verdict
     return out

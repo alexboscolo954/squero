@@ -293,3 +293,175 @@ def test_the_nodes_page_marks_spot_nodes_and_says_when_none_shows() -> None:
     assert old["spot"]["note"].startswith("its nodes were not read with")
     (plain,) = sizing.nodes_report({"test": read}, typed(), {}, NOW)
     assert plain["spot"] is None
+
+
+def test_a_spot_node_pricing_didnt_see_is_priced_against_the_on_demand_price() -> None:
+    """The latest read of the nodes priced none on spot (share 1.0), the Nodes page's
+    read shows one: it costs its own rate against the on-demand price (slice 16.1b)."""
+    c = typed(spot=SPOT)
+    c._spot_shares = {"test": (1.0, 0.35)}
+    a, b = room_node("a", pod("a1", 0.5)), room_node("b", pod("b1", 0.5)) | {"spot": True}
+    read = read_of(a, b) | {"spot": SPOT["label"]}
+    assert sizing.rates(read, c, "test") == {"a": 1.0, "b": pytest.approx(0.35)}
+
+
+def test_a_cluster_with_spot_keeps_its_rates_where_no_spot_node_was_priced() -> None:
+    """So the Bill check can price its window's spot hours (slice 16.1b): the price as a
+    share of on-demand is 1.0, a spot node's rate is its discount (of a deal for a list
+    price)."""
+    on_demand = {"test": spotted((M5, False), (M5, False))}
+    for c, against in (
+        (listed(spot=SPOT), 0.35),
+        (listed(discount=0.6, spot=SPOT), 0.35 / 0.6),
+        (listed(spot=SPOT, prices={"cpu": 0.04, "memory": 0.005}), 0.35),
+    ):
+        shares: dict[str, Any] = {}
+        listprices.resolve(c, on_demand, ROWS, NOW, shares)
+        assert shares == {"test": (pytest.approx(1.0), pytest.approx(against))}
+    unread: dict[str, Any] = {}
+    typed_c = listed(spot=SPOT, prices={"cpu": 0.04, "memory": 0.005})
+    listprices.resolve(typed_c, {"test": spotted((M5, True), label=None)}, ROWS, NOW, unread)
+    assert unread == {"test": (1.0, 0.35)}  # read without the label: all on-demand
+
+
+# --- the Bill check (slice 16.1b) -------------------------------------------------------
+
+EKS = "eks.amazonaws.com/capacityType=SPOT"  # a capitalised key, snake-cased by KSM
+EKS_LABEL = {"label_eks_amazonaws_com_capacity_type": "SPOT"}
+HOURS = 168
+
+
+def window(fake: FakePrometheus, spot_hours: int = 84, **scope: str) -> None:
+    """Node a on-demand all week; node b, the same size, on spot for its first hours."""
+    for name, hours in (("a", HOURS), ("b", spot_hours)):
+        fake.add("kube_node_status_capacity", [2.0] * hours, node=name, resource="cpu", **scope)
+        fake.add(
+            "kube_node_status_capacity", [8.0 * 2**30] * hours, node=name, resource="memory",
+            **scope,
+        )  # fmt: skip
+    fake.add("kube_node_labels", [1.0] * HOURS, node="a", **scope)
+    if spot_hours:
+        fake.add("kube_node_labels", [1.0] * spot_hours, node="b", **scope, **EKS_LABEL)
+
+
+def test_the_windows_spot_hours_are_its_nodes_that_carried_the_label() -> None:
+    fake = FakePrometheus()
+    window(fake, cluster="mine")
+    # another cluster in the same store, with nodes of the same names: its a on spot, its
+    # b on-demand
+    for name in ("a", "b"):
+        fake.add("kube_node_status_capacity", [4.0] * HOURS, node=name, resource="cpu", cluster="x")
+    fake.add("kube_node_labels", [1.0] * HOURS, node="a", cluster="x", **EKS_LABEL)
+    t = usage.Target("test", "http://prometheus", None, {"cluster": "mine"}, ["shop"])
+    got = usage.spot_hours(_prom(fake, t), t, EKS, 0, HOURS * 3600 - 1)
+    assert got == (84 * 2.0, 84 * 8.0)  # b's hours, never a's of either cluster
+    assert 'label_eks_amazonaws_com_capacity_type="SPOT"' in fake.queries[0]
+
+
+def test_a_node_counts_on_spot_only_in_the_hours_it_carried_the_label() -> None:
+    """Each hour by the nodes that carried the label then; and a node's name read from
+    exported_node, as kube-state-metrics scraped without honor_labels has it (its own
+    pod's node wins `node`)."""
+    fake = FakePrometheus()
+    for name in ("a", "b"):
+        fake.add("kube_node_status_capacity", [2.0] * 10, node="ksm", exported_node=name,
+                 resource="cpu")  # fmt: skip
+    fake.add("kube_node_labels", [1.0] * 4, node="ksm", exported_node="b", **EKS_LABEL)
+    t = usage.Target("test", "http://prometheus", None, {}, ["shop"])
+    assert usage.spot_hours(_prom(fake, t), t, EKS, 0, 10 * 3600 - 1) == (4 * 2.0, 0.0)
+
+
+def spot_billed(**cluster: Any) -> contracts.Contract:
+    from tests.test_billing import billed
+
+    return billed(spot={"label": EKS, "discount": 0.35}, **cluster)
+
+
+def eks_facts(*spot: bool) -> dict[str, Any]:
+    return spotted(*((M5, s) for s in spot), label=EKS)
+
+
+# a's 168 h and b's 84 h at the typed 0.03 a vCPU-hour and 0.004 a GiB-hour (2 vCPU, 8 GiB)
+A_WEEK = 168 * (2 * 0.03 + 8 * 0.004)
+B_SPOT = 84 * (2 * 0.03 + 8 * 0.004)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("latest", [(False, False), (False, True)])
+async def test_the_estimate_prices_each_hours_spot_capacity_at_its_rate(
+    store: Store,  # noqa: F811
+    latest: tuple[bool, ...],
+) -> None:
+    """Whatever mix the latest read of the nodes shows (none on spot, or half), the
+    window's spot hours cost the discount of on-demand and the rest on-demand."""
+    from tests.test_billing import DAYS, prom_of, seed
+
+    c, fake = spot_billed(), FakePrometheus()
+    window(fake)
+    await store.save_nodes("acme", "test", NOW, eks_facts(*latest))
+    expected = A_WEEK + 0.35 * B_SPOT
+    await seed(store, c, dict.fromkeys(DAYS, expected / 7))
+    from squero import billing
+
+    (got,) = await billing.report(store, c, NOW, 7, prom_of(fake))
+    assert got["estimated"] == pytest.approx(expected) and got["within"] is True
+    assert got["note"] == "spot: 33% of the vCPU-hours, at x0.35"
+
+
+@pytest.mark.anyio
+async def test_a_deals_on_demand_rate_is_undone_from_a_list_price(
+    store: Store,  # noqa: F811
+) -> None:
+    """A list price with a deal: the price applied is a share of the nodes all on-demand
+    at the deal, and a spot node's rate is its discount against the deal."""
+    from squero import billing
+    from tests.test_billing import DAYS, prom_of, seed
+
+    c, fake = spot_billed(), FakePrometheus()
+    window(fake)
+    share, against = 0.8, 0.35 / 0.6  # as `effective` would have applied them
+    blended = contracts.ClusterPrices(cpu=0.03 * share, memory=0.004 * share)
+    c = c.model_copy(update={"clusters": [c.clusters[0].model_copy(update={"prices": blended})]})
+    c._price_notes = [{"cluster": "test", "source": "list", "note": "list price"}]
+    c._spot_shares = {"test": (share, against)}
+    await seed(store, c, dict.fromkeys(DAYS, 2.0))
+    (got,) = await billing.report(store, c, NOW, 7, prom_of(fake))
+    assert got["estimated"] == pytest.approx(A_WEEK + against * B_SPOT)
+    assert got["note"] == "spot: 33% of the vCPU-hours, at x0.583"
+
+
+@pytest.mark.anyio
+async def test_no_spot_hours_in_the_window_keep_the_verdict_and_say_to_allowlist(
+    store: Store,  # noqa: F811
+) -> None:
+    from squero import billing
+    from tests.test_billing import DAYS, prom_of, seed
+
+    c, fake = spot_billed(), FakePrometheus()
+    window(fake, spot_hours=0)
+    await seed(store, c, dict.fromkeys(DAYS, A_WEEK / 7))
+    (got,) = await billing.report(store, c, NOW, 7, prom_of(fake))
+    assert got["estimated"] == pytest.approx(A_WEEK) and got["within"] is True
+    assert got["note"] == (
+        f"no node carried {EKS} in the window: if spot nodes ran, allowlist it in "
+        "kube-state-metrics' --metric-labels-allowlist"
+    )
+    short = FakePrometheus()
+    for res, v in (("cpu", 2.0), ("memory", 8.0 * 2**30)):
+        short.add("kube_node_status_capacity", [v] * 100, node="a", resource=res)
+    (got,) = await billing.report(store, c, NOW, 7, prom_of(short))
+    assert got["note"].endswith("--metric-labels-allowlist; the estimate rests on 100 of 168 "
+                                "sampled hours")  # fmt: skip
+
+
+@pytest.mark.anyio
+async def test_a_cluster_without_spot_asks_for_no_spot_hours(store: Store) -> None:  # noqa: F811
+    from squero import billing
+    from tests.test_billing import DAYS, billed, prom_of, seed
+
+    c, fake = billed(), FakePrometheus()
+    window(fake)
+    await seed(store, c, dict.fromkeys(DAYS, 2.0))
+    (got,) = await billing.report(store, c, NOW, 7, prom_of(fake))
+    assert got["estimated"] == pytest.approx(A_WEEK + B_SPOT) and got["note"] is None
+    assert not any("kube_node_labels" in q for q in fake.queries)

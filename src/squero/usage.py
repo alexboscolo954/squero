@@ -589,6 +589,36 @@ def node_hours(prom: Prom, t: Target, start: float, end: float) -> tuple[float, 
     return vcpu, memory / 2**30, sampled
 
 
+def spot_hours(prom: Prom, t: Target, spot: str, start: float, end: float) -> tuple[float, float]:
+    """The vCPU-hours and GiB-hours of the cluster's nodes that carried its `spot` label
+    (`key=value`) between `start` and `end` (slice 16.1b), each hour by the nodes that
+    carried it then, sampled as `node_hours` is. Joined here, not in PromQL: a node's name
+    may be in `exported_node`, as the Nodes page reads it."""
+    scoped = [f"{k}={_string(v)}" for k, v in sorted(t.labels.items())]
+    key, _, value = spot.partition("=")
+
+    def by_node_hour(metric: str, matchers: list[str], how: str) -> dict[tuple[str, Any], float]:
+        out: dict[tuple[str, Any], float] = {}
+        query = f"{how} by (node, exported_node) ({metric}{{{','.join(matchers)}}})"
+        for s in prom.range(query, start, end, 3600):
+            name = label(s["metric"], "node")
+            for at, v in s["values"]:
+                out[name, at] = out.get((name, at), 0.0) + float(v)
+        return out
+
+    carried = by_node_hour(
+        "kube_node_labels", [*scoped, f"{ksm_label(key)}={_string(value)}"], "max"
+    )
+
+    def hours(resource: str) -> float:
+        capacity = by_node_hour(
+            "kube_node_status_capacity", [*scoped, f"resource={_string(resource)}"], "sum"
+        )
+        return sum(v for k, v in capacity.items() if k in carried)
+
+    return hours("cpu"), hours("memory") / 2**30
+
+
 SHARED_STORE = (
     "the store is shared with another Contract and has no cluster labels: node series "
     "would cross Contracts"

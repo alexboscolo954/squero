@@ -359,9 +359,10 @@ def _worth(
 def rates(read: dict[str, Any], c: Contract, cluster: str) -> dict[str, float]:
     """Each node's price against its cluster's (slice 16.1a): the cluster's price is
     the share of its nodes all on-demand that its pricing applied (`c._spot_shares`), so
-    an on-demand node costs it over that share and a spot node its own rate over it.
-    Empty where spot wasn't priced, or this read wasn't made with the label: every node
-    at the cluster's price."""
+    an on-demand node costs it over that share and a spot node its own rate over it (a
+    spot node this read shows and pricing's didn't: its rate against the on-demand price
+    applied). Empty where the cluster's spot has no price, or this read wasn't made with
+    the label: every node at the cluster's price."""
     cl = next(x for x in c.clusters if x.name == cluster)
     applied = c._spot_shares.get(cluster)
     if cl.spot is None or applied is None or read.get("spot") != cl.spot.label:

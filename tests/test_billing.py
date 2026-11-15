@@ -787,13 +787,13 @@ class BigQuery:
         return httpx.Client(transport=httpx.MockTransport(self))
 
 
-def test_the_gcp_query_asks_for_the_labels_core_and_ram_usage_on_demand() -> None:
+def test_the_gcp_query_asks_for_the_labels_core_and_ram_usage_spot_included() -> None:
     sent = billing.gcp_request(TABLE, GCP_TAG, "1972-09-01", "1972-09-26")
     sql = sent["query"]
     assert f"FROM `{TABLE}`" in sql and sent["useLegacySql"] is False
     assert "service.description = 'Compute Engine'" in sql and "cost_type = 'regular'" in sql
     assert "'% Instance Core running%'" in sql and "'% Instance Ram running%'" in sql
-    assert "NOT LIKE 'Spot Preemptible%'" in sql and "SUM(cost)" in sql
+    assert "SUM(cost)" in sql and "NOT LIKE" not in sql  # spot SKUs too (slice 16.1b)
     assert "tag" not in sql and "squero-cluster" not in sql and "kind" not in sql  # parameters
     params = {p["name"]: p["parameterValue"]["value"] for p in sent["queryParameters"]}
     assert params == {
@@ -972,3 +972,29 @@ async def test_two_gcp_contracts_bills_stay_apart(store: Store) -> None:
     await store.save_bill(a.id, "test", {d: (2.2, "BRL", False) for d in DAYS}, NOW)
     days, tries = await store.bills(b.id)
     assert days == {} and tries == {}
+
+
+def test_an_azure_day_in_two_currencies_is_refused() -> None:
+    """An EA account's spot rows are priced in USD whatever its currency (slice 16.1b):
+    the two are never summed, nor one kept, on one page or across two."""
+    two = azure_body({DAYS[0]: 1.0})
+    two["properties"]["rows"].append([0.5, int(DAYS[0].replace("-", "")), "USD"])
+    with pytest.raises(ValueError, match=f"{DAYS[0]} was billed in two currencies"):
+        billing.azure_parse(two)
+    pages = [
+        {**azure_body({DAYS[0]: 1.0}), "properties": {
+            **azure_body({DAYS[0]: 1.0})["properties"], "nextLink": "https://management.azure.com/next"
+        }},
+        azure_body({DAYS[0]: 0.5}, unit="USD"),
+    ]  # fmt: skip
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "login.microsoftonline.com":
+            return httpx.Response(200, json={"access_token": "tok"})
+        seen.append(str(request.url))
+        return httpx.Response(200, json=pages[len(seen) - 1])
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(ValueError, match="two currencies"):
+        billing.azure_fetch(http, TENANT, CLIENT, AZ_SECRET, SUB, TAG, DAYS[0], DAYS[2])
