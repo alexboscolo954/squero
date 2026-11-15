@@ -295,7 +295,7 @@ async def test_the_actuator_reads_blocker_facts_a_page_at_a_time_through_the_rea
     there = {p.metadata.name for ns in spaces for p in core.list_namespaced_pod(ns).items}
     assert len(there) > 2
 
-    def every(p: Any, budgets: list[Any]) -> blockers.PodFacts:  # each pod, fact or not
+    def every(p: Any, budgets: list[Any], label: str | None) -> blockers.PodFacts:  # every pod
         return blockers.PodFacts(
             namespace=p.metadata.namespace, pod=p.metadata.name, node=p.spec.node_name or ""
         )
