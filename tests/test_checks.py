@@ -505,6 +505,10 @@ def test_the_scheduler_runs_a_check_missed_while_the_hub_was_down(
     from tests.test_teachings import migrated
 
     monkeypatch.setattr(api, "CHECK_TICK", 0.05)
+    # the scheduler's clock held mid-quarter: run on the real one, a test that started
+    # just before :00, :15, :30 or :45 saw the next fire time come while it waited
+    at = time.time() // 900 * 900 + 450
+    monkeypatch.setattr(api, "now", lambda: at)
     migrated(database_url)
     with psycopg.connect(database_url) as conn:  # due long ago, same schedule as configured
         conn.execute(
@@ -517,7 +521,7 @@ def test_the_scheduler_runs_a_check_missed_while_the_hub_was_down(
         time.sleep(0.2)  # more ticks: not due again until the next fire time
     row = schedule(database_url)
     assert rows(database_url, "select count(*) from investigations") == [(1,)]
-    assert now() < row["next_due"] <= now() + 15 * 60
+    assert row["next_due"] == at + 450  # the next quarter hour after the run, not before
 
 
 def test_slack_feedback_on_a_failing_checks_report(
