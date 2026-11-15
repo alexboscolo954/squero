@@ -973,6 +973,11 @@
       },
       "Container": {
         "properties": {
+          "by_type": {
+            "default": false,
+            "title": "By Type",
+            "type": "boolean"
+          },
           "cluster": {
             "title": "Cluster",
             "type": "string"
@@ -1435,6 +1440,17 @@
           "sizing": {
             "title": "Sizing",
             "type": "number"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
           },
           "workload": {
             "title": "Workload",

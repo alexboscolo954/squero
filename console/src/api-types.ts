@@ -791,6 +791,11 @@ export interface components {
         };
         /** Container */
         Container: {
+            /**
+             * By Type
+             * @default false
+             */
+            by_type: boolean;
             /** Cluster */
             cluster: string;
             /** Container */
@@ -950,6 +955,8 @@ export interface components {
             saved: number;
             /** Sizing */
             sizing: number;
+            /** Type */
+            type?: string | null;
             /** Workload */
             workload: string;
         };

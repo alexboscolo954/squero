@@ -629,8 +629,12 @@ function ContainerDetail({ contract, c }: { contract: string; c: Container }) {
         {c.memory?.action ?? "-"} {memory(c.memory?.current)} → {memory(c.memory?.target)}
       </p>
       {(c.groups ?? []).length > 0 && (
-        <details className="types">
-          <summary>By instance type ({c.groups!.length}): the one Sizing above is what is applied to every pod</summary>
+        <details className="types" open={c.by_type}>
+          <summary>
+            {c.by_type
+              ? `By instance type (${c.groups!.length}): what its Actuator applies, each pod by its node's type; the one Sizing above is not applied`
+              : `By instance type (${c.groups!.length}): the one Sizing above is what is applied to every pod`}
+          </summary>
           <ul>
             {c.groups!.map((g) => (
               <li key={g.type}>

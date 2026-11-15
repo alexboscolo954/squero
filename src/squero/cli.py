@@ -355,8 +355,9 @@ async def sizing_savings(contract_id: str, as_json: bool) -> int:
             if d["cost"]
             else sizing.show(res, d["saved"])
         )
+        on = "" if d.get("type") is None else f" on {d['type'] or 'nodes with no instance type'}"
         print(
-            f"{d['workload']} {res}: {sizing.show(res, d['before'])} to "
+            f"{d['workload']}{on} {res}: {sizing.show(res, d['before'])} to "
             f"{sizing.show(res, d['after'])} (Sizing {sizing.show(res, d['sizing'])}) "
             f"since {_utc(d['at'])}, {d['pods']:g} pods: {worth}"
         )

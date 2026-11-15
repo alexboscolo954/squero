@@ -634,6 +634,24 @@ class Store:
         )
         return {r["cluster"]: {"at": r["at"], **r["rooms"]} for r in rows}
 
+    async def actuator_types(self, contract_id: str, cluster: str, types: bool, at: float) -> None:
+        """Whether the cluster's Actuator applies a DaemonSet's Sizings per instance type,
+        as its pull at `at` said (slice 15.3c); kept as it was when it says the same."""
+        await self._exec(
+            "insert into cluster_actuators values (%s, %s, %s, %s) "
+            "on conflict (contract_id, cluster) do update set types = excluded.types, "
+            "at = excluded.at where cluster_actuators.types <> excluded.types",
+            (contract_id, cluster, types, at),
+        )
+
+    async def typed_clusters(self, contract_id: str) -> set[str]:
+        """The Contract's clusters whose Actuator last said it applies types."""
+        rows = await self._all(
+            "select cluster from cluster_actuators where contract_id = %s and types",
+            (contract_id,),
+        )
+        return {r["cluster"] for r in rows}
+
     async def save_blockers(
         self, contract_id: str, cluster: str, received: float, report: dict[str, Any]
     ) -> None:
@@ -994,10 +1012,11 @@ class Store:
         return {r["cluster"]: r["at"] for r in rows}
 
     async def realized(self, contract_id: str) -> list[dict[str, Any]]:
-        """The Contract's realized request drops still saving (slice 10.3b)."""
+        """The Contract's realized request drops still saving (slice 10.3b); `type`: the
+        instance type whose pods' request dropped (slice 15.3c), None: the container's."""
         return await self._all(
-            "select id, cluster, namespace, kind, name, container, resource, at, before, "
-            "after, sizing from realized where contract_id = %s order by at, id",
+            "select id, cluster, namespace, kind, name, container, resource, type, at, prev_run, "
+            "before, after, sizing from realized where contract_id = %s order by at, id",
             (contract_id,),
         )
 
@@ -1014,13 +1033,14 @@ class Store:
             for e in added:
                 await conn.execute(
                     "insert into realized (contract_id, cluster, namespace, kind, name, "
-                    "container, resource, at, prev_run, before, after, sizing) values "
-                    "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) on conflict do nothing",
+                    "container, resource, at, prev_run, before, after, sizing, type) values "
+                    "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) on conflict do nothing",
                     (
                         contract_id,
                         *(e[k] for k in ("cluster", "namespace", "kind", "name", "container")),
                         *(e[k] for k in ("resource", "at", "prev_run", "before", "after")),
                         e["sizing"],
+                        e.get("type"),
                     ),
                 )
             for event_id, after in raised.items():

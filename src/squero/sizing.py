@@ -247,15 +247,18 @@ def pod_times(u: ContainerUsage) -> list[float]:
     return u.running or [t for t, _ in u.cpu or u.memory]
 
 
-def avg_pods(u: ContainerUsage, seen: list[float]) -> float:
+def avg_pods(u: ContainerUsage, seen: list[float], over: ContainerUsage | None = None) -> float:
     """Pods per step from the container's first pod time to its last, over the steps
     its cluster has any (`seen`, sorted): a CronJob that runs an hour a day averages a
     twenty-fourth of its pods, as its requests reserve, and a gap in Prometheus (a
-    scrape missed by every pod) counts for no one."""
+    scrape missed by every pod) counts for no one. `over`: the container whose span to
+    average over (an instance type's pods over their container's, so the types add up
+    to it: slice 15.3c)."""
     times = pod_times(u)
     if not times:
         return 0.0
-    steps = bisect.bisect_right(seen, max(times)) - bisect.bisect_left(seen, min(times))
+    edge = pod_times(over) or times if over is not None else times
+    steps = bisect.bisect_right(seen, max(edge)) - bisect.bisect_left(seen, min(edge))
     return len(times) / steps
 
 
@@ -352,19 +355,30 @@ def _sized_type(
     covered: list[float],
     steps: list[float],
     window: int,
+    row: ContainerUsage | None = None,
 ) -> dict[str, Any]:
     """A DaemonSet container's Sizing for its pods on nodes of one instance type (slice
     15.3a), from those pods' own usage and requests, under the container's policy and
     with its history counted the same way; `learning` under it. Beside the row's pooled
-    Sizing, which stays the one applied and the one Waste counts against until an
-    Actuator applies groups (15.3b). No cap by the largest Room, as for the row."""
+    Sizing. No cap by the largest Room, as for the row. Its own Waste, ready, and whether
+    its requests are its live pods' (slice 15.3c): what the row's money goes by where its
+    Actuator applies the types. `pods`: its own while it runs, as shown; `share`: averaged
+    over the container's span (`row`), what its money counts, so a type whose nodes came
+    late counts for the time it ran and the types add up to the container's pods."""
     s = size(g, now, policy, history(g, covered, usage.step_for(window)))
+    pods = avg_pods(g, steps, row)
     out: dict[str, Any] = {"type": kind, "pods": round(avg_pods(g, steps), 1), "state": s.state}
+    out["share"] = round(pods, 3)
     out |= {"history_h": round(s.history_s / 3600, 1), "requests": dict(g.requests)}
+    out["live"] = g.live
+    waste = {}
     for name, res in (("cpu", s.cpu), ("memory", s.memory)):
         if res is not None:
             out[name] = {"action": res.action, "current": res.current, "target": res.target}
             out[name]["basis"] = res.basis
+            waste[name] = max(0.0, (res.current or 0.0) - res.target) * pods
+    if s.state == "ready":
+        out["waste"] = waste
     return out
 
 
@@ -502,6 +516,7 @@ def rows(
     now: float,
     scaled: dict[str, dict[Workload, list[Divides]]] | None = None,
     rooms: dict[str, dict[str, Any]] | None = None,
+    typed: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Every container's Sizing under its policy, as `sizing show`, the stored runs and
     `sizing waste` see it, sorted by name. `off` gives an excluded row. `scaled`: per
@@ -509,7 +524,9 @@ def rows(
     change such a request is `held`. `rooms`: per cluster, its nodes (usage.rooms): no
     Sizing asks more than the largest Room after DaemonSets there, a DaemonSet's own
     aside (that Room already leaves its requests out), and a Workload whose containers
-    together ask more says so on each of them."""
+    together ask more says so on each of them. `typed`: the clusters whose Actuator applies
+    a DaemonSet's Sizings per instance type (slice 15.3c): there a container with types is
+    `by_type`, its Waste its types' and its pooled Sizing raising no risk about a type."""
     caps = {cluster: largest_room(found) for cluster, found in (rooms or {}).items()}
     out: dict[str, dict[str, Any]] = {}
     asked: dict[tuple[str, Workload], dict[str, dict[str, float]]] = {}  # per container
@@ -596,10 +613,17 @@ def rows(
             row["risks"] = [r._asdict() for r in risks]
             if u.groups:  # slice 15.3a: a DaemonSet's, per instance type
                 row["groups"] = [
-                    _sized_type(kind, g, now, policy, covered[cluster], steps[cluster], window)
+                    _sized_type(kind, g, now, policy, covered[cluster], steps[cluster], window, u)
                     for kind, g in sorted(u.groups.items())
                 ]
-                if short := _short_of(row, policy):
+                if cluster in (typed or set()):  # its Actuator applies them (slice 15.3c)
+                    row["by_type"] = True
+                    if s.state == "ready":
+                        row["waste"] = {
+                            res: sum((g.get("waste") or {}).get(res, 0.0) for g in row["groups"])
+                            for res in ("cpu", "memory")
+                        }
+                elif short := _short_of(row, policy):
                     row["risks"].append(short)
             out[row["workload"]] = row
     together: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
@@ -1032,10 +1056,24 @@ def quantities(waste: dict[str, float]) -> str:
 
 def requested(r: dict[str, Any]) -> tuple[float, float]:
     """A row's requests times its average pods. A row stored before 10.1 has its
-    requests only when ready."""
+    requests only when ready. One `by_type` (slice 15.3c): each type's pods' requests,
+    and its pods on no known node the container's (the largest any pod asks)."""
     req = r.get("requests") or {res: (r.get(res) or {}).get("current") for res in ("cpu", "memory")}
     pods = r.get("pods") or 0.0
-    return (req.get("cpu") or 0.0) * pods, (req.get("memory") or 0.0) * pods
+    if not r.get("by_type"):
+        return (req.get("cpu") or 0.0) * pods, (req.get("memory") or 0.0) * pods
+    groups = r.get("groups") or []
+    shares = [g.get("share", g["pods"]) for g in groups]  # a type's pods over the container's
+    rest = max(0.0, pods - sum(shares))  # rounded parts: never below 0
+
+    def asks(res: str) -> float:
+        own = sum(
+            ((g.get("requests") or {}).get(res) or 0.0) * n
+            for g, n in zip(groups, shares, strict=True)
+        )
+        return float(own + (req.get(res) or 0.0) * rest)
+
+    return asks("cpu"), asks("memory")
 
 
 def report(
@@ -1334,7 +1372,9 @@ async def store_run(
     # Each cluster's last good run, read before this one finishes (it would compare
     # with itself)
     before, status = await store.latest_sizings(c.id, set(found.clusters))
-    now = rows(c, found.by_window, at, found.scaled, found.rooms)
+    # slice 15.3c: where the cluster's Actuator applies a DaemonSet's Sizings per type
+    typed = await store.typed_clusters(c.id)
+    now = rows(c, found.by_window, at, found.scaled, found.rooms, typed)
     await store.finish_sizing_run(run_id, c.id, found.clusters, now)
     for cluster, read in found.rooms.items():  # slice 15.1a
         await store.save_rooms(c.id, cluster, at, read)
@@ -1353,7 +1393,7 @@ async def store_run(
         await realize_floors(store, c, at, shown, found.bounds)
         for cluster, computed in floors(c, now, kept, found.bounds, at).items():
             await store.save_floors(c.id, cluster, at, computed)
-    await realize(store, c, at, before, status, now, found.clusters)
+    await realize(store, c, at, before, status, now, found.clusters, found.untyped)
     await store.prune_sizings(c.id, at)
     return found
 
@@ -1416,6 +1456,14 @@ def _key(r: dict[str, Any]) -> tuple[str, ...]:
     return tuple(r[k] for k in ("cluster", "namespace", "kind", "name", "container"))
 
 
+def _of_type(r: dict[str, Any] | None, kind: str) -> dict[str, Any] | None:
+    """A row's Sizing on nodes of one instance type, or None."""
+    return next((g for g in (r or {}).get("groups") or [] if g["type"] == kind), None)
+
+
+KEYS = ("cluster", "namespace", "kind", "name", "container")
+
+
 async def realize(
     store: "Store",
     c: Contract,
@@ -1424,6 +1472,7 @@ async def realize(
     status: dict[str, dict[str, Any]],
     now: list[dict[str, Any]],
     clusters: dict[str, str | None],
+    untyped: set[str] | None = None,
 ) -> None:
     """Realized Savings (slice 10.3b), per container and resource, against each read
     cluster's previous good run: a request lowered to within 10% of a Sizing below the
@@ -1434,20 +1483,64 @@ async def realize(
     Only rows read from live pods start, raise or end a drop: a container with none
     (kube-state-metrics down, scaled to 0) reads its window's largest request, the
     old one. ponytail: a CronJob whose pods are cleaned up between runs rarely has
-    two live runs in a row, so it rarely realizes; read the newest pod's to fix."""
+    two live runs in a row, so it rarely realizes; read the newest pod's to fix.
+    A DaemonSet's container applied per instance type (slice 15.3c, its row `by_type`)
+    realizes per type instead, each type's pods' request against that type's Sizing. A
+    container's drop in place when it comes to be applied by type becomes one per type,
+    from the same run and request: the one of them with the lowest `after` down to what
+    that type's pods ask now, the others never below their own `after`, so a chain of
+    drops still adds up to the first request less what the type asks (no type drop is
+    added for it that run: those made cover it); a type's drop ends when its type is
+    gone, or the container is no longer applied by type. `untyped`: clusters whose pods'
+    instance types weren't read this run: their DaemonSets' drops are left as they are
+    and none is added, their rows' missing groups saying nothing."""
     read = {k for k, error in clusters.items() if error is None}
     then = {_key(r): r for r in before if r["cluster"] in read}
     current = {_key(r): r for r in now if r["cluster"] in read}
     raised: dict[int, float] = {}
     ended: set[int] = set()
-    for e in await store.realized(c.id):
+    added: list[dict[str, Any]] = []
+    made: set[tuple[tuple[str, ...], str, str]] = set()  # (container, resource, type) made now
+    stored = await store.realized(c.id)
+    lowest: dict[tuple[tuple[str, ...], str], int] = {}  # a container's lowest drop
+    for e in sorted(stored, key=lambda e: e["after"]):
+        if e.get("type") is None:
+            lowest.setdefault((_key(e), e["resource"]), e["id"])
+    blind = untyped or set()
+    for e in stored:
         key = _key(e)
         if e["cluster"] not in read:
             continue  # a failed read ends nothing
+        if e["kind"] == "DaemonSet" and e["cluster"] in blind:
+            continue  # its types not read: nor are its drops
         r = current.get(key)
-        if r is not None and not r.get("live"):
+        res, kind = e["resource"], e.get("type")
+        typed = bool(r and r.get("by_type"))
+        if kind is not None and not typed:  # its types no longer applied, or it is gone
+            ended.add(e["id"])
+            continue
+        if kind is None and typed:  # it comes to be applied by type: a drop per type
+            assert r is not None
+            if not r.get("live"):
+                continue
+            for g in r.get("groups") or []:
+                asked = (g.get("requests") or {}).get(res)
+                if not g.get("live") or asked is None:
+                    continue
+                if lowest[(key, res)] != e["id"]:
+                    asked = max(e["after"], asked)
+                if asked < e["before"]:
+                    added.append(
+                        {k: e[k] for k in (*KEYS, "resource", "at", "prev_run", "before")}
+                        | {"type": g["type"], "after": asked, "sizing": e["sizing"]}
+                    )
+                    made.add((key, res, g["type"]))
+            ended.add(e["id"])
+            continue
+        one = r if kind is None else _of_type(r, kind)
+        if one is not None and not one.get("live"):
             continue  # its requests are the window's, not what runs now
-        asked = (r or {}).get("requests", {}).get(e["resource"])
+        asked = (one or {}).get("requests", {}).get(res)
         if asked is None:  # gone, or its request removed: not a Sizing's saving
             ended.add(e["id"])
             continue
@@ -1456,34 +1549,44 @@ async def realize(
             ended.add(e["id"])
         elif after != e["after"]:
             raised[e["id"]] = after
-    added = []
     for key, r in current.items():
         old = then.get(key)
-        if old is None or not (old.get("live") and r.get("live")):  # unmarked before 10.3b
+        if old is None or (r["kind"] == "DaemonSet" and r["cluster"] in blind):
             continue
-        for res in ("cpu", "memory"):
-            was = (old.get("requests") or {}).get(res)  # None before 10.1
-            asked = (r.get("requests") or {}).get(res)
-            if was is None or asked is None or asked >= was:
-                continue
-            shown = [
-                row[res]["target"]
-                for t, row in await store.sizing_history(c.id, key, at - SHOWN_FOR)  # type: ignore[arg-type]
-                if t < at and row.get(res) and row[res]["target"] < was
-            ]
-            near = [s for s in shown if abs(asked - s) <= MATCH * s]
-            if near:
-                added.append(
-                    {k: r[k] for k in ("cluster", "namespace", "kind", "name", "container")}
-                    | {
-                        "resource": res,
-                        "at": at,
-                        "prev_run": status[r["cluster"]]["run"],
-                        "before": was,
-                        "after": asked,
-                        "sizing": min(near, key=lambda s: abs(asked - s)),
-                    }
-                )
+        pairs: list[tuple[dict[str, Any], dict[str, Any] | None, str | None]] = (
+            [(g, _of_type(old, g["type"]), g["type"]) for g in r.get("groups") or []]
+            if r.get("by_type")
+            else [(r, old, None)]
+        )
+        for mine, theirs, kind in pairs:
+            if theirs is None or not (theirs.get("live") and mine.get("live")):
+                continue  # unmarked before 10.3b (a type's, before 15.3c)
+            for res in ("cpu", "memory"):
+                was = (theirs.get("requests") or {}).get(res)  # None before 10.1
+                asked = (mine.get("requests") or {}).get(res)
+                if was is None or asked is None or asked >= was:
+                    continue
+                if kind is not None and (key, res, kind) in made:
+                    continue
+                shown = []
+                for t, row in await store.sizing_history(c.id, key, at - SHOWN_FOR):  # type: ignore[arg-type]
+                    sized = row if kind is None else _of_type(row, kind)
+                    if t < at and sized and sized.get(res) and sized[res]["target"] < was:
+                        shown.append(sized[res]["target"])
+                near = [s for s in shown if abs(asked - s) <= MATCH * s]
+                if near:
+                    added.append(
+                        {k: r[k] for k in KEYS}
+                        | {
+                            "type": kind,
+                            "resource": res,
+                            "at": at,
+                            "prev_run": status[r["cluster"]]["run"],
+                            "before": was,
+                            "after": asked,
+                            "sizing": min(near, key=lambda s: abs(asked - s)),
+                        }
+                    )
     if added or raised or ended:
         await store.save_realized(c.id, added, raised, ended)
 
@@ -1492,7 +1595,8 @@ async def savings(
     store: "Store", c: Contract, now: float, rows: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
     """The Contract's realized Savings as of `now`: each stored drop still in place,
-    worth (before - after) x the container's pods in its latest run, at today's prices
+    worth (before - after) x the container's pods in its latest run (a type's drop, that
+    type's pods: slice 15.3c), at today's prices
     (cores and GiB without them), as a monthly run rate and accrued since the drop
     (that rate x the hours since, so a later partial rise lowers it too), and the rate
     of the drops of the last 7 days. The pods are the latest run's average, as its
@@ -1524,12 +1628,16 @@ async def savings(
         if e["at"] > now or r is None:  # gone, or its cluster no longer the Contract's
             continue
         res = e["resource"]
-        saved = (e["before"] - e["after"]) * (r.get("pods") or 0.0)
+        # a type's drop is worth that type's pods (slice 15.3c)
+        one = r if e.get("type") is None else _of_type(r, e["type"]) or {}
+        pods = one.get("share", one.get("pods")) or 0.0
+        saved = (e["before"] - e["after"]) * pods
         hours = (now - e["at"]) / 3600
         drop = {
             "workload": "/".join(_key(e)),
             **{k: e[k] for k in ("resource", "at", "before", "after", "sizing")},
-            "pods": r.get("pods") or 0.0,
+            "type": e.get("type"),
+            "pods": pods,
             "saved": saved,
             "cost": None,
         }

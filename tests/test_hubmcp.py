@@ -1013,6 +1013,9 @@ def test_a_daemonsets_types_are_approved_with_it_never_more_than_were_shown(
         daemons("agent", mixed),  # its one Sizing keeps both: only a type changes something
         daemons("steady", [group("a", "keep"), group("b", "keep")]),
         daemons("wide", [group(f"t{i}") for i in range(hubmcp.MAX_TYPES + 1)]),
+        # slice 15.3c: its Actuator applies the types, which keep: its pooled lowering isn't
+        daemons("typed", [group("a", "keep"), group("b", "keep")], cpu="lower", by_type=True),
+        daemons("learning", [group("a", state="learning")] * 2, cpu="lower", by_type=True),
         sized(),
     )
 
@@ -1027,6 +1030,7 @@ def test_a_daemonsets_types_are_approved_with_it_never_more_than_were_shown(
             approve("wide"),
             approve("api", "115m"),
         )
+        typed, learning = approve("typed", "115m"), approve("learning", "115m")
     assert agent_["approved"] == "approved" and agent_["by_instance_type"] == [
         "  on m5.large (2 pods): cpu lower 1000m -> 50m",
         "  on m5.4xlarge (2 pods): cpu keep 1000m -> 1000m",
@@ -1038,6 +1042,11 @@ def test_a_daemonsets_types_are_approved_with_it_never_more_than_were_shown(
         "not approved unseen"
     }
     assert "by_instance_type" not in api
+    applied = (
+        "its Sizings by instance type, which its Actuator applies, keep the requests as they "
+        "are: nothing to approve"
+    )
+    assert typed == learning == {"error": applied}
     import psycopg
 
     with psycopg.connect(database_url) as conn:

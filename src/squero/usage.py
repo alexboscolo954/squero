@@ -924,6 +924,9 @@ class Collected:
     bounds: dict[str, dict[Workload, list[Bounds]]] = field(default_factory=dict)
     # per cluster, its nodes and what their Room is made of (slice 15.1a), or why not
     rooms: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # the clusters whose pods' instance types could not be read this run (slice 15.3c):
+    # their DaemonSets have no groups this once, which says nothing of their types
+    untyped: set[str] = field(default_factory=set)
 
 
 def collect(
@@ -971,6 +974,7 @@ def collect(
                         kinds = pod_types(prom, t, w, end)
                     except UsageError as e:
                         log.warning("%s/%s: its nodes' types not read: %s", c.id, t.cluster, e)
+                        out.untyped.add(t.cluster)
                 by_window[w] = usage(prom, t, w, end, fallback, c.allocation.labels, recent, kinds)
         except UsageError as e:
             out.clusters[t.cluster] = str(e)

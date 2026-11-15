@@ -135,6 +135,9 @@ class Container(BaseModel):
     waste: Waste | None = None
     risks: list[Risk] = []
     groups: list[TypeSizing] = []  # by instance type, where an Actuator could apply them
+    # slice 15.3c: its Actuator applies the groups, so its Waste and cost are theirs and
+    # the pooled Sizing above is not applied
+    by_type: bool = False
 
 
 class Workload(BaseModel):
@@ -195,8 +198,9 @@ class Drop(BaseModel):
     before: float  # the request per pod
     after: float
     sizing: float
-    pods: float  # in the container's latest run
+    pods: float  # in the container's latest run (a type's drop: that type's)
     saved: float  # cores or bytes: (before - after) x pods
+    type: str | None = None  # slice 15.3c: the instance type whose pods' request dropped
     cost: SpentCost | None = None
 
 

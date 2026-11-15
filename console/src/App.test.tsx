@@ -22,6 +22,7 @@ const container = {
   waste: { cpu: 2.655, memory: 2.7 * GI },
   risks: [{ kind: "oom_killed", text: '<img src=x onerror="alert(1)">' }],
   groups: [] as NonNullable<import("./api").Container["groups"]>, // slice 15.3a: per instance type
+  by_type: false as boolean, // slice 15.3c: its Actuator applies the groups
 };
 
 function workload(name: string, cpu: number, memory: number, risks = container.risks) {
@@ -95,6 +96,25 @@ test("a request its HPA divides by shows as held, with the change that frees it 
   expect(screen.queryByText(/Memory is held/)).toBeNull();
 });
 
+test("a DaemonSet's container its Actuator applies by instance type says the one Sizing is not applied", async () => {
+  const agent = workload("agent", 1, 0, []);
+  const typed = { action: "lower", current: 0.5, target: 0.06, basis: 0.05 };
+  agent.containers[0].groups = [{ type: "m5.large", pods: 2, state: "ready", history_h: 48, cpu: typed }];
+  agent.containers[0].by_type = true;
+  answer({
+    "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]],
+    "/api/v1/contracts/demo-shop/workloads": [200, { ...DATA, workloads: [agent] }],
+    "/api/v1/contracts/demo-shop/history": [200, { points: [] }],
+  });
+  const { container: page } = render(<App />);
+  fireEvent.click(await screen.findByText("Deployment/agent"));
+  const types = page.querySelector("details.types") as HTMLDetailsElement;
+  expect(types.querySelector("summary")?.textContent).toBe(
+    "By instance type (1): what its Actuator applies, each pod by its node's type; the one Sizing above is not applied",
+  );
+  expect(types.open).toBe(true);
+});
+
 test("a DaemonSet's container lists its Sizing per instance type under the one that is applied", async () => {
   const agent = workload("agent", 1, 0, []);
   const typed = { action: "lower", current: 0.5, target: 0.06, basis: 0.05 };
@@ -117,6 +137,7 @@ test("a DaemonSet's container lists its Sizing per instance type under the one t
     "m5.<b>large</b> (2 pods): CPU lower 500m → 60m; memory lower 256Mi → 77Mi",
   ]);
   expect(page.querySelector("details.types b")).toBeNull();
+  expect((types as HTMLDetailsElement).open).toBe(false);
   fireEvent.click(screen.getByText("Deployment/plain"));
   await screen.findByText(/CPU lower 1000m/);
   expect(page.querySelector("details.types")).toBeNull(); // a container without groups shows none

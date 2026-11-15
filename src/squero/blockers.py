@@ -503,13 +503,24 @@ def after(read: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
     container with no ready Sizing, or of a pod whose Workload isn't known, keeps its
     own request: nothing is freed that no Sizing frees. A container that asks nothing
     today, so that the pod doesn't list it, asks its Sizing then. Each node's requests
-    move by what its own pods' did; the pods the Hub can't see stay as they are."""
+    move by what its own pods' did; the pods the Hub can't see stay as they are. A
+    DaemonSet's container applied per instance type (slice 15.3c, `by_type`) gets its
+    node's type's Sizing, and keeps its own request on a type that has none."""
     sized = {
         (r["namespace"], r["kind"], r["name"], r["container"]): {
             res: r[res]["target"] for res in ("cpu", "memory") if r.get(res)
         }
         for r in rows
-        if r.get("state") == "ready"
+        if r.get("state") == "ready" and not r.get("by_type")
+    }
+    typed = {  # by instance type: its ready types'
+        (r["namespace"], r["kind"], r["name"], r["container"]): {
+            g["type"]: {res: g[res]["target"] for res in ("cpu", "memory") if g.get(res)}
+            for g in r.get("groups") or []
+            if g["state"] == "ready"
+        }
+        for r in rows
+        if r.get("state") == "ready" and r.get("by_type")
     }
     of: dict[tuple[str, str, str], dict[str, dict[str, float]]] = {}  # by Workload
     for (ns, kind, name, container), target in sized.items():
@@ -520,6 +531,10 @@ def after(read: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
         for p in n["own"]:
             w = p.get("workload")
             targets = of.get((p["namespace"], w["kind"], w["name"]), {}) if w else {}
+            for (ns, kind, name, container), types in typed.items():
+                ours = w and (ns, kind, name) == (p["namespace"], w["kind"], w["name"])
+                if ours and (mine := types.get(n.get("type") or "")) is not None:
+                    targets = {**targets, container: mine}
             asks = {"cpu": 0.0, "memory": 0.0}
             listed = set()
             for ctr in p.get("containers") or []:

@@ -209,6 +209,7 @@ def test_a_shared_store_without_labels_or_a_failed_read_gives_no_groups(
     failed = collected(fake, monkeypatch)
     assert failed.clusters == {"test": None}  # the cluster is read all the same
     assert failed.by_window[7 * 86400][0][1].groups == {}
+    assert failed.untyped == {"test"} and found.untyped == set()  # slice 15.3c: unread, not none
 
 
 def test_each_nodes_type_is_kept_with_its_clusters_rooms_for_its_actuator_only(

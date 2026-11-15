@@ -1829,12 +1829,17 @@ def create_app(
                 out.append(r)
         return out, status.get(cluster.name) or {}
 
+    # slice 15.3c: whether each cluster's Actuator applies types, as last stored: the store
+    # is written only when a pull says otherwise
+    knows: dict[tuple[str, str], bool] = {}
+
     def automation(
         rows: list[dict[str, Any]], run: int | None, typed: bool = False
     ) -> list[actuator.Wanted]:
         """The Sizings Automation applies (slice 12.5), of the `automated` containers:
         ready, changing something. `typed`: for an Actuator that applies a DaemonSet's
-        per instance type (slice 15.3b), where some type's must change something."""
+        per instance type (slice 15.3b), where some type's must change something; one
+        with types goes by them only (slice 15.3c): none ready, nothing is sent."""
         out = []
         for r in rows:
             if r.get("state") != "ready":
@@ -1844,6 +1849,8 @@ def create_app(
                 for res in ("cpu", "memory")
             }
             types = sizing.by_type(r) if typed else {}
+            if typed and r.get("kind") == "DaemonSet" and r.get("groups") and not types:
+                continue  # every type still learning: each pod keeps its template's
             if sizing.changes(values["cpu"], values["memory"], types):
                 out.append(actuator.Wanted(run_id=run, **{**r, **values}, types=types))
         return out
@@ -1868,6 +1875,9 @@ def create_app(
         node's type with them; any other gets the one Sizing for every pod."""
         cid, cluster = actuator_of(creds)
         known = set(kinds.split(",")) & set(actuator.KINDS)
+        if knows.get((cid, cluster.name)) != types:  # slice 15.3c: what its money goes by
+            await store().actuator_types(cid, cluster.name, types, time.time())
+            knows[(cid, cluster.name)] = types
         if await store().kill_switch(cid) is not None:  # a read is no change: slice 15.1b
             return actuator.Desired(kill_switch=True, sizings=[], blockers=cluster.namespaces)
         reverted = await store().reverted(cid, cluster.name)  # an approval before it is undone

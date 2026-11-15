@@ -106,11 +106,14 @@ MAX_TYPES = 10  # of a DaemonSet's instance types given to the model; the rest c
 
 def _by_type(c: webapp.Container) -> dict[str, Any]:
     """A DaemonSet container's Sizings per instance type (slice 15.3a), as lines, or
-    nothing: the busiest types first would need usage, so by name, capped."""
+    nothing: the busiest types first would need usage, so by name, capped. `applied`: what
+    its Actuator applies, its pooled Sizing then not (slice 15.3c)."""
     if not c.groups:
         return {}
     lines = group_lines({"groups": [g.model_dump() for g in c.groups[:MAX_TYPES]]})
-    return {"by_instance_type": lines, "more_types": max(0, len(c.groups) - MAX_TYPES)}
+    applied = "by_instance_type" if c.by_type else "the one Sizing, to every pod"
+    more = max(0, len(c.groups) - MAX_TYPES)
+    return {"by_instance_type": lines, "more_types": more, "applied": applied}
 
 
 MAX_BLOCKERS = 5  # a node's Blockers given to the model, one per Workload; the rest counted
@@ -388,6 +391,11 @@ def build(
                 )
             types = by_type(r)
             kept = all(r[res]["action"] == "keep" for res in RES if r.get(res))
+            if r.get("by_type") and not changes(None, None, types):  # slice 15.3c
+                raise ToolError(
+                    "its Sizings by instance type, which its Actuator applies, keep the "
+                    "requests as they are: nothing to approve"
+                )
             if kept and not changes(None, None, types):
                 raise ToolError("its Sizing keeps the requests as they are: nothing to approve")
             if len(r.get("groups") or []) > MAX_TYPES:  # never approved unseen
