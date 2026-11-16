@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import ijson  # type: ignore[import-untyped]
 
-from squero.contracts import Cluster, ClusterPrices, Contract, ListPrices, Prices
+from squero.contracts import Aws, Cluster, ClusterPrices, Contract, ListPrices, Prices
 
 if TYPE_CHECKING:
     from squero.store import Store
@@ -80,9 +80,10 @@ def aws(http: httpx.Client, region: str, wanted: Wanted) -> dict[str, float | No
 
 def azure(
     http: httpx.Client, region: str, wanted: Wanted, currency: str = "USD"
-) -> dict[str, float | None]:
-    """Linux, pay-as-you-go (no Spot, no Low Priority) price per hour in `currency`;
-    the cheapest meter when a size has several."""
+) -> tuple[dict[str, float | None], dict[str, float | None]]:
+    """Linux, pay-as-you-go (no Low Priority) price per hour in `currency`, on demand
+    and, from the same items, Spot (a meter named "... Spot", slice 16.4a); the cheapest
+    meter when a size has several."""
     types = " or ".join(f"armSkuName eq '{t}'" for t in sorted(wanted))
     url: str | None = AZURE
     params: dict[str, str] | None = {
@@ -91,6 +92,7 @@ def azure(
         f"and priceType eq 'Consumption' and ({types})",
     }
     best: dict[str, float] = {}
+    spot: dict[str, float] = {}
     while url:
         r = http.get(url, params=params)
         r.raise_for_status()
@@ -99,26 +101,29 @@ def azure(
             names = " ".join(item.get(k, "") for k in ("productName", "skuName", "meterName"))
             if (
                 "Windows" in names
-                or "Spot" in names
                 or "Low Priority" in names
                 or item.get("unitOfMeasure") != "1 Hour"
                 or not item.get("retailPrice")
             ):
                 continue
-            t = item["armSkuName"]
-            best[t] = min(best.get(t, float("inf")), float(item["retailPrice"]))
+            t, into = item["armSkuName"], spot if "Spot" in names else best
+            into[t] = min(into.get(t, float("inf")), float(item["retailPrice"]))
         url, params = body.get("NextPageLink"), None
-    return {t: best.get(t) for t in wanted}
+    return {t: best.get(t) for t in wanted}, {t: spot.get(t) for t in wanted}
 
 
 def gcp(
     http: httpx.Client, region: str, wanted: Wanted, key: str, currency: str = "USD"
-) -> dict[str, float | None]:
+) -> tuple[dict[str, float | None], dict[str, float | None]]:
     """Compute Engine bills a machine family's cores and RAM separately: a machine
     type's hourly price is its vCPU x the family's core price + its GiB x the RAM
-    price (on demand, not custom, not Spot), in `currency`."""
+    price (not custom), in `currency`: on demand, and from the same pages Spot
+    (`Preemptible` SKUs, "Spot Preemptible N2 Instance Core ...", a legacy "Preemptible"
+    one only where no Spot one is; slice 16.4a)."""
     core: dict[str, float] = {}
     ram: dict[str, float] = {}
+    spot_core: dict[str, tuple[bool, float]] = {}  # family -> (a Spot SKU's, its price)
+    spot_ram: dict[str, tuple[bool, float]] = {}
     token: str | None = ""
     while token is not None:
         r = http.get(
@@ -130,8 +135,9 @@ def gcp(
         body = r.json()
         for sku in body.get("skus", []):
             desc = sku.get("description", "")
+            usage = sku.get("category", {}).get("usageType")
             if (
-                sku.get("category", {}).get("usageType") != "OnDemand"
+                usage not in ("OnDemand", "Preemptible")
                 or region not in sku.get("serviceRegions", [])
                 or " Instance " not in desc
             ):
@@ -143,15 +149,28 @@ def gcp(
             if rate.get("currencyCode", currency) != currency:  # never a price in the wrong money
                 raise ValueError(f"the catalog answered in {rate['currencyCode']}, not {currency}")
             price = float(rate.get("units", 0)) + rate.get("nanos", 0) / 1e9
-            (core if rest.startswith("Core") else ram)[family.lower()] = price
+            if usage == "OnDemand":
+                (core if rest.startswith("Core") else ram)[family.lower()] = price
+                continue
+            named = family.startswith("Spot Preemptible ")
+            name = family.removeprefix("Spot Preemptible ").removeprefix("Preemptible ").lower()
+            into = spot_core if rest.startswith("Core") else spot_ram
+            if named or name not in into or not into[name][0]:  # a Spot SKU wins
+                into[name] = (named, price)
         token = body.get("nextPageToken") or None
     out: dict[str, float | None] = {}
+    spot: dict[str, float | None] = {}
     for t, (vcpu, gib) in wanted.items():
         family = t.split("-")[0]
         out[t] = (
             vcpu * core[family] + gib * ram[family] if family in core and family in ram else None
         )
-    return out
+        spot[t] = (
+            vcpu * spot_core[family][1] + gib * spot_ram[family][1]
+            if family in spot_core and family in spot_ram
+            else None
+        )
+    return out, spot
 
 
 def fetch(
@@ -161,12 +180,14 @@ def fetch(
     wanted: Wanted,
     gcp_key: str | None,
     currency: str = "USD",
-) -> dict[str, float | None]:
+) -> tuple[dict[str, float | None], dict[str, float | None]]:
+    """A group's on-demand prices and, where the same read gives them, its spot ones
+    (Azure's and GCP's; AWS's need a Contract's credentials: `aws_spot`)."""
     for name in (region, *wanted):
         if not SAFE.fullmatch(name):
             raise ValueError(f"not a region or instance type name: {name[:40]!r}")
     if provider == "aws":
-        return aws(http, region, wanted)
+        return aws(http, region, wanted), {}
     if provider == "azure":
         return azure(http, region, wanted, currency)
     if provider == "gcp":
@@ -219,30 +240,154 @@ async def refresh(
         facts += [(c, f) for f in (await store.latest_nodes(c.id)).values()]
     looked = 0
     stored: dict[str, dict[Key, dict[str, Any]]] = {}
+    spotted: dict[str, dict[Key, dict[str, Any]]] = {}  # the shared spot rows (16.4a)
     for (currency, provider, region), wanted in sorted(wanted_by_group(facts).items()):
         have = stored[currency] = stored.get(currency) or await store.list_prices(currency)
+        spots = spotted[currency] = spotted.get(currency) or await store.spot_prices(currency, "")
         due: Wanted = {}
         for t, capacity in wanted.items():
-            row = have.get((provider, region, t))
-            fresh = row and row["ok_at"] is not None and now - row["ok_at"] < DAY
-            waiting = row and row["error"] and now - row["tried_at"] < HOUR
-            if not (fresh or waiting):
+            rows_ = [have.get((provider, region, t))]
+            if provider != "aws":  # its spot price comes with the same read (16.4a)
+                rows_.append(spots.get((provider, region, t)))
+            if not all(_current(row, now) for row in rows_):
                 due[t] = capacity
         if not due:
             continue
         looked += len(due)
         try:
-            found = await asyncio.to_thread(
+            found, spot = await asyncio.to_thread(
                 fetch, http, provider, region, due, keys.get("gcp"), currency
             )
             error = None
         except (httpx.HTTPError, ValueError, KeyError, ijson.JSONError) as e:
-            found, error = {}, why(e, keys.get("gcp"))
+            (found, spot), error = ({}, {}), why(e, keys.get("gcp"))
         for t in due:
             price = found.get(t)
             what = error or (None if price else "not in the price list")
             await store.put_list_price((provider, region, t), price, what, now, currency)
+            if provider != "aws":
+                said = error or (None if spot.get(t) else NO_SPOT[0])
+                await store.put_spot_price((provider, region, t), spot.get(t), said, now, currency)
+    for c in contracts:  # slice 16.4a: AWS's spot prices, each Contract with its own key
+        looked += await _aws_spot(store, c, http, now)
     return looked
+
+
+NO_SPOT = ("no spot price in the list", "no spot price in its history")  # read, and none
+
+
+def _current(row: dict[str, Any] | None, now: float, refused_waits: bool = False) -> bool:
+    """A price row read in the last day, or one that failed in the last hour. A size the
+    cloud has no spot price for (`NO_SPOT`) was read all the same: it waits the day, so
+    its group isn't read again every hour (slice 16.4a); with `refused_waits` (AWS's
+    spot reads, the client's key), a permission refused waits the day too, rather than
+    filling the client's audit trail with a denied call an hour (the Operator's choice)."""
+    fresh = row and row["ok_at"] is not None and now - row["ok_at"] < DAY
+    error = (row or {}).get("error") or ""
+    refused = refused_waits and error.startswith(("HTTP 401", "HTTP 403"))
+    wait = DAY if error in NO_SPOT or refused else HOUR
+    waiting = row and error and now - row["tried_at"] < wait
+    return bool(fresh or waiting)
+
+
+async def _aws_spot(store: "Store", c: Contract, http: httpx.Client, now: float) -> int:
+    """The AWS spot prices of a Contract's spot nodes on list prices (slice 16.4a), read
+    with its own `aws` integration's key and kept for it alone (in USD: a Contract on AWS
+    prices in USD, its validation says). A region outside the integration's `regions` is
+    refused, as every call of it is. The lookups made."""
+    import asyncio
+
+    aws_ = next((i for i in c.integrations if isinstance(i, Aws)), None)
+    if not c.list_prices or aws_ is None:
+        return 0
+    wanted: dict[str, set[str]] = {}  # region -> the instance types of its spot nodes
+    for cl in c.clusters:
+        facts = (await store.latest_nodes(c.id)).get(cl.name)
+        if (
+            cl.spot is None
+            or cl.prices
+            or not facts
+            or facts.get("problem")  # as wanted_by_group: no node of it to ask for
+            or facts.get("spot") != cl.spot.label
+        ):
+            continue
+        for n in facts["nodes"]:
+            if n.get("spot") and n["provider"] == "aws":
+                wanted.setdefault(n["region"], set()).add(n["type"])
+    have = await store.spot_prices("USD", c.id)
+    looked = 0
+    for region, types in sorted(wanted.items()):
+        # AWS's spot rows are only ever a Contract's own: none is shared
+        due = sorted(
+            t for t in types if not _current(have.get(("aws", region, t)), now, refused_waits=True)
+        )
+        if not due:
+            continue
+        looked += len(due)
+        try:
+            if not SAFE.fullmatch(region) or any(not SAFE.fullmatch(t) for t in due):
+                raise ValueError(f"not a region or instance type name: {region[:40]!r}")
+            if region not in aws_.regions:
+                raise ValueError(f"{region} is not among the aws integration's regions")
+            secret = c.secret(aws_.secret_access_key_secret).get_secret_value()
+            found = await asyncio.to_thread(
+                aws_spot, http, region, due, aws_.access_key_id, secret, now
+            )
+            error = None
+        except (httpx.HTTPError, ValueError, KeyError) as e:
+            found, error = {}, why(e, None)
+        for t in due:
+            said = error or (None if found.get(t) else NO_SPOT[1])
+            await store.put_spot_price(("aws", region, t), found.get(t), said, now, "USD", c.id)
+    return looked
+
+
+EC2 = "ec2.{region}.amazonaws.com"
+
+
+def aws_spot(
+    http: httpx.Client, region: str, types: list[str], key_id: str, secret: str, now: float
+) -> dict[str, float | None]:
+    """Each type's Linux spot price in a region (slice 16.4a), USD an hour, from EC2's
+    `DescribeSpotPriceHistory` over the last day (it also gives the price in effect at
+    its start): averaged in each zone, then across the zones, so a zone whose price
+    moved often weighs no more than one whose didn't. Read with a pattern, not an XML
+    parser: a few known elements of a reply from AWS."""
+    from datetime import UTC, datetime
+    from statistics import mean
+    from urllib.parse import urlencode
+
+    from squero.servers.aws import authorization
+
+    host = EC2.format(region=region)
+    start = datetime.fromtimestamp(now - DAY, UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    by: dict[str, dict[str, list[float]]] = {}  # type -> zone -> its prices
+    token = ""
+    while True:
+        form = {"Action": "DescribeSpotPriceHistory", "Version": "2016-11-15",
+                "StartTime": start, "ProductDescription.1": "Linux/UNIX"}  # fmt: skip
+        form |= {f"InstanceType.{i}": t for i, t in enumerate(types, 1)}
+        form |= {"NextToken": token} if token else {}
+        data = urlencode(sorted(form.items())).encode()
+        amz = datetime.fromtimestamp(now, UTC).strftime("%Y%m%dT%H%M%SZ")
+        headers = {"content-type": "application/x-www-form-urlencoded; charset=utf-8",
+                   "host": host, "x-amz-date": amz}  # fmt: skip
+        auth = authorization("POST", host, "/", "", headers, data, region, "ec2", key_id,
+                             secret, amz)  # fmt: skip
+        r = http.post(f"https://{host}/", content=data, headers={**headers, "authorization": auth})
+        r.raise_for_status()
+        for item in re.findall(r"<item>(.*?)</item>", r.text, re.S):
+            f = dict(re.findall(r"<(\w+)>([^<]*)</\1>", item))
+            if f.get("instanceType") in types and f.get("spotPrice"):
+                zone = by.setdefault(f["instanceType"], {}).setdefault(
+                    f.get("availabilityZone", ""), []
+                )
+                zone.append(float(f["spotPrice"]))
+        found = re.search(r"<nextToken>([^<]+)</nextToken>", r.text)
+        token = found.group(1) if found else ""
+        if not token:
+            break
+    return {t: mean(mean(z) for z in by[t].values()) if by.get(t) else None for t in types}
 
 
 def spot_paid(
@@ -303,6 +448,7 @@ def resolve(
     rows: dict[Key, dict[str, Any]],
     now: float,
     shares: dict[str, tuple[float, float]] | None = None,
+    spot_rows: dict[Key, dict[str, Any]] | None = None,
 ) -> tuple[dict[str, ClusterPrices], list[dict[str, str]]]:
     """Each cluster's prices (typed, else from the list) and, per cluster, where its
     price came from or why it has none; in `shares`, each priced cluster's that sets
@@ -324,7 +470,7 @@ def resolve(
                 shares[cluster.name] = share
             notes.append({"cluster": cluster.name, "source": "typed", "note": said})
             continue
-        got = _from_list(c, cluster, nodes.get(cluster.name), rows, now)
+        got = _from_list(c, cluster, nodes.get(cluster.name), rows, now, spot_rows)
         if isinstance(got, str):
             notes.append({"cluster": cluster.name, "source": "none", "note": got})
         else:
@@ -341,7 +487,12 @@ def _from_list(
     facts: dict[str, Any] | None,
     rows: dict[Key, dict[str, Any]],
     now: float,
+    spot_rows: dict[Key, dict[str, Any]] | None = None,
 ) -> tuple[ClusterPrices, str, tuple[float, float] | None] | str:
+    """A cluster's prices from its nodes' list prices. A spot node costs its own spot
+    list price where the cloud gives one (`spot_rows`, slice 16.4a: no deal on it),
+    else its on-demand one at the cluster's discount, node by node; the price note says
+    which, and a spot node's rate against an on-demand one is the effective one."""
     assert c.list_prices is not None
     priced, said = _spot_of(cluster, facts)
     deal = c.list_prices.discount  # an on-demand node's only: no deal covers spot capacity
@@ -353,13 +504,31 @@ def _from_list(
     total = vcpu = gib = 0.0
     oldest = now
     shapes: dict[str, int] = {}
+    listed = fell = 0  # spot nodes at their spot list price, and at the discount
+    spot_paid = spot_worth = 0.0  # what the spot nodes cost, and on demand at the deal
+    fallback: list[str] = []  # why a spot node had no spot list price
     for n in facts["nodes"]:
         row = rows.get((n["provider"], n["region"], n["type"]))
         if row is None or row["hour_price"] is None:
             why = f" ({row['error']})" if row and row["error"] else " (looked up daily)"
             return f"no list price yet for {n['provider']} {n['type']} in {n['region']}{why}"
         on_spot = priced and cluster.spot is not None and n.get("spot")
-        total += row["hour_price"] * (cluster.spot.discount if on_spot and cluster.spot else deal)
+        paid = row["hour_price"] * deal
+        if on_spot and cluster.spot is not None:
+            spot = (spot_rows or {}).get((n["provider"], n["region"], n["type"]))
+            if spot and spot["hour_price"] is not None:
+                paid, listed = spot["hour_price"], listed + 1
+                oldest = min(oldest, spot["ok_at"])
+            else:
+                paid, fell = row["hour_price"] * cluster.spot.discount, fell + 1
+                fallback.append(
+                    spot["error"]
+                    if spot and spot["error"]
+                    else "no spot list price yet: looked up daily"
+                )
+            spot_paid += paid
+            spot_worth += row["hour_price"] * deal
+        total += paid
         on_demand += row["hour_price"] * deal
         vcpu += n["vcpu"]
         gib += n["gib"]
@@ -373,8 +542,20 @@ def _from_list(
     old = f", {age / 24:.0f} days old" if now - oldest > STALE else ""
     made = ", ".join(f"{n} x {s}" for s, n in sorted(shapes.items()))
     off = f", discount x{deal:g}" if deal != 1 else ""
+    if listed and cluster.spot is not None:  # slice 16.4a: which spot nodes cost what
+        of = len(facts["nodes"])
+        said = f", spot list on {listed} of {of} nodes"
+        said += f", x{cluster.spot.discount:g} on {fell} ({fallback[0]})" if fell else ""
+    elif (
+        fell
+        and cluster.spot is not None
+        and fallback[0] != "no spot list price yet: looked up daily"
+    ):
+        said += f" ({fallback[0]})"
     note = f"list price of {made} (1 vCPU = {w:g} GiB{off}), read {age:.0f} h ago{old}{said}"
     against = cluster.spot.discount / deal if cluster.spot else 1.0
+    if spot_worth:  # the spot nodes' effective rate, list prices and discounts as applied
+        against = spot_paid / spot_worth
     share = (total / on_demand, against) if cluster.spot and on_demand else None
     return ClusterPrices(cpu=w * memory, memory=memory), note, share
 
@@ -408,6 +589,7 @@ async def effective(store: "Store", c: Contract, now: float) -> Contract:
         await store.list_prices(c.list_prices.currency),
         now,
         shares,
+        await store.spot_prices(c.list_prices.currency, c.id),  # slice 16.4a
     )
     out = c.model_copy()
     if len(prices) == len(c.clusters):

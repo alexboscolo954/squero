@@ -312,12 +312,14 @@ def test_azure_reads_pay_as_you_go_linux_hours_across_pages() -> None:
         asked.append(request)
         return httpx.Response(200, json=page2 if "page=2" in str(request.url) else page1)
 
-    got = listprices.azure(
+    got, spot = listprices.azure(
         http_of(handler),
         "eastus",
         {"Standard_D2s_v3": (2, 8), "Standard_D4s_v3": (4, 16), "Z": (1, 1)},
     )
     assert got == {"Standard_D2s_v3": 0.096, "Standard_D4s_v3": 0.192, "Z": None}
+    # slice 16.4a: the Spot meter, from the same items (never Low Priority's)
+    assert spot == {"Standard_D2s_v3": 0.02, "Standard_D4s_v3": None, "Z": None}
     flt = asked[0].url.params["$filter"]
     assert "armRegionName eq 'eastus'" in flt and "priceType eq 'Consumption'" in flt
     assert "armSkuName eq 'Standard_D2s_v3'" in flt and "armSkuName eq 'Standard_D4s_v3'" in flt
@@ -354,7 +356,7 @@ def test_gcp_adds_a_machines_cores_and_ram() -> None:
         seen.append(request)
         return httpx.Response(200, json=pages[1 if request.url.params["pageToken"] else 0])
 
-    got = listprices.gcp(
+    got, _ = listprices.gcp(
         http_of(handler), "us-central1", {"n2-standard-4": (4, 16), "e2-medium": (2, 4)}, "KEY"
     )
     assert got["n2-standard-4"] == pytest.approx(4 * 0.031611 + 16 * 0.004237)
@@ -759,7 +761,7 @@ def test_azure_asks_for_the_currency_and_usd_is_the_default() -> None:
         asked.append(request.url.params["currencyCode"])
         return httpx.Response(200, json={"Items": [azure_item("Standard_B1s", 0.0652)]})
 
-    assert listprices.azure(http_of(handler), "centralus", {"Standard_B1s": (1, 1)}, "BRL") == {
+    assert listprices.azure(http_of(handler), "centralus", {"Standard_B1s": (1, 1)}, "BRL")[0] == {
         "Standard_B1s": 0.0652
     }
     listprices.azure(http_of(handler), "centralus", {"Standard_B1s": (1, 1)})
@@ -804,7 +806,7 @@ def test_gcp_asks_for_the_currency_and_never_prices_in_another() -> None:
         return handler
 
     wanted = {"e2-standard-2": (2.0, 8.0)}
-    got = listprices.gcp(http_of(answer("BRL")), "us-central1", wanted, "KEY", "BRL")
+    got, _ = listprices.gcp(http_of(answer("BRL")), "us-central1", wanted, "KEY", "BRL")
     assert got == {"e2-standard-2": pytest.approx(1.0)} and asked == ["BRL"]
     with pytest.raises(ValueError, match="answered in USD, not BRL"):
         listprices.gcp(http_of(answer("USD")), "us-central1", wanted, "KEY", "BRL")

@@ -227,7 +227,8 @@ class Jira(Strict):
 
 class Aws(Strict):
     """The Contract's AWS account, read-only: CloudWatch metrics, alarms and logs, and
-    CloudTrail's management events, with an IAM user's key."""
+    CloudTrail's management events, with an IAM user's key; also its bill (Cost
+    Explorer, slice 10.5a) and its spot prices (`DescribeSpotPriceHistory`, 16.4a)."""
 
     name: Literal["aws"]
     regions: list[Annotated[str, Field(pattern=r"^[a-z]{2}(-[a-z]+)+-[0-9]$")]] = Field(

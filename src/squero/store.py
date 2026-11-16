@@ -710,6 +710,48 @@ class Store:
             (currency, *key, hour_price, None if hour_price is None else at, at, error),
         )
 
+    async def spot_prices(
+        self, currency: str, contract_id: str
+    ) -> dict[tuple[str, str, str], dict[str, Any]]:
+        """The spot list prices a Contract may use (slice 16.4a), by (provider, region,
+        instance type): the shared ones (Azure's, GCP's) and its own (AWS's), never
+        another's; no key is ever both."""
+        rows = await self._all(
+            "select * from spot_list_prices where currency = %s and contract_id in ('', %s)",
+            (currency, contract_id),
+        )
+        return {(r["provider"], r["region"], r["instance_type"]): r for r in rows}
+
+    async def put_spot_price(
+        self,
+        key: tuple[str, str, str],
+        hour_price: float | None,
+        error: str | None,
+        at: float,
+        currency: str = "USD",
+        contract_id: str = "",
+    ) -> None:
+        """A spot lookup's outcome (slice 16.4a), as put_list_price's: a price replaces
+        the last good one, a failure keeps it and records why."""
+        await self._exec(
+            "insert into spot_list_prices (currency, provider, region, instance_type, "
+            "contract_id, hour_price, ok_at, tried_at, error) "
+            "values (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "on conflict (currency, provider, region, instance_type, contract_id) do update "
+            "set hour_price = coalesce(excluded.hour_price, spot_list_prices.hour_price), "
+            "ok_at = case when excluded.hour_price is null then spot_list_prices.ok_at "
+            "else excluded.ok_at end, tried_at = excluded.tried_at, error = excluded.error",
+            (
+                currency,
+                *key,
+                contract_id,
+                hour_price,
+                None if hour_price is None else at,
+                at,
+                error,
+            ),
+        )
+
     async def save_bill(
         self,
         contract_id: str,
