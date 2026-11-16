@@ -48,9 +48,19 @@ function Spotting({ c, currency }: { c: Cluster; currency?: string | null }) {
           <ul>
             {under.workloads.map((w) => (
               <li key={`${w.namespace}/${w.kind}/${w.name}`}>
-                {w.namespace}/{w.kind}/{w.name}: {w.replicas} replicas
-                {w.intended && `, meant ${w.intended.on_demand} on-demand and ${w.intended.spot} on spot`}
-                {w.actual ? `, running ${w.actual.on_demand} and ${w.actual.spot}` : ", where they run not read yet"}
+                {w.namespace}/{w.kind}/{w.name}:{" "}
+                {w.ratio == null ? (
+                  <>
+                    its runs on spot, a retry off it
+                    {w.actual && `; running ${w.actual.on_demand} on-demand and ${w.actual.spot} on spot`}
+                  </>
+                ) : (
+                  <>
+                    {w.replicas} replicas
+                    {w.intended && `, meant ${w.intended.on_demand} on-demand and ${w.intended.spot} on spot`}
+                    {w.actual ? `, running ${w.actual.on_demand} and ${w.actual.spot}` : ", where they run not read yet"}
+                  </>
+                )}
                 {w.why && <span className="hint"> ({w.why})</span>}
                 {w.risk && <div className="notice">{w.risk}.</div>}
               </li>
@@ -72,8 +82,9 @@ function Spotting({ c, currency }: { c: Cluster; currency?: string | null }) {
           <ul>
             {found.workloads.map((w) => (
               <li key={`${w.namespace}/${w.kind}/${w.name}`}>
-                {w.namespace}/{w.kind}/{w.name}: {w.replicas} replicas of {both(w.requests)}, {w.spot} on spot and{" "}
-                {w.on_demand} on-demand
+                {w.namespace}/{w.kind}/{w.name}: {w.replicas} {w.spot == null ? "pods on average" : "replicas"} of{" "}
+                {both(w.requests)},{" "}
+                {w.spot == null ? "a run entirely on spot, if its Jobs allow a retry" : `${w.spot} on spot and ${w.on_demand} on-demand`}
                 {currency && w.saving != null && `: ${money(w.saving, currency)}`}
               </li>
             ))}

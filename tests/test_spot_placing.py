@@ -66,6 +66,7 @@ def test_the_hub_sends_each_actuator_its_own_clusters_spot_workloads_and_nodes(
             return c.get("/actuator/desired", headers=as_actuator(token)).json()["spot"]
 
         unknown = {"label": SPOT["label"], "taint": TAINT, "workloads": None, "nodes": None}
+        unknown["cronjobs"] = None  # slice 16.3a
         assert desired(A_TOKEN) == unknown  # no read of its nodes yet: the last list stays
         sql(
             database_url,
@@ -107,6 +108,7 @@ def test_the_hub_sends_each_actuator_its_own_clusters_spot_workloads_and_nodes(
             },
         ],
         "nodes": ["s1"],
+        "cronjobs": [],  # slice 16.3a: none under spot: true
     }
     assert [w["name"] for w in other["workloads"]] == ["ledger"] and other["nodes"] == []
     assert "ledger" not in json.dumps(mine) and "api" not in json.dumps(other)

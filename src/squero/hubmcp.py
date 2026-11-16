@@ -526,7 +526,9 @@ def build(
         each with a what-if of 70% of its replicas on spot and 2 on-demand at least, and
         where the cluster names spot nodes what that would save a month: an upper bound,
         a figure of its own, never part of Savings. spot_workloads: those under a Spot
-        ratio, the replicas intended on-demand and on spot against where they run, a note
+        ratio, the replicas intended on-demand and on spot against where they run (a CronJob
+        under `spot: true`: its runs on spot and a retry off it, no split; why not, where its
+        Actuator skips it; as a candidate, a run entirely on spot), a note
         while its Actuator doesn't place them yet, and once it does a risk where fewer run
         on-demand than meant (restarting the Workload repairs it; nothing here does).
         placement: where the cluster has Placement, its label, how many nodes carry it

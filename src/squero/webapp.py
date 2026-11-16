@@ -488,8 +488,8 @@ class Candidate(BaseModel):
     name: str
     replicas: float  # on average, in its latest Sizings
     requests: dict[str, float]  # one pod's: cpu (cores), memory (bytes)
-    on_demand: int
-    spot: int
+    on_demand: int | None = None  # None: a CronJob, its runs whole (slice 16.3a)
+    spot: int | None = None
     saving: float | None = None  # a month, an upper bound; None: not priced
 
 
@@ -507,8 +507,8 @@ class SpotWorkload(BaseModel):
     kind: str
     name: str
     replicas: int  # live
-    ratio: float
-    on_demand: int  # its On-demand minimum
+    ratio: float | None = None  # None: a CronJob under `spot: true` (slice 16.3a)
+    on_demand: int | None = None  # its On-demand minimum
     why: str | None = None  # why none is meant for spot
     intended: Sides | None = None  # None: a kind that never runs on spot
     actual: Sides | None = None  # None: its nodes not read with the spot label

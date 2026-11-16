@@ -1857,14 +1857,14 @@ def create_app(
         now = time.time()
         if not read or read.get("problem") or blockers.gap(report, cluster, now):
             return actuator.Spotting(label=s.label, taint=s.taint)
-        found = sizing.spotted(read, by_id[cid], cluster.name, sizing.blocking_of(
-            read, report, cluster, now
-        ))  # fmt: skip
+        blocking = sizing.blocking_of(read, report, cluster, now)
+        found = sizing.spotted(read, by_id[cid], cluster.name, blocking)
         return actuator.Spotting(
             label=s.label,
             taint=s.taint,
             workloads=[actuator.Spotted(**w) for w in found],
             nodes=sizing.spot_nodes(read, s.label),
+            cronjobs=sizing.spot_runs(read, by_id[cid], cluster.name, blocking),
         )
 
     # slice 15.3c: whether each cluster's Actuator applies types, as last stored: the store

@@ -331,6 +331,10 @@ class Spotting(BaseModel):
     taint: str | None = None
     workloads: list[Spotted] | None = None
     nodes: list[str] | None = None
+    # slice 16.3a: the CronJobs (`namespace/name`) whose runs go on spot, their retries off
+    # it; None: not known now. Read by no Actuator yet (16.3b), and of a field of its own,
+    # so one of 16.2b doesn't take them for Workloads with a ratio
+    cronjobs: list[str] | None = None
 
 
 class Desired(BaseModel):

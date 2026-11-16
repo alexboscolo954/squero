@@ -597,8 +597,15 @@
             "type": "string"
           },
           "on_demand": {
-            "title": "On Demand",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Demand"
           },
           "replicas": {
             "title": "Replicas",
@@ -623,8 +630,15 @@
             "title": "Saving"
           },
           "spot": {
-            "title": "Spot",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spot"
           }
         },
         "required": [
@@ -632,9 +646,7 @@
           "kind",
           "name",
           "replicas",
-          "requests",
-          "on_demand",
-          "spot"
+          "requests"
         ],
         "title": "Candidate",
         "type": "object"
@@ -3583,12 +3595,26 @@
             "type": "string"
           },
           "on_demand": {
-            "title": "On Demand",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Demand"
           },
           "ratio": {
-            "title": "Ratio",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratio"
           },
           "replicas": {
             "title": "Replicas",
@@ -3621,9 +3647,7 @@
           "namespace",
           "kind",
           "name",
-          "replicas",
-          "ratio",
-          "on_demand"
+          "replicas"
         ],
         "title": "SpotWorkload",
         "type": "object"

@@ -59,7 +59,7 @@ def test_a_spot_ratio_is_a_ratio_and_an_on_demand_minimum_both_required() -> Non
         ({"kind": "StatefulSet"}, "a StatefulSet never runs on spot"),
         ({"kind": "DaemonSet"}, "a DaemonSet never runs on spot"),
         ({"kind": "Job"}, "a Job never runs on spot"),
-        ({"kind": "CronJob"}, "CronJobs on spot come with slice 16.3"),
+        ({"kind": "CronJob"}, "a CronJob's runs go on spot whole: spot: true, no ratio"),
     ],
 )
 def test_a_spot_ratio_where_it_cant_apply_is_refused(rule: dict[str, Any], said: str) -> None:
@@ -285,7 +285,10 @@ def test_a_workload_that_cant_have_spot_replicas_says_why() -> None:
     why = {w["name"]: (w["why"], w["intended"]) for w in got["workloads"]}
     assert why == {
         "db": ("a StatefulSet never runs on spot", None),
-        "nightly": ("CronJobs on spot come with slice 16.3", None),
+        "nightly": (
+            "a CronJob runs on spot only by a rule naming kind: CronJob, spot: true",
+            None,
+        ),
         "one": ("fewer than 2 replicas: none on spot", {"on_demand": 1, "spot": 0}),
         "web": ("it blocks a node: none on spot", {"on_demand": 2, "spot": 0}),
     }

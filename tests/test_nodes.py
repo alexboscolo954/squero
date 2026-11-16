@@ -159,8 +159,8 @@ def test_a_pod_outside_the_contracts_namespaces_only_reaches_the_hub_in_a_sum() 
             assert q.startswith(("sum by (node, exported_node", "count by (node, exported_node")), q
     # its own by name: its pods, their requests, its budgets at 0 (slice 15.1c), and
     # the three owner series that give each pod its Workload (slice 15.4), and their
-    # persistent volumes (slice 16.1c)
-    assert sum('namespace=~"shop"' in q for q in fake.queries) == 7
+    # persistent volumes (slice 16.1c), and its CronJobs (slice 16.3a)
+    assert sum('namespace=~"shop"' in q for q in fake.queries) == 8
 
 
 def test_only_running_and_pending_pods_hold_requests() -> None:
@@ -239,6 +239,7 @@ def test_no_node_read_is_a_problem_and_a_cordoned_node_says_so() -> None:
         "placement": None,  # slice 15.2a: read with no Placement label
         "spot": None,  # slice 16.1a: nor a spot label
         "pvc": True,  # slice 16.1c: its pods say whether they claim a volume
+        "cronjobs": [],  # slice 16.3a: none listed
     }
     fake = FakePrometheus()
     node(fake, "n1")

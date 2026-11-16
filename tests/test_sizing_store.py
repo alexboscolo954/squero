@@ -99,7 +99,8 @@ def test_a_cronjob_averages_its_pods_over_its_history() -> None:
     assert row["name"] == "report" and row["policy"] == "batch" and row["state"] == "ready"
     assert row["history_h"] == 49  # slice 9.7: between its runs counts, at batch's step
     steps = 2 * DAY / step + int(H / step) + 1
-    assert row["pods"] == round(len(u.cpu) / steps, 1) == 0.1
+    # three places for a batch run (slice 16.3a): one would make an hour a night nothing
+    assert row["pods"] == round(len(u.cpu) / steps, 3) != round(len(u.cpu) / steps, 1)
     assert row["waste"]["cpu"] == pytest.approx((1.0 - 0.11) * len(u.cpu) / steps)
 
 

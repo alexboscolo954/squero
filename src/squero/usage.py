@@ -802,6 +802,14 @@ def rooms(
         "placement": pinned,  # the label it was read with (slice 15.2a)
         "spot": spot,  # and its spot label's (slice 16.1a)
         "pvc": True,  # its pods say whether they claim a persistent volume (slice 16.1c)
+        # the Contract's CronJobs, running or not (slice 16.3a): one between its runs has no
+        # pod to be told by
+        "cronjobs": sorted(
+            {
+                (label(s["metric"], "namespace"), s["metric"].get("cronjob", ""))
+                for s in prom.instant(selector("kube_cronjob_info", t), at)
+            }
+        ),
     }
 
 

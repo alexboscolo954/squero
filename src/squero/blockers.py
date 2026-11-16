@@ -23,7 +23,7 @@ says which Workloads to restart to free it once the Actuator places."""
 import math
 import re
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -52,6 +52,9 @@ Name = Field(max_length=253)
 NAME = re.compile(r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?")
 KIND = re.compile(r"[A-Za-z][A-Za-z0-9]{0,62}")
 WORKLOAD = re.compile(f"{KIND.pattern}/{NAME.pattern}")  # a pod's, as its Actuator names it
+
+
+SKIP_KEY = r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?/[a-z0-9]([-.a-z0-9]{0,251}[a-z0-9])?$"
 
 
 class PodFacts(BaseModel):
@@ -92,6 +95,12 @@ class Report(BaseModel):
     pods: list[PodFacts]
     placing: bool = False  # its webhook places pods (slice 15.2a): restarting one moves it
     spotting: bool = False  # and steers replicas to spot nodes (slice 16.2a)
+    # slice 16.3a: whether it steers CronJobs' runs, and those (`namespace/name`) it doesn't,
+    # and why, as a code: the Hub writes the sentence, so no free text reaches a model
+    spot_runs: bool = False
+    spot_skipped: dict[
+        Annotated[str, Field(pattern=SKIP_KEY)], Literal["no_retry", "ignores_disruptions"]
+    ] = Field(default_factory=dict, max_length=MAX_PODS)
 
 
 def sent(r: Report) -> dict[str, Any]:
@@ -104,6 +113,10 @@ def sent(r: Report) -> dict[str, Any]:
         del body["placing"]
     if not r.spotting:  # slice 16.2a, the same way
         del body["spotting"]
+    if not r.spot_runs:  # slice 16.3a, the same way
+        del body["spot_runs"]
+    if not r.spot_skipped:
+        del body["spot_skipped"]
     for p in body["pods"]:
         if not p["placed"]:
             del p["placed"]

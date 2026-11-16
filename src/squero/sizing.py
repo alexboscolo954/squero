@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 from squero import blockers, listprices, usage
 from squero.contracts import (
+    BATCH_KINDS,
     BUILTIN,
     SPOT_KINDS,
     ClusterPrices,
@@ -380,6 +381,13 @@ def rates(read: dict[str, Any], c: Contract, cluster: str) -> dict[str, float]:
 
 
 WHAT_IF = SpotRule(ratio=0.7, on_demand=2)  # a candidate's (slice 16.1c)
+# slice 16.3a: why an Actuator doesn't steer a CronJob's runs, by the code it reports
+SKIPS = {
+    "no_retry": "its Jobs allow no retry (backoffLimit: 0)",
+    "ignores_disruptions": (
+        "its Jobs ignore disruptions (podFailurePolicy): a retry can't be told from a first try"
+    ),
+}
 SIDES = ("on_demand", "spot")
 MAX_CANDIDATES = 20  # shown per cluster, by saving; the total counts every one
 
@@ -433,13 +441,38 @@ def spotted(
     out = []
     for ns, kind, name in sorted(_live(read)):
         rule = c.spot_for(cluster, ns, kind, name)
-        if rule and kind in SPOT_KINDS and ns in cl.namespaces:
+        if isinstance(rule, SpotRule) and kind in SPOT_KINDS and ns in cl.namespaces:
             held = (ns, f"{kind}/{name}") in blocking
             out.append(
                 {"namespace": ns, "kind": kind, "name": name, "on_demand": rule.on_demand}
                 | {"ratio": 0.0 if held else rule.ratio}
             )
     return out
+
+
+def cronjobs_of(read: dict[str, Any]) -> list[tuple[str, str]]:
+    """The Contract's CronJobs a read of the nodes saw (slice 16.3a): every one listed
+    (`kube_cronjob_info`), running or not, and any whose run's pods it saw; none in a
+    read from before 16.3a, but those running."""
+    seen = {(ns, name) for ns, name in read.get("cronjobs") or []}
+    seen |= {(ns, name) for ns, kind, name in _live(read) if kind == "CronJob"}
+    return sorted(seen)
+
+
+def spot_runs(
+    read: dict[str, Any], c: Contract, cluster: str, blocking: set[tuple[str, str]]
+) -> list[str]:
+    """The CronJobs whose runs its Actuator steers (slice 16.3a), `namespace/name`: under
+    a rule's `spot: true` their cluster can place, in its namespaces now; one whose run
+    blocks a node too (the Operator's choice: a run blocks only while it runs, which the
+    Hub sees only then, and a spot node it holds is the cloud's to take anyway). Their
+    Jobs allowing a retry is the Actuator's to read."""
+    cl = next(x for x in c.clusters if x.name == cluster)
+    return [
+        f"{ns}/{name}"
+        for ns, name in cronjobs_of(read)
+        if c.spot_for(cluster, ns, "CronJob", name) is True and ns in cl.namespaces
+    ]
 
 
 def spot_nodes(read: dict[str, Any], label: str) -> list[str] | None:
@@ -456,6 +489,8 @@ def spot_workloads(
     cluster: str,
     blocking: set[tuple[str, str]],
     spotting: bool = False,
+    skipped: dict[str, str] | None = None,
+    runs: bool = False,
 ) -> dict[str, Any] | None:
     """Each live Workload under a Spot ratio its cluster can place (slice 16.1c): its
     replicas meant for each kind of node (`intended`) and where they run (`actual`, None
@@ -463,43 +498,70 @@ def spot_workloads(
     kind that can't, fewer than 2 replicas, or a node it blocks (`blocking`, by
     namespace and `Kind/name`). Once its Actuator places them (`spotting`, slice 16.2a),
     a `risk` where fewer run on-demand than its minimum: restarting it repairs that.
+    A CronJob under `spot: true` (slice 16.3a), running or not: its live pods by side and
+    no intended split, nor any risk (a run falling back to on-demand is the design), or
+    why its runs aren't on spot: as its Actuator reported (`skipped`, `namespace/name` to
+    a code), or that it doesn't steer runs yet (`runs`, its report's `spot_runs`).
     None where no Workload is under one."""
     cl = next(x for x in c.clusters if x.name == cluster)
     known = cl.spot is not None and read.get("spot") == cl.spot.label
+    live = _live(read)
+    for ns, name in cronjobs_of(read):
+        live.setdefault((ns, "CronJob", name), [])
     out = []
-    for (ns, kind, name), on in sorted(_live(read).items()):
+    for (ns, kind, name), on in sorted(live.items()):
         rule = c.spot_for(cluster, ns, kind, name)
         if rule is None:
             continue
-        n, why = len(on), None
+        n = len(on)
+        sides_ = (on.count(False), on.count(True))
         if kind == "CronJob":
-            why = "CronJobs on spot come with slice 16.3"
-        elif kind not in SPOT_KINDS:
+            code = (skipped or {}).get(f"{ns}/{name}")
+            why = (
+                "a CronJob runs on spot only by a rule naming kind: CronJob, spot: true"
+                if rule is not True
+                else SKIPS.get(code, code)
+                if code
+                else None
+                if runs
+                else "its Actuator doesn't steer its runs yet"
+            )
+            out.append(
+                {
+                    **{"namespace": ns, "kind": kind, "name": name, "replicas": n},
+                    **{"ratio": None, "on_demand": None, "why": why, "intended": None},
+                    "actual": dict(zip(SIDES, sides_, strict=True)) if known else None,
+                    "risk": None,
+                }
+            )
+            continue
+        assert rule is not True  # a rule with `spot: true` names kind: CronJob
+        why = None
+        if kind not in SPOT_KINDS:
             why = f"a {kind} never runs on spot"
         elif (ns, f"{kind}/{name}") in blocking:
             why = "it blocks a node: none on spot"
         elif n < 2:
             why = "fewer than 2 replicas: none on spot"
         meant = spot_split(n, rule) if why is None else (n, 0)
-        runs = (on.count(False), on.count(True))
         # below its minimum, not its share: pods from before it was steered are no risk;
         # every replica where all are meant on-demand (it blocks a node, or has no more
         # replicas than its minimum)
         every = why is not None or n <= rule.on_demand
         least = n if every else rule.on_demand
         risk = None
-        if spotting and known and kind in SPOT_KINDS and runs[0] < least:
+        if spotting and known and kind in SPOT_KINDS and sides_[0] < least:
             risk = (
-                f"{runs[0]} of its {n} on-demand, where all are meant to be"
+                f"{sides_[0]} of its {n} on-demand, where all are meant to be"
                 if every
-                else f"{runs[0]} on-demand, below its minimum of {rule.on_demand}"
+                else f"{sides_[0]} on-demand, below its minimum of {rule.on_demand}"
             ) + ": restart it to repair"
         out.append(
             {
                 **{"namespace": ns, "kind": kind, "name": name, "replicas": n},
                 **{"ratio": rule.ratio, "on_demand": rule.on_demand, "why": why},
                 "intended": dict(zip(SIDES, meant, strict=True)) if kind in SPOT_KINDS else None,
-                "actual": dict(zip(SIDES, runs, strict=True)) if known else None,
+                "actual": dict(zip(SIDES, sides_, strict=True)) if known else None,
                 "risk": risk,
             }
         )
@@ -514,6 +576,7 @@ def candidates(
     cluster: str,
     rows: list[dict[str, Any]],
     blocking: set[tuple[str, str]],
+    skipped: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
     """Where a cluster's Workloads could run on spot (slice 16.1c): each Deployment or
     Rollout whose what-if puts a replica on spot (3 or more on average in its latest
@@ -522,7 +585,10 @@ def candidates(
     ratio, with its what-if (WHAT_IF: 70% on spot, 2 on-demand at least): the replicas
     each way and, where the cluster names its spot nodes and has a price, what its spot
     replicas would save a month at a spot node's rate against the on-demand one. An
-    upper bound, never summed with Savings. None where the read can't say (a problem)."""
+    upper bound, never summed with Savings. None where the read can't say (a problem).
+    And each CronJob (slice 16.3a), its what-if a run entirely on spot: its average pods
+    (`replicas`, no split) at the discount, if its Jobs allow a retry, which only its
+    Actuator reads: one it reported they don't (`skipped`) is none."""
     if read.get("problem"):
         return None
     if not read.get("pvc"):
@@ -538,7 +604,7 @@ def candidates(
     }
     asked: dict[tuple[str, str, str], dict[str, float]] = {}
     for r in rows:
-        if r["cluster"] != cluster or r["kind"] not in SPOT_KINDS:
+        if r["cluster"] != cluster or r["kind"] not in (*SPOT_KINDS, "CronJob"):
             continue
         w = asked.setdefault((r["namespace"], r["kind"], r["name"]), {"pods": 0.0})
         w["pods"] = max(w["pods"], r.get("pods") or 0.0)
@@ -557,27 +623,34 @@ def candidates(
     for (ns, kind, name), w in asked.items():
         if (
             (ns, kind, name) in claim
-            or (ns, f"{kind}/{name}") in blocking
+            or (kind != "CronJob" and (ns, f"{kind}/{name}") in blocking)
             or c.spot_for(cluster, ns, kind, name)
+            or (kind == "CronJob" and f"{ns}/{name}" in (skipped or {}))
         ):
             continue
-        replicas = math.floor(w["pods"] + 0.5)  # half up: 2.5 is 3
-        on_demand, spot = spot_split(replicas, WHAT_IF)
-        if not spot:  # 2 replicas stay on-demand: nothing for the what-if to move
+        if kind == "CronJob":  # its runs whole: no split, its pods on average
+            on_demand, spot, moved = None, None, w["pods"]
+        else:
+            replicas = math.floor(w["pods"] + 0.5)  # half up: 2.5 is 3
+            on_demand, spot = spot_split(replicas, WHAT_IF)
+            moved = float(spot)
+        if not moved:  # 2 replicas stay on-demand, or no run seen: nothing to move
             continue
         saving = None
         if rate is not None:
             each = monthly(rate[0], cpu=w["cpu"], memory=w["memory"])
-            saving = spot * each * max(0.0, 1 - rate[1])
+            saving = moved * each * max(0.0, 1 - rate[1])
         found.append(
             {
                 **{"namespace": ns, "kind": kind, "name": name, "replicas": round(w["pods"], 1)},
                 **{"requests": {"cpu": w["cpu"], "memory": w["memory"]}},  # one pod's
-                **{"on_demand": on_demand, "spot": spot, "saving": saving},
+                **{"on_demand": on_demand, "spot": spot, "saving": saving, "moved": moved},
             }
         )
-    found.sort(key=lambda f: (-(f["saving"] or 0.0), -f["spot"] * f["requests"]["cpu"],
+    found.sort(key=lambda f: (-(f["saving"] or 0.0), -f["moved"] * f["requests"]["cpu"],
                               f["namespace"], f["name"]))  # fmt: skip
+    for f in found:
+        del f["moved"]
     total = sum(f["saving"] for f in found) if rate is not None else None
     return {
         "workloads": found[:MAX_CANDIDATES],
@@ -732,6 +805,10 @@ def nodes_report(
                 "after": _worth(later, read, price, rate),
             }
         blocking = blocking_of(read, report, cl, now)  # slice 16.1c
+        usable = report if report and not blockers.gap(report, cl, now) else None
+        # slice 16.3a: the CronJobs its Actuator reported it doesn't steer, and why, only
+        # ever looked up by the read's own CronJobs: another namespace's key shows nowhere
+        skipped: dict[str, str] = (usable or {}).get("spot_skipped") or {}
         judged = {state: 0 for state in ("clear", "blocked", "unknown")}
         if cl.placement:
             judged["pinned"] = 0
@@ -788,16 +865,16 @@ def nodes_report(
                 **{"settings": blockers.SETTINGS[cl.autoscaler]},  # slice 15.6
                 **{"reported": report["received"] if report else None},
                 **{"could_go": went, "judged": judged, "placement": placement, "spot": spot},
-                **{"candidates": candidates(read, c, cl.name, rows or [], blocking)},
+                **{"candidates": candidates(read, c, cl.name, rows or [], blocking, skipped)},
                 **{
                     "spot_workloads": spot_workloads(
                         read,
                         c,
                         cl.name,
                         blocking,
-                        spotting=bool(
-                            report and not blockers.gap(report, cl, now) and report.get("spotting")
-                        ),
+                        spotting=bool(usable and usable.get("spotting")),
+                        skipped=skipped,
+                        runs=bool(usable and usable.get("spot_runs")),
                     )
                 },
                 **{"problem": read.get("problem"), "largest": largest_room(read), "nodes": nodes},
@@ -853,11 +930,14 @@ def rows(
             # What its requests cost, whatever its state (stored since 10.1), and
             # whether they are its live pods' (since 10.3b)
             pods = avg_pods(u, steps[cluster])
+            # a run's pods average little: an hour a night is 0.04, which one place would
+            # make nothing (its cost, its spot candidacy: slice 16.3a)
+            places = 3 if w.kind in BATCH_KINDS else 1
             row["requests"] = {name: u.requests.get(name) for name in ("cpu", "memory")}
             row["live"] = u.live
             policy = c.sizing.policy(row["policy"])
             if policy is None:
-                out[row["workload"]] = {**row, "state": "excluded", "pods": round(pods, 1)}
+                out[row["workload"]] = {**row, "state": "excluded", "pods": round(pods, places)}
                 continue
             if policy.window != window:
                 continue
@@ -873,7 +953,7 @@ def rows(
                 "history_h": round(s.history_s / 3600, 1),
                 "needs_h": round(policy.history / 3600, 1),
                 "window_h": round(window / 3600, 1),
-                "pods": round(pods, 1),
+                "pods": round(pods, places),
             }
             risks = list(s.risks)
             waste = {}

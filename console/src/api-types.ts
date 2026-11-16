@@ -684,7 +684,7 @@ export interface components {
             /** Namespace */
             namespace: string;
             /** On Demand */
-            on_demand: number;
+            on_demand?: number | null;
             /** Replicas */
             replicas: number;
             /** Requests */
@@ -694,7 +694,7 @@ export interface components {
             /** Saving */
             saving?: number | null;
             /** Spot */
-            spot: number;
+            spot?: number | null;
         };
         /** Candidates */
         Candidates: {
@@ -1669,9 +1669,9 @@ export interface components {
             /** Namespace */
             namespace: string;
             /** On Demand */
-            on_demand: number;
+            on_demand?: number | null;
             /** Ratio */
-            ratio: number;
+            ratio?: number | null;
             /** Replicas */
             replicas: number;
             /** Risk */

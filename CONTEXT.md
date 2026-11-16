@@ -262,7 +262,7 @@ A node carrying the cluster's spot label (`spot.label` in the Contract; a node w
 _Avoid_: preemptible node, spot instance (the cloud's own words for the machine)
 
 **Spot ratio**:
-The share of a Workload's replicas steered to Spot nodes, set on the Sizing rule that picks it (`spot: {ratio, on_demand}`), for a Deployment or Rollout on a cluster that names its spot label and runs an Actuator; with its On-demand minimum it gives the replicas meant for each: on-demand the larger of the minimum and the share that isn't spot, rounded up (0.7 with 2: 10 replicas give 3 and 7, 4 give 2 and 2). A Workload with fewer than 2 replicas, or one that blocks a node, gets none on spot. It is the Operator's setting, not tied to Automation.
+The share of a Workload's replicas steered to Spot nodes, set on the Sizing rule that picks it (`spot: {ratio, on_demand}`), for a Deployment or Rollout on a cluster that names its spot label and runs an Actuator; with its On-demand minimum it gives the replicas meant for each: on-demand the larger of the minimum and the share that isn't spot, rounded up (0.7 with 2: 10 replicas give 3 and 7, 4 give 2 and 2). A Workload with fewer than 2 replicas, or one that blocks a node, gets none on spot. It is the Operator's setting, not tied to Automation. A CronJob has none: its runs go on spot whole, by a rule naming `kind: CronJob` with `spot: true`, a run's retries off spot.
 _Avoid_: spot percentage, spot share
 
 **On-demand minimum**:

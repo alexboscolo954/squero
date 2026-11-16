@@ -1012,13 +1012,18 @@ test("Nodes shows the Workloads that could run on spot and those under a Spot ra
       { currency: "EUR", clusters: [{ cluster: "kind", at: 1_700_000_000, autoscaler: null, problem: null, largest: null, could_go: null,
         rules: "Cluster Autoscaler's rules", reported: null, judged: {}, placement: null, nodes: [],
         spot: { label: "karpenter.sh/capacity-type=spot", discount: 0.35, nodes: 1, note: null },
-        candidates: { workloads: [cand("api", 12.5), cand("web", 3)], more: 1, saving: 16, note: null },
+        candidates: { workloads: [cand("api", 12.5), cand("web", 3), { namespace: "shop", kind: "CronJob", name: "batch",
+          replicas: 0.5, requests: { cpu: 1, memory: GI }, on_demand: null, spot: null, saving: 0.5 }], more: 1, saving: 16, note: null },
         spot_workloads: { note: null, workloads: [
           { namespace: "shop", kind: "Deployment", name: "cart", replicas: 10, ratio: 0.7, on_demand: 2, why: null,
             intended: { on_demand: 3, spot: 7 }, actual: { on_demand: 1, spot: 9 },
             risk: "1 on-demand, below its minimum of 2: restart it to repair" },
           { namespace: "shop", kind: "StatefulSet", name: "db", replicas: 3, ratio: 0.7, on_demand: 2, why: "a StatefulSet never runs on spot",
             intended: null, actual: null },
+          { namespace: "shop", kind: "CronJob", name: "nightly", replicas: 1, ratio: null, on_demand: null, why: null,
+            intended: null, actual: { on_demand: 0, spot: 1 }, risk: null },
+          { namespace: "shop", kind: "CronJob", name: "once", replicas: 0, ratio: null, on_demand: null, why: "its Jobs allow no retry",
+            intended: null, actual: null, risk: null },
         ] } }] },
     ],
   });
@@ -1029,11 +1034,16 @@ test("Nodes shows the Workloads that could run on spot and those under a Spot ra
     "shop/Deployment/cart: 10 replicas, meant 3 on-demand and 7 on spot, running 1 and 9" +
       "1 on-demand, below its minimum of 2: restart it to repair.",
     "shop/StatefulSet/db: 3 replicas, where they run not read yet (a StatefulSet never runs on spot)",
+    "shop/CronJob/nightly: its runs on spot, a retry off it; running 0 on-demand and 1 on spot",
+    "shop/CronJob/once: its runs on spot, a retry off it (its Jobs allow no retry)",
   ]);
-  expect(page.querySelector(".candidates summary")?.textContent).toBe("Could run on spot: 3, up to 16.00 EUR/month");
+  expect(page.querySelector(".candidates summary")?.textContent).toBe("Could run on spot: 4, up to 16.00 EUR/month");
   const listed = [...page.querySelectorAll(".candidates li")].map((li) => li.textContent);
   expect(listed[0]).toBe("shop/Deployment/api: 4 replicas of 0.50 cores, 1.00 GiB, 2 on spot and 2 on-demand: 12.50 EUR/month");
-  expect(listed[2]).toBe("and 1 more");
+  expect(listed[2]).toBe(
+    "shop/CronJob/batch: 0.5 pods on average of 1.00 cores, 1.00 GiB, a run entirely on spot, if its Jobs allow a retry: 0.50 EUR/month",
+  );
+  expect(listed[3]).toBe("and 1 more");
 });
 
 test("Health shows each integration now, the error as text, spend against the budget, secrets by name", async () => {
