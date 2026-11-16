@@ -275,10 +275,18 @@ def test_the_minute_reports_blockers_last_and_a_failure_there_costs_nothing(
     monkeypatch.setattr(a, "send", lambda: order.append("reports"))
     monkeypatch.setattr(a, "save", lambda: None)
     real = a.blocked
-    monkeypatch.setattr(a, "blocked", lambda ns, now: (order.append("blockers"), real(ns, now)))
-    monkeypatch.setattr(a, "pull", lambda: desired(blockers=["shop"]))
+    asked: list[bool] = []
+
+    def spy(ns: Any, now: Any, constraints: bool = False) -> None:
+        order.append("blockers")
+        asked.append(constraints)
+        real(ns, now, constraints)
+
+    monkeypatch.setattr(a, "blocked", spy)
+    monkeypatch.setattr(a, "pull", lambda: desired(blockers=["shop"], constraints=True))
     a.step()
     assert order == ["reports", "blockers"] and len(seen) == 1
+    assert asked == [True]  # audit A3b: what its pods need of a node, as the Hub asked
     monkeypatch.setattr(a, "pull", lambda: desired())  # an older Hub: no namespaces given
     a.blockers_due = 0.0
     a.step()
@@ -287,7 +295,7 @@ def test_the_minute_reports_blockers_last_and_a_failure_there_costs_nothing(
     a.step()
     assert order.count("blockers") == 1
 
-    def boom(ns: Any, now: Any) -> None:
+    def boom(ns: Any, now: Any, constraints: bool = False) -> None:
         raise RuntimeError("a bug")
 
     monkeypatch.setattr(a, "pull", lambda: desired(blockers=["shop"]))
@@ -295,7 +303,7 @@ def test_the_minute_reports_blockers_last_and_a_failure_there_costs_nothing(
     a.step()  # said in its log, and the minute ends as any other
     killed = actuator.Desired(kill_switch=True, sizings=[], blockers=["shop"])
     monkeypatch.setattr(a, "pull", lambda: killed)
-    monkeypatch.setattr(a, "blocked", lambda ns, now: order.append(f"killed {ns}"))
+    monkeypatch.setattr(a, "blocked", lambda ns, now, c=False: order.append(f"killed {ns}"))
     a.step()
     assert order[-1] == "killed ['shop']"  # a read is no change: the Kill switch stops none
 

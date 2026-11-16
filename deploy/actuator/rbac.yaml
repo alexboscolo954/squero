@@ -75,6 +75,33 @@ subjects:
     name: squero-actuator
     namespace: squero-actuator
 ---
+# Audit A3, optional: the nodes' labels, so the Hub can tell where a pod that needs a
+# node label (nodeSelector, node affinity) could move. It lists nodes, which hold more
+# than labels; the Actuator sends only the values of the label keys its pods name. A
+# client who would not grant it deletes this ClusterRole and its ClusterRoleBinding: that
+# cluster then lists no node that could go, and the Hub says why.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: squero-actuator-nodes
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: squero-actuator-nodes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: squero-actuator-nodes
+subjects:
+  - kind: ServiceAccount
+    name: squero-actuator
+    namespace: squero-actuator
+---
 # One RoleBinding per namespace of the Contract's cluster. Copy for each.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

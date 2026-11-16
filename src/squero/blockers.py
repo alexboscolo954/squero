@@ -149,8 +149,9 @@ class Report(BaseModel):
     ] = Field(default_factory=dict, max_length=MAX_PODS)
     # audit A3, sent when the Hub asks (`Desired.constraints`): what its pods need of a node.
     # "read": in full; "cut": more than it may send; "nodes_refused": it may not read the
-    # nodes' labels; None: not reported (an older Actuator, or an older Hub's)
-    constraints: Literal["read", "cut", "nodes_refused"] | None = None
+    # nodes' labels; "nodes_unread": their read failed; None: not reported (an older
+    # Actuator, or an older Hub's)
+    constraints: Literal["read", "cut", "nodes_refused", "nodes_unread"] | None = None
     needs: list[Need] = Field([], max_length=MAX_NEEDS)  # each distinct one once
     needed: dict[str, int] = Field({}, max_length=MAX_NEEDED)  # `namespace/pod`: its need
     # each node's values of the label keys `needs` name: a key not there, a label it lacks
@@ -839,10 +840,15 @@ def fit(report: dict[str, Any] | None, autoscaler: str | None) -> Fits | str:
             "its Actuator may not read the nodes' labels (the optional ClusterRole "
             "squero-actuator-nodes): no node is counted as one that could go"
         )
+    if got == "nodes_unread":
+        return (
+            "its Actuator's last read of the nodes' labels failed: no node is counted as one "
+            "that could go until it reads them"
+        )
     if got == "cut":
         return (
-            f"its Actuator had more than {MAX_NEEDED} pods' needs to report: no node is "
-            "counted as one that could go"
+            "its Actuator had more pods' needs, nodes or labels than one report holds: no "
+            "node is counted as one that could go"
         )
     terms = [_terms(n, autoscaler) for n in report["needs"]]
     needed, labels = report["needed"], report["labels"]

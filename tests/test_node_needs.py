@@ -192,7 +192,8 @@ def test_a_pod_with_no_need_lands_anywhere_and_one_with_a_need_only_on_a_node_wi
     [
         (None, "its Actuator doesn't report what its pods need of a node"),
         ("nodes_refused", "its Actuator may not read the nodes' labels"),
-        ("cut", f"its Actuator had more than {blockers.MAX_NEEDED} pods' needs to report"),
+        ("cut", "its Actuator had more pods' needs, nodes or labels than one report holds"),
+        ("nodes_unread", "its Actuator's last read of the nodes' labels failed"),
     ],
 )
 def test_no_node_goes_where_what_pods_need_is_not_known_and_the_page_says_why(
@@ -367,3 +368,288 @@ def test_restart_advice_goes_by_requirements_alone_under_karpenter_too() -> None
     a, b = pinned(node("a")), node("b", pod("api-1"))
     got = verdict(zoned, a, b, autoscaler=KARPENTER)["b"]["restart"]
     assert got == {"workloads": ["shop/Deployment/api"], "why_not": None}
+
+
+# --- the Actuator's side (A3b) -----------------------------------------------------------
+
+
+def k_expr(key: str, op: str, *values: str) -> Any:
+    from kubernetes import client as k
+
+    return k.V1NodeSelectorRequirement(key=key, operator=op, values=list(values) or None)
+
+
+def affined(
+    name: str,
+    selector: dict[str, str] | None = None,
+    required: list[tuple[list[Any], list[Any]]] | None = None,
+    preferred: list[tuple[int, list[Any]]] | None = None,
+    **kw: Any,
+) -> Any:
+    """A pod with a nodeSelector, required terms (expressions, fields) and preferences."""
+    from kubernetes import client as k
+
+    from tests.test_blockers import kpod
+
+    p = kpod(name, **kw)
+    p.spec.node_selector = selector
+    na = k.V1NodeAffinity()
+    if required is not None:
+        terms = [
+            k.V1NodeSelectorTerm(match_expressions=e or None, match_fields=f or None)
+            for e, f in required
+        ]
+        na.required_during_scheduling_ignored_during_execution = k.V1NodeSelector(
+            node_selector_terms=terms
+        )
+    if preferred is not None:
+        na.preferred_during_scheduling_ignored_during_execution = [
+            k.V1PreferredSchedulingTerm(
+                weight=w, preference=k.V1NodeSelectorTerm(match_expressions=e)
+            )
+            for w, e in preferred
+        ]
+    if required is not None or preferred is not None:
+        p.spec.affinity = k.V1Affinity(node_affinity=na)
+    return p
+
+
+def nodes_api(core: Any, pages: list[Any]) -> list[Any]:
+    """`core.list_node` gives these pages of {name: labels} in turn, or raises one."""
+    from kubernetes import client as k
+
+    asked: list[Any] = []
+
+    def list_node(limit: int, _continue: str | None = None) -> Any:
+        asked.append(_continue)
+        i = 0 if _continue is None else int(_continue)
+        if isinstance(pages[i], Exception):
+            raise pages[i]
+        items = [
+            k.V1Node(metadata=k.V1ObjectMeta(name=n, labels=labels))
+            for n, labels in pages[i].items()
+        ]
+        more = str(i + 1) if i + 1 < len(pages) else None
+        return k.V1NodeList(items=items, metadata=k.V1ListMeta(_continue=more))
+
+    core.list_node.side_effect = list_node
+    return asked
+
+
+def test_a_pods_need_is_read_from_its_spec_as_written() -> None:
+    from squero import actuator
+
+    p = affined(
+        "web-1",
+        {"karpenter.sh/nodepool": "default"},
+        [([k_expr("role", "NotIn", "system")], [k_expr("metadata.name", "In", "n1")])],
+        [(100, [k_expr("pool", "In", "pinned")]), (1, [k_expr(SPOT, "In", "spot")])],
+    )
+    got = actuator.need_of(p)
+    assert got is not None and got.model_dump() == need(
+        {"karpenter.sh/nodepool": "default"},
+        [[expr("role", "NotIn", "system"), expr("metadata.name", "In", "n1", field=True)]],
+        [(100, [expr("pool", "In", "pinned")]), (1, [expr(SPOT, "In", "spot")])],
+    )
+    exists = actuator.need_of(affined("x", required=[([k_expr("gpu", "Exists")], [])]))
+    assert exists and exists.required[0][0].values == []
+    assert actuator.need_of(affined("plain")) is None
+
+
+def test_the_actuator_reports_each_need_once_and_the_labels_it_names_of_every_node() -> None:
+    from squero import actuator
+    from tests.test_blockers import apis, kpod
+
+    pool = {"karpenter.sh/nodepool": "default"}
+    pods = [
+        affined("web-1", pool),
+        affined("web-2", pool),  # the same need: sent once
+        affined("keeper", required=[([k_expr("role", "NotIn", "system")], [])]),
+        affined("spotty", preferred=[(1, [k_expr(SPOT, "In", "spot")])]),  # a preference only
+        kpod("free"),  # needs nothing: not listed
+        affined("ds", pool, by="DaemonSet"),  # stays with its node
+        affined("done", pool, phase="Succeeded"),
+        affined("new", pool, node=None, phase="Pending"),
+    ]
+    core, policy = apis({"shop": [pods[:4], pods[4:]]})
+    asked = nodes_api(
+        core,
+        [
+            {"n1": {"karpenter.sh/nodepool": "default", "zone": "a", SPOT: "spot"}},
+            {"n2": {"role": "system", "kubernetes.io/hostname": "n2"}, "n3": None},
+        ],
+    )
+    report = actuator.blocking(core, policy, ["shop"], NOW, constraints=True)
+    assert report.constraints == "read" and asked == [None, "1"]  # a page at a time
+    assert report.needed == {
+        "shop/keeper": 0,
+        "shop/spotty": 1,
+        "shop/web-1": 2,
+        "shop/web-2": 2,
+    }
+    assert [n.model_dump() for n in report.needs] == [
+        need(required=[[expr("role", "NotIn", "system")]]),
+        need(preferred=[(1, [expr(SPOT, "In", "spot")])]),
+        need(pool),
+    ]
+    assert report.labels == {  # only the keys the needs name
+        "n1": {"karpenter.sh/nodepool": "default", SPOT: "spot"},
+        "n2": {"role": "system"},
+        "n3": {},
+    }
+    assert blockers.unreal(report) is None
+    # the Hub reads it as Part A's: web's pods only onto a node of the NodePool
+    check = blockers.fit(report.model_dump(), KARPENTER)
+    assert not isinstance(check, str)
+    assert check({"namespace": "shop", "pod": "web-1"}, "n1")
+    assert not check({"namespace": "shop", "pod": "web-1"}, "n2")
+    assert not check({"namespace": "shop", "pod": "keeper"}, "n2")
+    assert check({"namespace": "shop", "pod": "keeper"}, "n3")
+
+
+def test_nothing_is_read_or_sent_of_needs_unless_the_hub_asks() -> None:
+    from squero import actuator
+    from tests.test_blockers import apis
+
+    core, policy = apis({"shop": [[affined("web-1", {"k": "v"})]]})
+    report = actuator.blocking(core, policy, ["shop"], NOW)
+    assert report.constraints is None and not core.list_node.called
+    assert not {"constraints", "needs", "needed", "labels"} & set(blockers.sent(report))
+
+
+def test_no_need_reads_no_node() -> None:
+    from squero import actuator
+    from tests.test_blockers import apis, kpod
+
+    core, policy = apis({"shop": [[kpod("free")]]})
+    report = actuator.blocking(core, policy, ["shop"], NOW, constraints=True)
+    assert (report.constraints, report.needs, report.labels) == ("read", [], {})
+    assert not core.list_node.called
+
+
+@pytest.mark.parametrize(
+    ("status", "code"), [(403, "nodes_refused"), (500, "nodes_unread"), (0, "nodes_unread")]
+)
+def test_nodes_it_may_not_or_could_not_read_are_said_with_a_code(status: int, code: str) -> None:
+    from kubernetes.client.exceptions import ApiException
+
+    from squero import actuator
+    from tests.test_blockers import apis
+
+    core, policy = apis({"shop": [[affined("web-1", {"k": "v"})]]})
+    nodes_api(core, [{"n1": {}}, ApiException(status=status, reason="x")])
+    report = actuator.blocking(core, policy, ["shop"], NOW, constraints=True)
+    assert (report.constraints, report.needs, report.needed, report.labels) == (code, [], {}, {})
+    said = blockers.fit(report.model_dump(), CA)
+    assert isinstance(said, str)
+
+
+def test_a_namespace_whose_read_failed_sends_none_of_its_needs() -> None:
+    from kubernetes.client.exceptions import ApiException
+
+    from squero import actuator
+    from tests.test_blockers import apis
+
+    pages = [[affined("web-1", {"k": "v"})], ApiException(status=500, reason="x")]
+    core, policy = apis({"shop": pages, "bank": [[affined("ledger", {"k": "v"}, ns="bank")]]})
+    nodes_api(core, [{"n1": {"k": "v"}}])
+    report = actuator.blocking(core, policy, ["bank", "shop"], NOW, constraints=True)
+    assert report.namespaces == ["bank"] and report.needed == {"bank/ledger": 0}
+
+
+def test_more_than_a_report_holds_is_cut_and_said(monkeypatch: pytest.MonkeyPatch) -> None:
+    from squero import actuator
+    from tests.test_blockers import apis
+
+    def built(*pods: Any, nodes: dict[str, Any] | None = None) -> Any:
+        core, policy = apis({"shop": [list(pods)]})
+        nodes_api(core, [nodes or {"n1": {}}])
+        return actuator.blocking(core, policy, ["shop"], NOW, constraints=True)
+
+    two = [affined("a", {"k": "1"}), affined("b", {"k": "2"})]
+    assert built(*two).constraints == "read"
+    monkeypatch.setattr(blockers, "MAX_NEEDED", 1)
+    assert built(*two).constraints == "cut"
+    monkeypatch.setattr(blockers, "MAX_NEEDED", 10)
+    monkeypatch.setattr(blockers, "MAX_NEEDS", 1)
+    assert built(*two).constraints == "cut"
+    monkeypatch.setattr(blockers, "MAX_NEEDS", 10)
+    many = affined(
+        "m",
+        {f"k{i}": "v" for i in range(50)},
+        preferred=[(1, [k_expr(f"p{i}", "Exists") for i in range(50)])],
+    )
+    assert built(many).constraints == "read"  # 100 keys
+    terms = [([k_expr(f"r{i}", "Exists") for i in range(j, j + 25)], []) for j in (0, 25)]
+    hundred = affined("m", {f"k{i}": "v" for i in range(50)}, required=terms)
+    assert built(hundred).constraints == "read"
+    terms[1][0].append(k_expr("r50", "Exists"))
+    one_more = affined("m", {f"k{i}": "v" for i in range(50)}, required=terms)
+    assert built(one_more).constraints == "cut"  # 101 keys, beyond what a node's labels hold
+    huge = affined(
+        "h", required=[([k_expr("k", "Exists")], [])] * 51
+    )  # more terms than a need holds
+    assert built(huge, *two).constraints == "cut"
+    monkeypatch.setattr(blockers, "MAX_NODES", 1)
+    assert built(*two, nodes={"n1": {}, "n2": {}}).constraints == "cut"
+    monkeypatch.setattr(blockers, "MAX_NODES", 10)
+    whole = built(*two)
+    monkeypatch.setattr(blockers, "MAX_BYTES", len(whole.model_dump_json()) - 1)
+    small = built(*two)
+    assert (small.constraints, small.needs, small.needed, small.labels) == ("cut", [], {}, {})
+
+
+def test_the_actuator_reports_needs_when_its_hub_asks() -> None:
+    import json
+
+    from squero import actuator
+    from tests.test_blockers import an_actuator
+
+    seen: list[Any] = []
+    a = an_actuator([204, 204], seen)
+    a.core.list_namespaced_pod.side_effect = None
+    a.core.list_namespaced_pod.return_value = __import__("kubernetes").client.V1PodList(
+        items=[affined("web-1", {"k": "v"})], metadata=None
+    )
+    nodes_api(a.core, [{"n1": {"k": "v"}}])
+    a.blocked(["shop"], NOW)
+    assert "constraints" not in json.loads(seen[0].content)
+    a.blocked(["shop"], NOW + actuator.BLOCKERS_EVERY, constraints=True)
+    sent = json.loads(seen[1].content)
+    assert (sent["constraints"], sent["needed"], sent["labels"]) == (
+        "read",
+        {"shop/web-1": 0},
+        {"n1": {"k": "v"}},
+    )
+
+
+def test_the_node_read_is_its_own_clusterrole_listing_nodes_and_nothing_else() -> None:
+    from pathlib import Path
+
+    import yaml
+
+    docs = list(
+        yaml.safe_load_all((Path(__file__).parent.parent / "deploy/actuator/rbac.yaml").read_text())
+    )
+    (role,) = [
+        d
+        for d in docs
+        if d["metadata"]["name"] == "squero-actuator-nodes" and d["kind"] == "ClusterRole"
+    ]
+    assert role["rules"] == [{"apiGroups": [""], "resources": ["nodes"], "verbs": ["list"]}]
+    (bound,) = [
+        d
+        for d in docs
+        if d["kind"] == "ClusterRoleBinding" and d["metadata"]["name"] == "squero-actuator-nodes"
+    ]
+    assert bound["roleRef"]["name"] == "squero-actuator-nodes"
+    assert bound["subjects"] == [
+        {"kind": "ServiceAccount", "name": "squero-actuator", "namespace": "squero-actuator"}
+    ]
+    elsewhere = [
+        r
+        for d in docs
+        if d["metadata"]["name"] != "squero-actuator-nodes" and d["kind"] in ("ClusterRole", "Role")
+        for r in d["rules"]
+    ]
+    assert "nodes" not in str(elsewhere)

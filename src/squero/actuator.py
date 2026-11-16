@@ -1282,13 +1282,9 @@ def pod_facts(p: Any, budgets: list[Any], label: str | None = None) -> blockers.
     and its Workload as the webhook names it, where it names one."""
     meta, spec = p.metadata, p.spec
     noted = meta.annotations or {}
-    if not spec.node_name or p.status.phase in ("Succeeded", "Failed"):
-        return None
-    if meta.deletion_timestamp is not None or MIRROR in noted:
+    if stays(p):
         return None
     by = next((o for o in meta.owner_references or [] if o.controller), None)
-    if by is not None and by.kind == "DaemonSet":
-        return None
     volumes = spec.volumes or []
     covering = [
         (b.status.disruptions_allowed or 0 if b.status else 0, b.metadata.name)
@@ -1324,6 +1320,86 @@ def pod_facts(p: Any, budgets: list[Any], label: str | None = None) -> blockers.
     return f.model_copy(update={"workload": "/".join(of)}) if of else f
 
 
+def stays(p: Any) -> bool:
+    """A pod that moves to no other node when its node goes: not on one yet, finished or
+    on its way out, a DaemonSet's or the node's own static pod."""
+    if not p.spec.node_name or p.status.phase in ("Succeeded", "Failed"):
+        return True
+    if p.metadata.deletion_timestamp is not None or MIRROR in (p.metadata.annotations or {}):
+        return True
+    by = next((o for o in p.metadata.owner_references or [] if o.controller), None)
+    return by is not None and by.kind == "DaemonSet"
+
+
+def _exprs(term: Any) -> list[blockers.Expr]:
+    """A node selector term's expressions, its labels' and its fields' (the node's name)."""
+    out = []
+    for found, field_ in ((term.match_expressions, False), (term.match_fields, True)):
+        for e in found or []:
+            values = list(e.values or [])
+            out.append(blockers.Expr(key=e.key, operator=e.operator, values=values, field=field_))
+    return out
+
+
+def need_of(p: Any) -> blockers.Need | None:
+    """What a pod needs of a node, from its spec (audit A3): its nodeSelector and its node
+    affinity, required and preferred, as written, the webhook's terms among them. None:
+    nothing. Raises ValidationError for more than a report holds."""
+    node = p.spec.affinity.node_affinity if p.spec.affinity else None
+    required = node.required_during_scheduling_ignored_during_execution if node else None
+    terms = [_exprs(t) for t in (required.node_selector_terms if required else None) or []]
+    preferred = [
+        blockers.Preferred(weight=t.weight, match=_exprs(t.preference))
+        for t in (node.preferred_during_scheduling_ignored_during_execution if node else None) or []
+        if t.preference
+    ]
+    selector = dict(p.spec.node_selector or {})
+    if not (selector or terms or preferred):
+        return None
+    return blockers.Need(selector=selector, required=terms, preferred=preferred)
+
+
+def constrained(core: Any, needs_of: dict[str, blockers.Need], cut: bool) -> dict[str, Any]:
+    """The report's fields on what its pods need of a node (audit A3): each distinct need
+    once, each pod's, and every node's values of the label keys they name, nothing else of
+    a node. Read with the optional ClusterRole `squero-actuator-nodes`: refused, the Hub is
+    told so; a read that failed, the same with its own code. More than a report holds: cut."""
+    distinct: dict[str, int] = {}
+    needs: list[blockers.Need] = []
+    needed = {}
+    for key, n in sorted(needs_of.items()):
+        if (j := n.model_dump_json()) not in distinct:
+            distinct[j] = len(needs)
+            needs.append(n)
+        needed[key] = distinct[j]
+    keys = {k for n in needs for k in n.selector}
+    keys |= {e.key for n in needs for term in n.required for e in term if not e.field}
+    keys |= {e.key for n in needs for pref in n.preferred for e in pref.match if not e.field}
+    too_many = len(needed) > blockers.MAX_NEEDED or len(needs) > blockers.MAX_NEEDS
+    if cut or too_many or len(keys) > 100:
+        return {"constraints": "cut"}
+    labels: dict[str, dict[str, str]] = {}
+    if needs:  # none needs anything: no node to read
+        try:
+            token = None
+            while True:
+                page = core.list_node(limit=PAGE, _continue=token)
+                for n in page.items:
+                    have = n.metadata.labels or {}
+                    labels[n.metadata.name] = {k: have[k] for k in sorted(keys) if k in have}
+                token = page.metadata._continue if page.metadata else None
+                if not token:
+                    break
+        except ApiException as e:
+            if e.status == 403:
+                return {"constraints": "nodes_refused"}
+            log.warning("the nodes' labels not read: %s", why(e))
+            return {"constraints": "nodes_unread"}
+    if len(labels) > blockers.MAX_NODES:
+        return {"constraints": "cut"}
+    return {"constraints": "read", "needs": needs, "needed": needed, "labels": labels}
+
+
 def carries(p: Any, label: str) -> bool:
     """Whether a pod prefers the nodes with `label` (`key=value`), as Placement's
     preference does (slice 15.2b): its own or the webhook's, the same fact."""
@@ -1346,20 +1422,32 @@ def blocking(
     now: float,
     label: str | None = None,
     spotting: bool = False,
+    constraints: bool = False,
 ) -> blockers.Report:
     """The Blocker facts of `namespaces`' pods (slice 15.1b), read a page at a time. A
     namespace it may not read, or whose read fails, is left out of `namespaces`: the Hub
     then knows what it wasn't told. Over `MAX_PODS`, or over the size the Hub's proxy
     lets through: cut there, and said. With the cluster's Placement `label` (slice
-    15.2b) it says it places, and which pods carry the preference."""
+    15.2b) it says it places, and which pods carry the preference. With `constraints`
+    (audit A3), what its pods that would move need of a node (`constrained`)."""
     read, found = [], []
+    needs_of: dict[str, blockers.Need] = {}
+    cut = False
     for ns in sorted(set(namespaces)):
         try:
             budgets = policy.list_namespaced_pod_disruption_budget(ns).items
-            here, token = [], None
+            here, token, needing = [], None, {}
             while True:
                 page = core.list_namespaced_pod(ns, limit=PAGE, _continue=token)
                 here += [f for p in page.items if (f := pod_facts(p, budgets, label))]
+                for p in page.items if constraints else []:
+                    if stays(p):
+                        continue
+                    try:
+                        if n := need_of(p):
+                            needing[f"{ns}/{p.metadata.name}"] = n
+                    except ValidationError:  # more than a report holds: none is told
+                        cut = True
                 token = page.metadata._continue if page.metadata else None
                 if not token:
                     break
@@ -1368,6 +1456,7 @@ def blocking(
             continue
         read.append(ns)
         found += here
+        needs_of |= needing
     found.sort(key=lambda f: (f.namespace, f.pod))
     report = blockers.Report(
         at=now,
@@ -1376,7 +1465,11 @@ def blocking(
         pods=found[: blockers.MAX_PODS],
         placing=label is not None,
         spotting=spotting,  # slice 16.2b: only a Hub that sent spot nodes is told
+        **(constrained(core, needs_of, cut) if constraints else {}),
     )
+    if report.needs and len(report.model_dump_json()) > blockers.MAX_BYTES:
+        cleared: dict[str, Any] = {"needs": [], "needed": {}, "labels": {}}
+        report = report.model_copy(update={"constraints": "cut", **cleared})
     while report.pods and len(report.model_dump_json()) > blockers.MAX_BYTES:
         fewer = report.pods[: len(report.pods) * 3 // 4]  # long names: cut by size too
         report = report.model_copy(update={"pods": fewer, "truncated": True})
@@ -2688,7 +2781,7 @@ class Actuator:
                 log.exception("reading the listed CronJobs failed")
         if desired is not None and desired.blockers is not None:
             try:  # last and on its own: a read for a report never costs a Rollback
-                self.blocked(desired.blockers, time.time())
+                self.blocked(desired.blockers, time.time(), desired.constraints)
             except Exception:
                 log.exception("reporting its Blockers failed")
 
@@ -2958,7 +3051,7 @@ class Actuator:
             ns, kind, name = key.split("/", 2)
             post(self.core, ns, ("apps/v1", kind, name), reason, message, False)
 
-    def blocked(self, namespaces: list[str], now: float) -> None:
+    def blocked(self, namespaces: list[str], now: float, constraints: bool = False) -> None:
         """Report the Blocker facts of `namespaces` to the Hub once an hour (slice 15.1b).
         One that didn't reach it goes again in five minutes; one it refused (an older
         Hub has no such route) waits the hour: sending it again changes nothing."""
@@ -2971,7 +3064,7 @@ class Actuator:
         spotting = self.spot is not None and self.spot.workloads is not None and not self.killed
         # slice 16.3b, the same way: its CronJobs' runs, and the ones it skips, with a code
         runs = self.spot is not None and self.spot.cronjobs is not None and not self.killed
-        report = blocking(self.core, self.policy, namespaces, now, label, spotting)
+        report = blocking(self.core, self.policy, namespaces, now, label, spotting, constraints)
         if runs:
             listed = set(self.spot.cronjobs or []) if self.spot else set()
             skipped = {k: v for k, v in self.spot_checked.items() if v and k in listed}

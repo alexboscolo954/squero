@@ -308,3 +308,10 @@ async def test_the_actuator_reads_blocker_facts_a_page_at_a_time_through_the_rea
     monkeypatch.setattr(actuator, "PAGE", 200)
     whole = {p.pod for p in actuator.blocking(core, policy, spaces, 1.0).pods}
     assert paged == whole and len(whole & there) > 2
+    # audit A3b: the nodes' labels through the real client, a page at a time
+    monkeypatch.setattr(actuator, "PAGE", 1)
+    linux = blockers.Need(selector={"kubernetes.io/os": "linux"})
+    got = actuator.constrained(core, {"demo/any": linux}, False)
+    names = {n.metadata.name for n in core.list_node().items}
+    assert got["constraints"] == "read" and set(got["labels"]) == names
+    assert all(labels == {"kubernetes.io/os": "linux"} for labels in got["labels"].values())
