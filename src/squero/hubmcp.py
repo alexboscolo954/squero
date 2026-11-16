@@ -841,12 +841,12 @@ def _compared(compare: webapp.Comparison | None) -> dict[str, Any] | None:
 
 
 def _brief(t: Investigation, mask: Callable[[str], str]) -> dict[str, Any]:
-    """An Investigation as a list shows it. Its Answer is cut after `mask`: a term cut
-    in two would match nothing (stored titles are cut at 200 before any of this)."""
+    """An Investigation as a list shows it. Its title and Answer are cut after `mask`:
+    a term cut in two would match nothing (audit A2)."""
     out: dict[str, Any] = {
         "id": t.id,
         "kind": t.kind,
-        "title": t.title,
+        "title": mask(t.title)[:200],
         "status": t.status,
         "started": _date(t.started),
     }

@@ -1083,7 +1083,7 @@ def create_app(
             id=str(uuid.uuid4()),
             kind="question",
             contract_id=contract_id,
-            title=text[:200],
+            title=text,  # whole: cut where shown, after masking (audit A2)
             started=now(),
             slack_channel=channel,
             slack_ts=root,

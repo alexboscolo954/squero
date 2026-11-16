@@ -154,3 +154,47 @@ def test_the_overview_shows_every_contract_with_its_own_spend(
     )
     assert no_cookie == 401
     assert theirs_asked["contract"] == "bank"  # asked through bank's path: bank's Question
+
+
+def test_a_long_question_is_shown_whole_and_its_title_cut(
+    settings: Settings, fake_cluster: Any, database_url: str
+) -> None:
+    """Audit A2: the Question is stored whole as its title; the console's heading and
+    list cut it at 200, what was asked is shown whole."""
+    settings.database_url = SecretStr(database_url)
+    settings.console_operators = {OPERATOR}
+    question = "why " + "x" * 300 + "?"
+    with client(settings, fake_cluster, call("Answer", "a1", **ANSWER_1)) as c:
+        asked = c.post(ASK, json={"question": question}, headers=SAME).json()
+        wait_for(c, asked["id"], "done")
+        page = c.get(f"/api/v1/investigations/{asked['id']}", headers=VIEW).json()
+    assert asked["title"] == page["title"] == question[:200]
+    assert page["asked"] == question
+
+
+def test_questions_stored_cut_get_their_whole_title_back(database_url: str) -> None:
+    """Migration 0043 (audit A2): a Question's title from its input; a Triage's kept."""
+    long = "why " + "x" * 300 + "?"
+    cut = Investigation(
+        id="q-cut", kind="question", contract_id="acme", title=long[:200], started=1.0
+    )
+    cut.input = {"question": long}
+    triage = Investigation(
+        id="t-1", kind="triage", contract_id="acme", title="KubePodCrashLooping shop", started=1.0
+    )
+    triage.input = {"alerts": []}
+
+    async def go() -> dict[str, str]:
+        async with connect(database_url) as pool:
+            st = Store(pool)
+            await st.migrate()
+            await st.insert(cut)
+            await st.insert(triage)
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "delete from schema_migrations where version = '0043_question_titles'"
+                )
+            await st.migrate()
+            return {i: (await st.get(i)).title for i in ("q-cut", "t-1")}  # type: ignore[union-attr]
+
+    assert asyncio.run(go()) == {"q-cut": long, "t-1": "KubePodCrashLooping shop"}

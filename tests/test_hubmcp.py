@@ -740,6 +740,24 @@ def test_a_long_answer_is_masked_before_it_is_cut(
     assert "acm" not in listed["answer"]
 
 
+def test_a_long_question_is_masked_before_its_title_is_cut(
+    settings: Settings, fake_cluster: Any, database_url: str
+) -> None:
+    """Audit A2: acme straddles the title's 200th character. Stored cut at 200, "ac"
+    went out as written; stored whole, it is masked first and cut after."""
+    question = "x" * 197 + " acme is fine?"
+    steps = [call_step("Answer", "a1", answer="fine.", evidence=[{"source": "s", "finding": "f"}])]
+    with hub(settings, fake_cluster, database_url, steps=steps) as c:
+        acme = call(c, "list_contracts")[0]["id"]
+        asked = call(c, "ask", contract=acme, question=question)
+        wait_for(c, asked["id"], "done")
+        (listed,) = call(c, "investigations", contract=acme)
+        shown = call(c, "investigation", contract=acme, id=asked["id"])
+    title = ("x" * 197 + f" {mask('acme')} is fine?")[:200]
+    assert listed["title"] == shown["title"] == title
+    assert not listed["title"].endswith(" ac")
+
+
 # --- 11.2a: decide, and the Kill switch ---------------------------------------------------
 
 ACTING = {"integrations": [{"name": "kubernetes", "enable_actions": True}, PROM]}

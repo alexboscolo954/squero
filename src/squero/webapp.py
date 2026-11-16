@@ -678,7 +678,7 @@ def brief(t: Investigation) -> dict[str, Any]:
         "id": t.id,
         "contract": t.contract_id,
         "kind": t.kind,
-        "title": t.title,
+        "title": t.title[:200],  # a Question's is stored whole (audit A2)
         "status": t.status,
         "failed": failed,
         "started": t.started,
