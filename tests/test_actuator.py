@@ -3129,6 +3129,11 @@ def test_apps_reads_cronjobs_and_their_jobs_from_the_batch_api() -> None:
     assert apps.list_namespaced_cron_job("shop") is batch.list_namespaced_cron_job.return_value
     assert apps.list_namespaced_job("shop") is batch.list_namespaced_job.return_value
     assert batch.list_namespaced_job.call_args.args == ("shop",)
+    # slice 16.3b: a run's Job at admission, with its timeout
+    assert apps.read_namespaced_job("api-1", "shop", _request_timeout=1.2) is (
+        batch.read_namespaced_job.return_value
+    )
+    assert batch.read_namespaced_job.call_args.kwargs == {"_request_timeout": 1.2}
 
 
 # --- what the audit found (slice 12.9a) ------------------------------------------------------
@@ -4261,7 +4266,11 @@ def test_a_catch_up_leaves_a_lost_pod_until_its_node_is_back(
     [
         ({"conditions": {"DisruptionTarget": ("True", "DeletionByPodGC")}}, False),
         ({"conditions": {}, "reason": "Terminated", "message": SHUT}, False),
-        ({"conditions": {"DisruptionTarget": ("True", "EvictionByEvictionAPI")}}, True),
+        # slice 16.3b: evicted to drain its node (how Karpenter empties a spot node), no
+        # Rollback either; preempted by the scheduler still is (no node going away)
+        ({"conditions": {"DisruptionTarget": ("True", "EvictionByEvictionAPI")}}, False),
+        ({"conditions": {"DisruptionTarget": ("True", "PreemptionByScheduler")}}, True),
+        ({"conditions": {"DisruptionTarget": ("False", "EvictionByEvictionAPI")}}, True),
     ],
 )
 def test_a_runs_pod_failed_with_its_node_is_no_rollback(how: Any, rolled_back: bool) -> None:

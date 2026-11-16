@@ -570,6 +570,9 @@ class Apps:
     def list_namespaced_job(self, ns: str) -> Any:
         return self.batch.list_namespaced_job(ns)
 
+    def read_namespaced_job(self, name: str, ns: str, **kw: Any) -> Any:
+        return self.batch.read_namespaced_job(name, ns, **kw)  # a run's, at admission (16.3b)
+
 
 def template_of(d: Any, kind: str) -> Any:
     """The pod template of a workload read with `read`: a CronJob's is its Jobs'."""
@@ -1420,6 +1423,17 @@ def lost(p: Any) -> bool:
     return bool(ready and ready.status != "True" and all(c and c.status == "True" for c in kubelet))
 
 
+def drained(p: Any) -> bool:
+    """Whether a pod was evicted through the Eviction API (slice 16.3b), as Karpenter
+    empties a spot node it is about to lose: a run's pod that Failed so is the Job's to
+    retry, no Sizing's doing."""
+    conds = (p.status.conditions if p.status else None) or []
+    return any(
+        c.type == "DisruptionTarget" and c.status == "True" and c.reason == "EvictionByEvictionAPI"
+        for c in conds
+    )
+
+
 def wait(core: Any, key: str, h: dict[str, Any], why_: str, message: str) -> None:
     """The rollout waits to evict its Infeasible pod: said once in an Event per reason."""
     if h.get("waiting") != why_:
@@ -1703,7 +1717,8 @@ def first_run(
                 continue  # the Reflex's to answer, as a Deployment's (slice 13.1b)
             if killed:
                 return f"{p.metadata.name}: {container} was OOM-killed"
-            if p.status.phase == "Failed" and not lost(p):  # its node gone: the Job's retry
+            # its node gone, or emptied through the Eviction API (16.3b): the Job's retry
+            if p.status.phase == "Failed" and not lost(p) and not drained(p):
                 return f"{p.metadata.name} Failed"
     except ApiException as e:
         log.warning("watching %s: %s", key, why(e))
@@ -2198,6 +2213,10 @@ CAPACITY = "squero.io/capacity"  # the side its webhook put a pod on (slice 16.2
 DELETION_COST = "controller.kubernetes.io/pod-deletion-cost"
 SIDES = ("on-demand", "spot")
 SPOT_BUDGET = 1.2  # seconds for both reads at admission: the API server gives the webhook 2
+SPOT_SKIPS = {  # why a CronJob's runs aren't steered (slice 16.3b), as its Events say it
+    "no_retry": "its Jobs allow no retry",
+    "ignores_disruptions": "its Jobs ignore disruptions, so a retry can't be told from a first try",
+}
 
 
 def added(pod: dict[str, Any], ops: list[Any]) -> dict[str, Any]:
@@ -2235,7 +2254,7 @@ def settled(pod: dict[str, Any], key: str) -> bool:
     )
 
 
-def steered(pod: dict[str, Any], side: str, spot: "Spotting") -> list[Any]:
+def steered(pod: dict[str, Any], side: str, spot: "Spotting", cost: bool = True) -> list[Any]:
     """The JSON Patch that puts a new pod on its side (slice 16.2b, ADR 0006), against
     the pod as the webhook's other changes already left it. Both get the `CAPACITY` label
     the minute's count goes by. On-demand: required off the spot nodes (`NotIn`, which a
@@ -2272,7 +2291,9 @@ def steered(pod: dict[str, Any], side: str, spot: "Spotting") -> list[Any]:
             else:
                 ops.append({"op": "add", "path": f"{at}/{i}/matchExpressions/-", "value": off})
     notes = meta.get("annotations")
-    if notes is None:
+    if not cost:  # a run's pod (slice 16.3b): a Job scales down by no deletion cost
+        pass
+    elif notes is None:
         ops.append({"op": "add", "path": "/metadata/annotations", "value": {DELETION_COST: "1"}})
     elif DELETION_COST not in notes:
         at = f"/metadata/annotations/{escape(DELETION_COST)}"
@@ -2382,7 +2403,7 @@ def serve(a: "Actuator", cert: bytes, key: bytes, port: int = WEBHOOK_PORT) -> T
                 *(review, a.held, a.killed, a.namespace, a.paused, a.stepped, a.boosting),
                 *(a.bursts, a.node_types, a.placement),
                 # only with a list: a cluster without spot pays nothing for it
-                a.steer_pod if a.spot and a.spot.workloads else None,
+                a.steer_pod if a.spot and (a.spot.workloads or a.spot.cronjobs) else None,
             )
             body = json.dumps(answer).encode()
             self.send_response(200)
@@ -2472,6 +2493,9 @@ class Actuator:
     spot_counts: dict[str, dict[str, Any]] = field(default_factory=dict)
     spot_lock: threading.Lock = field(default_factory=threading.Lock)
     spot_seq: dict[str, int] = field(default_factory=dict)  # admissions counted, per key
+    # slice 16.3b: each listed CronJob (`ns/name`) as last read, None where its runs go on
+    # spot, else why not (a SKIPS code); one not read yet isn't steered
+    spot_checked: dict[str, str | None] = field(default_factory=dict)
 
     def load(self) -> None:
         try:
@@ -2577,6 +2601,10 @@ class Actuator:
         mine |= set(self.placement.workloads or []) if self.placement else set()  # 15.2b
         mine |= (
             {f"{w.namespace}/{w.kind}/{w.name}" for w in (self.spot.workloads or [])}
+            | {
+                f"{k.split('/', 1)[0]}/CronJob/{k.split('/', 1)[1]}"
+                for k in self.spot.cronjobs or []
+            }
             if self.spot
             else set()
         )  # 16.2b
@@ -2651,6 +2679,10 @@ class Actuator:
                 self.recount()
             except Exception:
                 log.exception("counting the steered pods failed")
+            try:  # and on its own: a count that fails leaves no CronJob unread (16.3b)
+                self.check_runs()
+            except Exception:
+                log.exception("reading the listed CronJobs failed")
         if desired is not None and desired.blockers is not None:
             try:  # last and on its own: a read for a report never costs a Rollback
                 self.blocked(desired.blockers, time.time())
@@ -2690,6 +2722,8 @@ class Actuator:
                 given = given.model_copy(update={"workloads": self.spot.workloads})
             if given.nodes is None:
                 given = given.model_copy(update={"nodes": self.spot.nodes})
+            if given.cronjobs is None:
+                given = given.model_copy(update={"cronjobs": self.spot.cronjobs})
         now = (
             {f"{w.namespace}/{w.kind}/{w.name}": w for w in (given.workloads or [])}
             if given
@@ -2708,6 +2742,21 @@ class Actuator:
         for key in sorted(had.keys() - now.keys()):
             said = "Spot ended: its new replicas are placed as before; running ones keep theirs"
             self.placed_news.append((key, "SpotEnded", said))
+        knew = (self.spot is not None, bool(self.spot and self.spot.workloads is not None),
+                bool(self.spot and self.spot.cronjobs is not None))  # fmt: skip
+        told = (given is not None, bool(given and given.workloads is not None),
+                bool(given and given.cronjobs is not None))  # fmt: skip
+        if knew != told:  # what its report says of it changes: the Hub hears of it now
+            self.blockers_due = 0.0
+        # slice 16.3b: a CronJob joining is said by the minute's read (`check_runs`), once
+        # it knows whether its runs are steered or skipped; one leaving, here
+        ran = set((self.spot.cronjobs or []) if self.spot else [])
+        runs = set((given.cronjobs or []) if given else [])
+        for key in sorted(ran - runs):
+            ns, name = key.split("/", 1)
+            said = "Spot ended: its runs are placed as before"
+            self.placed_news.append((f"{ns}/CronJob/{name}", "SpotEnded", said))
+            self.spot_checked.pop(key, None)
         self.spot = given
 
     def steer_pod(self, pod: dict[str, Any], ns: str, kind: str, name: str, dry: bool) -> list[Any]:
@@ -2719,6 +2768,8 @@ class Actuator:
         share SPOT_BUDGET, well inside the webhook's 2 s: one that fails or is slow places
         nothing. A count read meanwhile is never laid over admissions counted since
         (`spot_seq`). The patch is built, then counted (unless a dry run), under the lock."""
+        if kind == "CronJob":
+            return self.steer_run(pod, ns, name)
         spot = self.spot
         w = next(
             (x for x in spot.workloads or [] if (x.namespace, x.kind, x.name) == (ns, kind, name)),
@@ -2765,6 +2816,82 @@ class Actuator:
                 c[side] += 1
                 self.spot_seq[key] = self.spot_seq.get(key, 0) + 1
         return ops
+
+    def steer_run(self, pod: dict[str, Any], ns: str, name: str) -> list[Any]:
+        """A CronJob's run's new pod (slice 16.3b): it prefers the spot nodes on the run's
+        first tries, and once the run has a failed pod (its Job's status says so), its retry
+        is required off them, so a run is interrupted once at most. Only a CronJob read and
+        found to allow a retry; the Job read within SPOT_BUDGET, a failure placing nothing.
+        Nothing counted: a run has no ratio."""
+        spot, key = self.spot, f"{ns}/{name}"
+        meta = pod.get("metadata") or {}
+        job = next((o.get("name") for o in meta.get("ownerReferences") or []
+                    if o.get("kind") == "Job"), None)  # fmt: skip
+        if (
+            spot is None
+            or key not in (spot.cronjobs or [])
+            or key not in self.spot_checked
+            or self.spot_checked[key] is not None
+            or not job
+            or settled(pod, spot.label.partition("=")[0])
+        ):
+            return []
+        try:
+            status = self.apps.read_namespaced_job(job, ns, _request_timeout=SPOT_BUDGET).status
+        except Exception as e:  # slow or refused: the pod as it is
+            log.warning("spot: Job %s/%s not read, its pod left as it is: %s", ns, job, e)
+            return []
+        uncounted = status.uncounted_terminated_pods if status else None
+        failed = bool(status and status.failed) or bool(uncounted and uncounted.failed)
+        return steered(pod, "on-demand" if failed else "spot", spot, cost=False)
+
+    def check_runs(self) -> None:
+        """Each listed CronJob read once a minute (slice 16.3b): its runs go on spot only
+        where its Jobs allow a retry (`backoffLimit` above 0; unset is 6) and count an
+        interrupted pod as failed (no `podFailurePolicy` rule that ignores
+        `DisruptionTarget`, or ends the Job or its index on it; an Indexed Job's
+        `backoffLimitPerIndex` above 0). Its first read, and each change, is said in an
+        Event (`SpotPlaced` or `SpotSkipped`) and brings its next report forward; one it
+        can't read keeps what it knew."""
+        spot = self.spot
+        label = spot.label if spot else ""
+        for key in (spot.cronjobs or []) if spot else []:
+            ns, name = key.split("/", 1)
+            try:
+                jobs = self.apps.read_namespaced_cron_job(name, ns).spec.job_template.spec
+            except ApiException as e:
+                log.warning("spot: CronJob %s not read: %s", key, why(e))
+                continue
+            rules = (jobs.pod_failure_policy.rules if jobs.pod_failure_policy else None) or []
+            on_disruption = [
+                r.action
+                for r in rules
+                if any(c.type == "DisruptionTarget" for c in r.on_pod_conditions or [])
+            ]
+            code = None
+            per_index = getattr(jobs, "backoff_limit_per_index", None)  # an Indexed Job's
+            if (
+                jobs.backoff_limit == 0
+                or per_index == 0
+                or {"FailJob", "FailIndex"} & set(on_disruption)
+            ):
+                code = "no_retry"
+            elif "Ignore" in on_disruption:
+                code = "ignores_disruptions"
+            if key not in self.spot_checked or self.spot_checked[key] != code:
+                # read first, or changed: steered or skipped, said once, never both at once
+                if code:
+                    said = f"Spot: its runs stay where they are placed: {SPOT_SKIPS[code]}"
+                    reason = "SpotSkipped"
+                else:
+                    said = (
+                        f"Spot: its runs prefer the nodes labelled {label}; a run's retry is "
+                        "kept off them"
+                    )
+                    reason = "SpotPlaced"
+                post(self.core, ns, ("batch/v1", "CronJob", name), reason, said, False)
+                self.blockers_due = 0.0  # the Hub hears of it now, not within the hour
+            self.spot_checked[key] = code
 
     def counted(
         self, labels: dict[str, str], ns: str, rs: str, spot: Spotting, timeout: float
@@ -2839,7 +2966,16 @@ class Actuator:
         label = self.placement.label if self.placement and not self.killed else None
         # slice 16.2b, the same way, and only once it knows its list: before, it steers nothing
         spotting = self.spot is not None and self.spot.workloads is not None and not self.killed
+        # slice 16.3b, the same way: its CronJobs' runs, and the ones it skips, with a code
+        runs = self.spot is not None and self.spot.cronjobs is not None and not self.killed
         report = blocking(self.core, self.policy, namespaces, now, label, spotting)
+        if runs:
+            listed = set(self.spot.cronjobs or []) if self.spot else set()
+            skipped = {k: v for k, v in self.spot_checked.items() if v and k in listed}
+            # validated, as the Hub will: a code it doesn't know would refuse the report
+            report = blockers.Report.model_validate(
+                {**report.model_dump(), "spot_runs": True, "spot_skipped": skipped}
+            )
         try:
             r = self.http.post("/actuator/blockers", json=blockers.sent(report))
             r.raise_for_status()

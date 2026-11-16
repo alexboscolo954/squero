@@ -36,6 +36,7 @@ A Workload under a Spot ratio keeps its On-demand minimum off the spot nodes (an
 - **Everything else stays a preference**: the spot replicas prefer spot nodes (weight 100) and start on-demand when there is no spot room, so a fallback needs no code.
 - **Still never a running pod**, never an eviction, a restart or a rollout: a Workload below its minimum after interruptions is repaired at its next rollout, which the Hub names.
 - **Left alone**: a pod whose own spec already decides (a `nodeSelector` or a required term on the label's key): the client's choice wins.
+- **A CronJob's retry** (slice 16.3b) gets the same requirement: a run's pods prefer spot nodes on its first tries, and once the run has a failed pod its retries are required off them, so a run is interrupted once at most. Only where its Jobs allow a retry and count an interrupted pod as failed.
 - It also adds a label (`squero.io/capacity`, the side it chose, which its count goes by) and `controller.kubernetes.io/pod-deletion-cost: "1"` to on-demand replicas, unless the pod sets its own, so a scale-down takes spot replicas first. Both are metadata on a new pod: no new permission.
 
 ## Considered Options
