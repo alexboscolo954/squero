@@ -47,6 +47,7 @@ def contract(settings: Settings, contract_id: str) -> contracts.Contract:
     if not settings.contracts_dir:
         raise SystemExit("set SQUERO_CONTRACTS_DIR")
     loaded = contracts.load(settings.contracts_dir)
+    usage.ask_stores(settings.contracts_dir, loaded)  # slice A1
     if contract_id not in loaded:
         raise SystemExit(f"no Contract {contract_id!r}; have: {', '.join(sorted(loaded))}")
     return loaded[contract_id]

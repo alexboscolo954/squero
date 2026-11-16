@@ -158,6 +158,7 @@ def create_app(
         if not settings.contracts_dir:
             raise RuntimeError("set SQUERO_CONTRACTS_DIR")
         by_id = contracts.load(settings.contracts_dir)
+        usage.ask_stores(settings.contracts_dir, by_id)  # slice A1
     for c in by_id.values():
         if contracts.token_matches(c, approver_token):
             raise RuntimeError(f"Contract {c.id!r}'s webhook token is the approver token")

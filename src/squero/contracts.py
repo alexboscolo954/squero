@@ -1148,8 +1148,8 @@ def load(directory: Path) -> dict[str, Contract]:
 
 def _store(url: str) -> str:
     """One Prometheus, however its URL is written: scheme and host in lower case, the
-    default port made explicit, no trailing slash. ponytail: two DNS names or an IP for
-    the same store still look different; nothing short of asking it can tell."""
+    default port made explicit, no trailing slash. Two DNS names or an IP for the same
+    store still look different here: the Hub asks each store who it is (`regroup`)."""
     u = urlsplit(url.strip())
     scheme = u.scheme.lower()
     port = u.port or {"http": 80, "https": 443}.get(scheme)
@@ -1162,7 +1162,25 @@ def _could_match_the_same(a: dict[str, str], b: dict[str, str]) -> bool:
     return all(a[k] == b[k] for k in a.keys() & b.keys())
 
 
-def _mark_shared_stores(loaded: Any) -> None:
+def regroup(
+    directory: Path, loaded: dict[str, Contract], said: dict[str, str], near: dict[str, str]
+) -> None:
+    """Slice A1: the stores checked again once each was asked who it is. `said` maps a
+    store (as `_store` writes it) to one name for every store that gave the same identity,
+    `near` also joins those whose host resolves to an address in common where one of them
+    couldn't say. Only an identity refuses the Contracts, as a URL written the same
+    does: one ingress address often fronts several stores. An address marks them shared."""
+
+    def by(groups: dict[str, str]) -> Callable[[str], str]:
+        return lambda url: groups.get(_store(url), _store(url))
+
+    problems = _shared_metrics(directory, loaded.values(), by(said))
+    _mark_shared_stores(loaded.values(), by(near))
+    if problems:
+        raise ContractError(problems)
+
+
+def _mark_shared_stores(loaded: Any, key: Callable[[str], str] = _store) -> None:
     """Each Contract's clusters whose Prometheus another Contract reads too, even in
     other namespaces: the agent's free PromQL there could read that Contract's series
     (slice 9.6b), where the Hub's own queries are scoped."""
@@ -1171,17 +1189,17 @@ def _mark_shared_stores(loaded: Any) -> None:
         shared = next((i.url for i in c.integrations if isinstance(i, Prometheus)), None)
         for cl in c.direct_clusters:
             if url := cl.prometheus_url or shared:
-                readers[_store(url)].add(c.id)
+                readers[key(url)].add(c.id)
     for c in loaded:
         shared = next((i.url for i in c.integrations if isinstance(i, Prometheus)), None)
         c._shared_stores = {
             cl.name
             for cl in c.direct_clusters
-            if (url := cl.prometheus_url or shared) and len(readers[_store(url)]) > 1
+            if (url := cl.prometheus_url or shared) and len(readers[key(url)]) > 1
         }
 
 
-def _shared_metrics(directory: Path, loaded: Any) -> list[str]:
+def _shared_metrics(directory: Path, loaded: Any, key: Callable[[str], str] = _store) -> list[str]:
     """Two clusters, in one Contract or two, reading the same Prometheus with label
     matchers that can match the same series and a namespace in common would get each
     other's usage: Sizings scope by namespace and labels only."""
@@ -1193,7 +1211,7 @@ def _shared_metrics(directory: Path, loaded: Any) -> list[str]:
             url = cl.prometheus_url or shared
             if not url:
                 continue
-            here = (_store(url), cl.prometheus_labels, set(cl.namespaces), f"{c.id}/{cl.name}")
+            here = (key(url), cl.prometheus_labels, set(cl.namespaces), f"{c.id}/{cl.name}")
             for store, labels, spaces, name in seen:
                 if store == here[0] and _could_match_the_same(labels, here[1]) and spaces & here[2]:
                     problems.append(

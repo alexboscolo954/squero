@@ -10,20 +10,25 @@ several clusters or Contracts (Thanos, Mimir) nothing else may come back.
 """
 
 import dataclasses
+import itertools
 import logging
 import math
 import re
+import socket
 import time
 from collections import defaultdict
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import SecretStr
 
-from squero.contracts import Cluster, Contract, Prometheus, ksm_label
-from squero.listprices import SAFE
+from squero.contracts import Cluster, Contract, Prometheus, _store, ksm_label, regroup
+from squero.listprices import SAFE, why
 
 log = logging.getLogger(__name__)
 
@@ -150,6 +155,100 @@ def reader(t: Target) -> Prom:
     from squero import relay  # it imports this module
 
     return relay.Reader(relay.HUB, t.relay)
+
+
+def addresses(host: str, port: int) -> set[str]:
+    """The addresses a host resolves to; none when it doesn't resolve."""
+    try:
+        return {str(a[4][0]) for a in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)}
+    except (OSError, UnicodeError):  # unknown host; a label IDNA refuses
+        return set()
+
+
+def _joined(keys: list[str], linked: Callable[[str, str], bool]) -> dict[str, str]:
+    """Each key to one name for every key linked to it, directly or through others."""
+    first = {k: k for k in keys}
+
+    def root(k: str) -> str:
+        while first[k] != k:
+            k = first[k]
+        return k
+
+    for a, b in itertools.combinations(keys, 2):
+        if linked(a, b):
+            first[root(b)] = root(a)
+    return {k: root(k) for k in keys}
+
+
+def ask_stores(
+    directory: Path,
+    loaded: dict[str, Contract],
+    http: httpx.Client | None = None,
+    resolve: Callable[[str, int], set[str]] = addresses,
+) -> None:
+    """Slice A1: ask each Direct cluster's Prometheus who it is, so two names for one
+    store count as one (`contracts.regroup`). Its runtime info's `startTime` (Prometheus
+    and Thanos Query give it to the nanosecond) is the identity; a store that can't say
+    (Mimir, VictoriaMetrics, down, refusing) is compared by the addresses its host
+    resolves to. Each Contract's token goes only to its own cluster's URL. Asking only
+    joins: URLs written the same stay one store whatever they answer.
+    ponytail: replicas behind one name answer each for itself, so two names for an HA
+    pair can still look apart; a Relay's cluster can't be asked from here."""
+    asks = [(c.id, t) for c in loaded.values() for t in targets(c) if t.url]
+    if not asks:
+        return
+    client = http or httpx.Client(timeout=5)
+
+    def who(ask: tuple[str, Target]) -> str | None:
+        cid, t = ask
+        auth = {"Authorization": f"Bearer {t.token.get_secret_value()}"} if t.token else {}
+        try:
+            r = client.get(f"{t.url.rstrip('/')}/api/v1/status/runtimeinfo", headers=auth)
+            r.raise_for_status()
+            start = r.json()["data"]["startTime"]
+            if not (isinstance(start, str) and start):
+                raise ValueError("no startTime")
+            return start
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError, KeyError, TypeError) as e:
+            log.info(
+                "%s/%s: its Prometheus didn't say who it is (%s)", cid, t.cluster, why(e, None)
+            )
+            return None
+
+    host, rest = {}, {}  # each store's host, and its scheme, port and path
+    for _, t in asks:
+        u = urlsplit(t.url.strip())
+        scheme = u.scheme.lower()
+        port = u.port or {"http": 80, "https": 443}.get(scheme, 0)
+        host[_store(t.url)] = (u.hostname or "", port)
+        rest[_store(t.url)] = (scheme, port, u.path.rstrip("/"))
+    keys = sorted(host)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        said = list(pool.map(who, asks))
+        found = list(pool.map(lambda k: resolve(*host[k]), keys))
+    if http is None:
+        client.close()
+    ids: dict[str, set[str]] = defaultdict(set)
+    for (_, t), start in zip(asks, said, strict=True):
+        if start is not None:
+            ids[_store(t.url)].add(start)
+    at = dict(zip(keys, found, strict=True))
+
+    def same(a: str, b: str) -> bool:
+        return bool(ids[a] & ids[b])
+
+    def near(a: str, b: str) -> bool:
+        unsaid = not ids[a] or not ids[b]
+        return same(a, b) or (unsaid and rest[a] == rest[b] and bool(at[a] & at[b]))
+
+    joined = _joined(keys, near)
+    names: dict[str, list[str]] = defaultdict(list)
+    for cid, t in asks:
+        names[joined[_store(t.url)]].append(f"{cid}/{t.cluster}")
+    for key, ones in names.items():
+        if any(joined[k] == key for k in keys if k != key):  # one store, several URLs
+            log.info("one Prometheus under several URLs: %s", ", ".join(sorted(ones)))
+    regroup(directory, loaded, _joined(keys, same), joined)
 
 
 def step_for(window_s: int) -> int:
