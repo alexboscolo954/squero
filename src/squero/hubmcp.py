@@ -596,7 +596,9 @@ def build(
     ) -> dict[str, Any]:
         """Each billed cluster's cloud bill beside the Hub's estimate over the last full
         days the cloud has settled: billed, estimated, the gap and whether it is within
-        the tolerance, and how many node-hours the estimate rests on."""
+        the tolerance, and how many node-hours the estimate rests on; spot_billed and
+        spot_estimated: what its spot lines cost beside what the estimate prices its spot
+        hours at, where the cluster names spot nodes (a spot price checked by the bill)."""
         c = resolve(contract)
 
         async def work() -> dict[str, Any]:

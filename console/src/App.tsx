@@ -50,6 +50,8 @@ function BillLines({ bills }: { bills: Bills | null }) {
             {amount(b.estimated, b.currency)}, {b.gap >= 0 ? "+" : "-"}
             {(Math.abs(b.gap) * 100).toFixed(1)}%
             {b.within == null ? " (no verdict)" : b.within ? ` (within ${(bills!.tolerance * 100).toFixed(0)}%)` : ` (outside ${(bills!.tolerance * 100).toFixed(0)}%)`}
+            {b.spot_billed != null && b.spot_estimated != null &&
+              `; spot billed ${amount(b.spot_billed, b.currency)}, estimated ${amount(b.spot_estimated, b.currency)}`}
             {b.note ? `: ${b.note}` : ""}
           </p>
         );

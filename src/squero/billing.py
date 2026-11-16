@@ -6,7 +6,7 @@ billed rate feeding prices is a later slice)."""
 import asyncio
 import json
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -35,7 +35,9 @@ BIGQUERY_SCOPE = "https://www.googleapis.com/auth/bigquery.readonly"
 # count, Spot ones ("Spot Preemptible ...") included (slice 16.1b), usage before credits.
 GCP_QUERY = """
 SELECT FORMAT_DATE('%Y-%m-%d', DATE(usage_start_time, 'UTC')) AS day, currency,
-       SUM(cost) AS cost
+       SUM(cost) AS cost,
+       SUM(IF(STARTS_WITH(sku.description, 'Spot Preemptible')
+              OR STARTS_WITH(sku.description, 'Preemptible'), cost, 0)) AS spot
 FROM `{table}`
 WHERE usage_start_time >= @start AND usage_start_time < @end
   AND service.description = 'Compute Engine' AND cost_type = 'regular'
@@ -45,7 +47,9 @@ WHERE usage_start_time >= @start AND usage_start_time < @end
 GROUP BY day, currency
 """
 LOGIN = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
-Bill = dict[str, tuple[float, str, bool]]  # day -> amount, currency, still estimated
+# day -> amount, currency, still estimated, and what its spot lines cost (slice 16.4b;
+# None where the total's read doesn't say: AWS's and Azure's come from a read of their own)
+Bill = dict[str, tuple[float, str, bool, float | None]]
 COMPUTE = "Amazon Elastic Compute Cloud - Compute"
 
 
@@ -59,14 +63,19 @@ def period(now: float, days: int) -> list[str]:
     return [(last - timedelta(days=i)).isoformat() for i in reversed(range(days))]
 
 
-def request(tag: str, start: str, end: str, token: str | None = None) -> dict[str, Any]:
+def request(
+    tag: str, start: str, end: str, token: str | None = None, spot: bool = False
+) -> dict[str, Any]:
     """Cost Explorer's GetCostAndUsage body: the tag's EC2 compute, usage only (before
-    credits), unblended, a day at a time; `end` is exclusive."""
+    credits), unblended, a day at a time; `end` is exclusive. With `spot`, grouped by
+    usage type, so its spot lines (`...SpotUsage:<type>`) can be told apart (slice
+    16.4b): a read of its own, so a shape not as expected costs the spot part only."""
     key, _, value = tag.partition("=")
     body: dict[str, Any] = {
         "TimePeriod": {"Start": start, "End": end},
         "Granularity": "DAILY",
         "Metrics": ["UnblendedCost"],
+        **({"GroupBy": [{"Type": "DIMENSION", "Key": "USAGE_TYPE"}]} if spot else {}),
         "Filter": {
             "And": [
                 {"Tags": {"Key": key, "Values": [value], "MatchOptions": ["EQUALS"]}},
@@ -84,18 +93,41 @@ def parse(body: dict[str, Any]) -> Bill:
     out: Bill = {}
     for r in body.get("ResultsByTime", []):
         cost = r["Total"]["UnblendedCost"]
-        out[r["TimePeriod"]["Start"]] = (float(cost["Amount"]), cost["Unit"], bool(r["Estimated"]))
+        out[r["TimePeriod"]["Start"]] = (
+            float(cost["Amount"]), cost["Unit"], bool(r["Estimated"]), None
+        )  # fmt: skip
     return out
 
 
-def aws_fetch(
-    http: httpx.Client, key_id: str, secret: str, tag: str, start: str, end: str, now: float
-) -> Bill:
-    """The tag's billed days from `start` up to (not including) `end`."""
-    out: Bill = {}
+def parse_spot(body: dict[str, Any], before: dict[str, float] | None = None) -> dict[str, float]:
+    """A grouped page's spot lines, a day at a time, added to the pages `before` (one
+    day's groups may continue on the next page: not said otherwise); a day without a
+    spot group is 0 (slice 16.4b)."""
+    out = dict(before or {})
+    for r in body.get("ResultsByTime", []):
+        day = r["TimePeriod"]["Start"]
+        out[day] = out.get(day, 0.0) + sum(
+            float(g["Metrics"]["UnblendedCost"]["Amount"])
+            for g in r.get("Groups", [])
+            if any("SpotUsage" in k for k in g.get("Keys", []))
+        )
+    return out
+
+
+def _aws_pages(
+    http: httpx.Client,
+    key_id: str,
+    secret: str,
+    tag: str,
+    start: str,
+    end: str,
+    now: float,
+    spot: bool = False,
+) -> Iterator[dict[str, Any]]:
+    """Each page of Cost Explorer's reply, signed with the key."""
     token = None
     while True:
-        data = json.dumps(request(tag, start, end, token)).encode()
+        data = json.dumps(request(tag, start, end, token, spot)).encode()
         headers = {
             "content-type": "application/x-amz-json-1.1",
             "host": HOST,
@@ -111,15 +143,36 @@ def aws_fetch(
         )
         resp.raise_for_status()
         body = resp.json()
-        out |= parse(body)
+        yield body
         token = body.get("NextPageToken")
         if not token:
-            return out
+            return
 
 
-def azure_request(tag: str, start: str, end: str) -> dict[str, Any]:
+def aws_fetch(
+    http: httpx.Client, key_id: str, secret: str, tag: str, start: str, end: str, now: float
+) -> Bill:
+    """The tag's billed days from `start` up to (not including) `end`."""
+    out: Bill = {}
+    for body in _aws_pages(http, key_id, secret, tag, start, end, now):
+        out |= parse(body)
+    return out
+
+
+def aws_spot_fetch(
+    http: httpx.Client, key_id: str, secret: str, tag: str, start: str, end: str, now: float
+) -> dict[str, float]:
+    """What the tag's spot lines cost each day (slice 16.4b), a read of its own."""
+    out: dict[str, float] = {}
+    for body in _aws_pages(http, key_id, secret, tag, start, end, now, spot=True):
+        out = parse_spot(body, out)
+    return out
+
+
+def azure_request(tag: str, start: str, end: str, spot: bool = False) -> dict[str, Any]:
     """Cost Management's query body: the tag's Virtual Machines usage (before credits)
-    a day at a time; `end` is exclusive, Azure's `to` is not."""
+    a day at a time; `end` is exclusive, Azure's `to` is not. With `spot`, grouped by
+    pricing model, so its Spot rows can be told apart (slice 16.4b): a read of its own."""
     key, _, value = tag.partition("=")
     last = date.fromisoformat(end) - timedelta(days=1)
     return {
@@ -129,6 +182,7 @@ def azure_request(tag: str, start: str, end: str) -> dict[str, Any]:
         "dataset": {
             "granularity": "Daily",
             "aggregation": {"totalCost": {"name": "PreTaxCost", "function": "Sum"}},
+            **({"grouping": [{"type": "Dimension", "name": "PricingModel"}]} if spot else {}),
             "filter": {
                 "and": [
                     {"tags": {"name": key, "operator": "In", "values": [value]}},
@@ -154,7 +208,26 @@ def azure_parse(body: dict[str, Any], before: Bill | None = None) -> Bill:
         key = f"{d[:4]}-{d[4:6]}-{d[6:]}"
         if key in out or key in (before or {}):
             raise ValueError(f"{key} was billed in two currencies")
-        out[key] = (float(row[cost]), row[unit], False)
+        out[key] = (float(row[cost]), row[unit], False, None)
+    return out
+
+
+def azure_parse_spot(
+    body: dict[str, Any], before: dict[str, float] | None = None
+) -> dict[str, float]:
+    """A grouped page's Spot rows, a day at a time, added to the pages `before`; a day
+    without one is 0 (slice 16.4b). A reply without the `PricingModel` column is no
+    answer: refused, the spot part not read."""
+    props = body["properties"]
+    names = [c["name"] for c in props["columns"]]
+    if "PricingModel" not in names:
+        raise ValueError("Cost Management's reply has no PricingModel column")
+    cost, day, model = (names.index(n) for n in ("PreTaxCost", "UsageDate", "PricingModel"))
+    out = dict(before or {})
+    for row in props["rows"]:
+        d = str(row[day])
+        key = f"{d[:4]}-{d[4:6]}-{d[6:]}"
+        out[key] = out.get(key, 0.0) + (float(row[cost]) if row[model] == "Spot" else 0.0)
     return out
 
 
@@ -170,6 +243,41 @@ def azure_fetch(
 ) -> Bill:
     """The tag's billed days from `start` up to (not including) `end`. Azure sends no row
     for a day without usage: a day before the latest one with a row is filled in as 0."""
+    out: Bill = {}
+    for body in _azure_pages(
+        http, tenant, client_id, secret, subscription, azure_request(tag, start, end)
+    ):
+        out |= azure_parse(body, out)
+    return fill_gaps(out, start)
+
+
+def azure_spot_fetch(
+    http: httpx.Client,
+    tenant: str,
+    client_id: str,
+    secret: str,
+    subscription: str,
+    tag: str,
+    start: str,
+    end: str,
+) -> dict[str, float]:
+    """What the tag's Spot rows cost each day (slice 16.4b), a read of its own."""
+    out: dict[str, float] = {}
+    data = azure_request(tag, start, end, spot=True)
+    for body in _azure_pages(http, tenant, client_id, secret, subscription, data):
+        out = azure_parse_spot(body, out)
+    return out
+
+
+def _azure_pages(
+    http: httpx.Client,
+    tenant: str,
+    client_id: str,
+    secret: str,
+    subscription: str,
+    data: dict[str, Any],
+) -> Iterator[dict[str, Any]]:
+    """Each page of Cost Management's reply to `data`, with a token minted for it."""
     resp = http.post(
         LOGIN.format(tenant=tenant),
         data={
@@ -185,15 +293,12 @@ def azure_fetch(
         f"https://{AZURE_HOST}/subscriptions/{subscription}"
         "/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
     )
-    data = azure_request(tag, start, end)
-    out: Bill = {}
     while url:
         resp = http.post(url, json=data, headers=headers)
         resp.raise_for_status()
         body = resp.json()
-        out |= azure_parse(body, out)
+        yield body
         url = body["properties"].get("nextLink")
-    return fill_gaps(out, start)
 
 
 def fill_gaps(out: Bill, start: str) -> Bill:
@@ -201,9 +306,10 @@ def fill_gaps(out: Bill, start: str) -> Bill:
     it, the cloud may just not have settled the day: left missing."""
     if out:
         unit = next(iter(out.values()))[1]
+        spot = None if out[max(out)][3] is None else 0.0  # unread stays unread (16.4b)
         day = date.fromisoformat(start)
         while day.isoformat() < max(out):
-            out.setdefault(day.isoformat(), (0.0, unit, False))
+            out.setdefault(day.isoformat(), (0.0, unit, False, spot))
             day += timedelta(days=1)
     return out
 
@@ -238,10 +344,10 @@ def gcp_parse(body: dict[str, Any]) -> Bill:
         raise ValueError("BigQuery answered in pages: more days than expected")
     out: Bill = {}
     for row in body.get("rows", []):
-        day, unit, cost = (c["v"] for c in row["f"])
+        day, unit, cost, spot = (c["v"] for c in row["f"])
         if day in out:
             raise ValueError(f"{day} was billed in two currencies")
-        out[day] = (float(cost), unit, False)
+        out[day] = (float(cost), unit, False, float(spot or 0))
     return out
 
 
@@ -306,6 +412,34 @@ def reader(c: Contract, cl: Cluster) -> Callable[[httpx.Client, str, str, str, f
     )  # fmt: skip
 
 
+def spot_reader(
+    c: Contract, cl: Cluster
+) -> Callable[[httpx.Client, str, str, str, float], dict[str, float]] | None:
+    """The call that reads what this cluster's spot lines cost each day (slice 16.4b),
+    its credentials bound; None for GCP, whose export query sums them with the total
+    (only fields the query already reads: a second query would scan the table twice)."""
+    if c.bill_provider(cl) == "gcp":
+        return None
+    if c.bill_provider(cl) == "azure":
+        vendor = c.azure_vendor()
+        assert vendor is not None
+
+        def var(name: str) -> str:
+            return vendor.env[name] if name in vendor.env else (
+                c.secret(vendor.env_secrets[name]).get_secret_value()
+            )  # fmt: skip
+
+        return lambda http, tag, start, end, now: azure_spot_fetch(
+            http, var("AZURE_TENANT_ID"), var("AZURE_CLIENT_ID"), var("AZURE_CLIENT_SECRET"),
+            var("AZURE_SUBSCRIPTION_ID"), tag, start, end,
+        )  # fmt: skip
+    aws = next(i for i in c.integrations if isinstance(i, Aws))
+    return lambda http, tag, start, end, now: aws_spot_fetch(
+        http, aws.access_key_id, c.secret(aws.secret_access_key_secret).get_secret_value(),
+        tag, start, end, now,
+    )  # fmt: skip
+
+
 async def refresh(
     store: "Store",
     contracts: Iterable[Contract],
@@ -338,8 +472,19 @@ async def refresh(
                 )
             except (httpx.HTTPError, ValueError, KeyError) as e:
                 await store.fail_bill(c.id, cl.name, listprices.why(e, None), now)
-            else:
-                await store.save_bill(c.id, cl.name, got, now)
+                continue
+            # slice 16.4b: the spot part from a read of its own, after the total's; its
+            # failure (a shape not as expected, a call refused) costs the spot part only
+            spot_error = None
+            if (read_spot := spot_reader(c, cl)) is not None:
+                try:
+                    spot = await asyncio.to_thread(
+                        read_spot, http, cl.billing.tag, start, end.isoformat(), now
+                    )
+                    got = {d: (a, u, e, spot.get(d, 0.0)) for d, (a, u, e, _) in got.items()}
+                except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+                    spot_error = listprices.why(e, None)
+            await store.save_bill(c.id, cl.name, got, now, spot_error)
     return reads
 
 
@@ -361,7 +506,9 @@ async def report(
     """Per billed cluster: the period, the bill, the estimate at the Hub's prices, their
     gap and whether it is within TOLERANCE, or `note` saying why there is none. Where a
     cluster names its spot nodes, each hour's spot capacity is priced at a spot node's
-    rate and the rest at an on-demand one's (slice 16.1b), and `note` says their share.
+    rate and the rest at an on-demand one's (slice 16.1b), and `note` says their share;
+    `spot_billed` and `spot_estimated` set what its spot lines cost beside what the
+    estimate prices its spot hours at (slice 16.4b), a spot price to check by the bill.
     Money stays in the currency it was read in; nothing is converted."""
     wanted = period(now, days)
     c = await listprices.effective(store, c, now)
@@ -386,6 +533,10 @@ async def report(
             "sampled": None,
             "coverage": None,
             "note": None,
+            # slice 16.4b: what its spot lines cost, and what the estimate prices its spot
+            # hours at: a spot price to check against what the cloud charged
+            "spot_billed": None,
+            "spot_estimated": None,
         }
         out.append(row)
         seen = have.get(cl.name, {})
@@ -403,6 +554,8 @@ async def report(
             continue
         currencies = {seen[d]["currency"] for d in wanted}
         row["billed"] = sum(seen[d]["amount"] for d in wanted)
+        spots = [seen[d].get("spot_amount") for d in wanted]  # None: read before 16.4b
+        row["spot_billed"] = sum(spots) if all(x is not None for x in spots) else None
         row["currency"] = currencies.pop() if len(currencies) == 1 else None
         price = c.price(cl.name)
         if price is None:
@@ -434,7 +587,21 @@ async def report(
         row["gap"] = gap(row["estimated"], row["billed"])
         row["within"] = row["gap"] is not None and abs(row["gap"]) <= TOLERANCE
         row["sampled"], row["coverage"] = sampled, min(sampled / row["hours"], 1.0)
+        if cl.spot:  # the spot hours at a spot node's rate (16.4b)
+            row["spot_estimated"] = against * on_spot / share
         notes = []
+        if cl.spot is None and row["spot_billed"]:
+            notes.append(
+                "the bill has spot lines: name the cluster's spot nodes (spot:) to price them "
+                "at their own rate"
+            )
+        elif cl.spot and row["spot_billed"] is None:
+            failed = (tries.get(cl.name) or {}).get("spot_error")
+            notes.append(
+                f"its spot lines failed to read: {failed}"
+                if failed
+                else "its spot lines come with the next daily read of the bill"
+            )
         if cl.spot and spot_cpu:
             notes.append(f"spot: {spot_cpu / vcpu:.0%} of the vCPU-hours, at x{against:.3g}")
         elif cl.spot:

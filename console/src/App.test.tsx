@@ -470,6 +470,7 @@ test("the Cost page sets a cluster's AWS bill beside its estimate, flagged outsi
           { ...BILL, cluster: "<b>eu</b>", billed: 14, estimated: 15.456, gap: 0.104, within: false },
           { ...BILL, cluster: "us", billed: null, estimated: null, gap: null, within: null, note: "no bill for 2 of 7 days yet" },
           { ...BILL, cluster: "lab", billed: 15.4, estimated: 8.4, gap: -0.45, within: null, sampled: 92, coverage: 0.55, note: "the estimate rests on 92 of 168 sampled hours" },
+          { ...BILL, cluster: "spotty", billed: 10, estimated: 10.2, gap: 0.02, within: true, spot_billed: 3.5, spot_estimated: 3.6 },
         ],
       },
     ],
@@ -481,6 +482,8 @@ test("the Cost page sets a cluster's AWS bill beside its estimate, flagged outsi
   expect(screen.getByText(/us bill .*no bill for 2 of 7 days yet/).className).toBe("notice");
   const lab = screen.getByText(/lab bill .*-45.0% \(no verdict\): the estimate rests on 92 of 168 sampled hours/);
   expect(lab.className).toBe("notice"); // a gap without a verdict is no "within"
+  // slice 16.4b: the bill's spot part beside the estimate's
+  expect(screen.getByText(/spotty bill .*\(within 5%\); spot billed 3.50 USD, estimated 3.60 USD/)).toBeTruthy();
 });
 
 test("a Contract with no billed cluster shows no bill line and no error", async () => {

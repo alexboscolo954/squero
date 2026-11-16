@@ -756,25 +756,30 @@ class Store:
         self,
         contract_id: str,
         cluster: str,
-        days: dict[str, tuple[float, str, bool]],
+        days: dict[str, tuple[float, str, bool, float | None]],
         at: float,
+        spot_error: str | None = None,
     ) -> None:
-        """A cluster's billed days (slice 10.5a) as (amount, currency, still estimated),
-        replacing what the Hub had for them, and the read's success."""
-        for day, (amount, currency, estimated) in days.items():
+        """A cluster's billed days (slice 10.5a) as (amount, currency, still estimated,
+        its spot lines' part: slice 16.4b), replacing what the Hub had for them, and the
+        read's success."""
+        for day, (amount, currency, estimated, spot) in days.items():
             await self._exec(
                 "insert into billed_costs (contract_id, cluster, day, amount, currency, "
-                "estimated) values (%s, %s, %s, %s, %s, %s) "
+                "estimated, spot_amount) values (%s, %s, %s, %s, %s, %s, %s) "
                 "on conflict (contract_id, cluster, day) do update set "
                 "amount = excluded.amount, currency = excluded.currency, "
-                "estimated = excluded.estimated",
-                (contract_id, cluster, day, amount, currency, estimated),
+                "estimated = excluded.estimated, "
+                # a spot read that failed keeps the last known part (16.4b)
+                "spot_amount = coalesce(excluded.spot_amount, billed_costs.spot_amount)",
+                (contract_id, cluster, day, amount, currency, estimated, spot),
             )
         await self._exec(
-            "insert into billing_tries (contract_id, cluster, tried_at, ok_at, error) "
-            "values (%s, %s, %s, %s, null) on conflict (contract_id, cluster) do update "
-            "set tried_at = excluded.tried_at, ok_at = excluded.ok_at, error = null",
-            (contract_id, cluster, at, at),
+            "insert into billing_tries (contract_id, cluster, tried_at, ok_at, error, "
+            "spot_error) values (%s, %s, %s, %s, null, %s) on conflict (contract_id, cluster) "
+            "do update set tried_at = excluded.tried_at, ok_at = excluded.ok_at, error = null, "
+            "spot_error = excluded.spot_error",
+            (contract_id, cluster, at, at, spot_error),
         )
 
     async def fail_bill(self, contract_id: str, cluster: str, error: str, at: float) -> None:
@@ -791,9 +796,9 @@ class Store:
     ) -> tuple[dict[str, dict[str, dict[str, Any]]], dict[str, dict[str, Any]]]:
         """Per cluster its billed days (day -> amount, currency, estimated), and per
         cluster its last read (`tried_at`, `ok_at`, `error`)."""
-        days: dict[str, dict[str, dict[str, Any]]] = {}
+        days: dict[str, dict[str, dict[str, Any]]] = {}  # with `spot_amount` (16.4b)
         for r in await self._all(
-            "select cluster, day, amount, currency, estimated from billed_costs "
+            "select cluster, day, amount, currency, estimated, spot_amount from billed_costs "
             "where contract_id = %s",
             (contract_id,),
         ):
@@ -801,7 +806,8 @@ class Store:
         tries = {
             r["cluster"]: r
             for r in await self._all(
-                "select cluster, tried_at, ok_at, error from billing_tries where contract_id = %s",
+                "select cluster, tried_at, ok_at, error, spot_error from billing_tries "
+                "where contract_id = %s",
                 (contract_id,),
             )
         }

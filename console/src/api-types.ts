@@ -587,6 +587,10 @@ export interface components {
             note: string | null;
             /** Sampled */
             sampled: number | null;
+            /** Spot Billed */
+            spot_billed?: number | null;
+            /** Spot Estimated */
+            spot_estimated?: number | null;
             /** Start */
             start: string;
             /** Tag */

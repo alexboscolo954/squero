@@ -244,6 +244,9 @@ class Bill(BaseModel):
     sampled: int | None
     coverage: float | None
     note: str | None
+    # slice 16.4b: what its spot lines cost; what the estimate prices its spot hours at
+    spot_billed: float | None = None
+    spot_estimated: float | None = None
 
 
 class Bills(BaseModel):

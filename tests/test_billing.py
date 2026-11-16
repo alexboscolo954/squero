@@ -123,7 +123,7 @@ def test_a_tag_value_may_hold_an_equals_sign() -> None:
 
 def test_the_days_are_parsed_with_their_unit_and_whether_aws_may_still_change_them() -> None:
     assert billing.parse(body({"1972-09-25": 2.5}, "EUR", estimated=True)) == {
-        "1972-09-25": (2.5, "EUR", True)
+        "1972-09-25": (2.5, "EUR", True, None)  # its spot part: a read of its own (16.4b)
     }
 
 
@@ -132,7 +132,7 @@ def test_the_request_is_signed_and_the_secret_never_sent() -> None:
     got = billing.aws_fetch(
         ce.client(), "AKIAIOSFODNN7EXAMPLE", SECRET, TAG, DAYS[0], "1972-09-26", NOW
     )
-    assert got[DAYS[0]] == (2.2, "USD", False)
+    assert got[DAYS[0]] == (2.2, "USD", False, None)
     (sent,) = ce.asked
     assert sent.url.host == "ce.us-east-1.amazonaws.com"
     assert sent.headers["x-amz-target"] == "AWSInsightsIndexService.GetCostAndUsage"
@@ -168,7 +168,7 @@ def test_the_gap_is_a_fraction_of_the_bill() -> None:
 async def seed(
     store: Store, c: contracts.Contract, amounts: dict[str, float], unit: str = "USD"
 ) -> None:
-    await store.save_bill(c.id, "test", {d: (a, unit, False) for d, a in amounts.items()}, NOW)
+    await store.save_bill(c.id, "test", {d: (a, unit, False, 0.0) for d, a in amounts.items()}, NOW)
 
 
 async def row(
@@ -399,12 +399,12 @@ def test_the_hub_reads_the_bill_with_its_hourly_run(
             c.portal.call(c.app.state.due_sizings, at)  # type: ignore[union-attr,attr-defined]
 
         tick(NOW)
-        assert len(ce.asked) == 1
+        assert len(ce.asked) == 2  # the total, then its spot part (slice 16.4b)
         tick(NOW + H)
-        assert len(ce.asked) == 1  # once a day
+        assert len(ce.asked) == 2  # once a day
         ce.status = 503
         tick(NOW + 25 * H)  # a bill that is down never stops the runs
-        assert len(ce.asked) == 2
+        assert len(ce.asked) == 3  # the total refused: its spot part not asked
 
 
 # --- Azure (slice 10.5b) ---------------------------------------------------------------
@@ -489,7 +489,7 @@ def test_the_azure_request_asks_for_the_tags_vm_usage_before_credits() -> None:
 
 def test_azure_days_are_parsed_by_column_with_their_currency() -> None:
     assert billing.azure_parse(azure_body({"1972-09-25": 2.5})) == {
-        "1972-09-25": (2.5, "BRL", False)
+        "1972-09-25": (2.5, "BRL", False, None)
     }
 
 
@@ -498,7 +498,7 @@ def test_azure_asks_for_a_token_then_the_query_and_sends_the_secret_only_for_the
     got = billing.azure_fetch(
         cm.client(), TENANT, CLIENT, AZ_SECRET, SUB, TAG, DAYS[0], "1972-09-26"
     )
-    assert got[DAYS[0]] == (2.2, "BRL", False)
+    assert got[DAYS[0]] == (2.2, "BRL", False, None)
     token, query = cm.asked
     assert str(token.url) == f"https://login.microsoftonline.com/{TENANT}/oauth2/v2.0/token"
     assert f"client_secret={AZ_SECRET.replace('~', '%7E')}" in token.content.decode() or (
@@ -516,10 +516,10 @@ def test_a_day_without_usage_before_the_latest_day_reads_as_zero() -> None:
     cm = CostManagement({DAYS[0]: 2.0, DAYS[3]: 3.0})
     got = billing.azure_fetch(cm.client(), TENANT, CLIENT, AZ_SECRET, SUB, TAG, DAYS[0], DAYS[5])
     assert got == {
-        DAYS[0]: (2.0, "BRL", False),
-        DAYS[1]: (0.0, "BRL", False),
-        DAYS[2]: (0.0, "BRL", False),
-        DAYS[3]: (3.0, "BRL", False),
+        DAYS[0]: (2.0, "BRL", False, None),
+        DAYS[1]: (0.0, "BRL", False, None),
+        DAYS[2]: (0.0, "BRL", False, None),
+        DAYS[3]: (3.0, "BRL", False, None),
     }  # DAYS[4] may just not have settled: left missing
     empty = CostManagement({})
     assert (
@@ -556,7 +556,7 @@ def test_every_azure_page_is_read() -> None:
 async def test_an_azure_bill_is_read_with_the_integrations_credentials(store: Store) -> None:
     c, cm = azure_billed(), CostManagement()
     assert await billing.refresh(store, [c], cm.client(), NOW) == 1
-    token, query = cm.asked
+    token, query, *_spot = cm.asked  # the spot part's read follows (16.4b)
     assert TENANT in str(token.url) and f"client_id={CLIENT}" in token.content.decode()
     assert SUB in query.url.path
     days, _ = await store.bills(c.id)
@@ -593,7 +593,7 @@ async def test_a_brl_bill_is_compared_with_brl_prices_and_not_with_usd_ones(stor
     fake = FakePrometheus()
     nodes(fake)
     brl = azure_billed("BRL")
-    await store.save_bill(brl.id, "test", {d: (2.2, "BRL", False) for d in DAYS}, NOW)
+    await store.save_bill(brl.id, "test", {d: (2.2, "BRL", False, 0.0) for d in DAYS}, NOW)
     got = await row(store, brl, fake)
     assert got["currency"] == "BRL" and got["gap"] is not None and got["note"] is None
     usd = azure_billed("USD")
@@ -636,7 +636,7 @@ def test_the_cli_prints_a_bill_of_nothing_beside_an_estimate(
         async with connect(database_url) as pool:
             store = Store(pool)
             await store.migrate()
-            await store.save_bill(c.id, "test", {d: (0.0, "USD", False) for d in DAYS}, NOW)
+            await store.save_bill(c.id, "test", {d: (0.0, "USD", False, 0.0) for d in DAYS}, NOW)
 
     asyncio.run(seed_zero())
     report = billing.report
@@ -712,7 +712,7 @@ def test_the_cli_does_not_fail_a_row_for_missing_samples_alone(
         async with connect(database_url) as pool:
             store = Store(pool)
             await store.migrate()
-            await store.save_bill(c.id, "test", {d: (2.2, "USD", False) for d in DAYS}, NOW)
+            await store.save_bill(c.id, "test", {d: (2.2, "USD", False, 0.0) for d in DAYS}, NOW)
 
     asyncio.run(seed_bills())
     report = billing.report
@@ -762,7 +762,9 @@ def gcp_billed(
 def gcp_body(amounts: dict[str, float], unit: str = "BRL") -> dict[str, Any]:
     return {
         "jobComplete": True,
-        "rows": [{"f": [{"v": d}, {"v": unit}, {"v": str(a)}]} for d, a in amounts.items()],
+        "rows": [
+            {"f": [{"v": d}, {"v": unit}, {"v": str(a)}, {"v": "0"}]} for d, a in amounts.items()
+        ],
     }
 
 
@@ -806,7 +808,9 @@ def test_the_gcp_query_asks_for_the_labels_core_and_ram_usage_spot_included() ->
 
 
 def test_gcp_days_are_parsed_with_their_currency() -> None:
-    assert billing.gcp_parse(gcp_body({"1972-09-25": 2.5})) == {"1972-09-25": (2.5, "BRL", False)}
+    assert billing.gcp_parse(gcp_body({"1972-09-25": 2.5})) == {
+        "1972-09-25": (2.5, "BRL", False, 0.0)
+    }
     assert billing.gcp_parse({"jobComplete": True}) == {}  # a label with no usage
 
 
@@ -826,7 +830,7 @@ def test_gcp_mints_a_bigquery_only_token_at_googles_endpoint_then_queries() -> N
     got = billing.gcp_fetch(
         bq.client(), GCP_KEY, "acme-prod", TABLE, GCP_TAG, DAYS[0], "1972-09-26"
     )
-    assert got[DAYS[0]] == (2.2, "BRL", False)
+    assert got[DAYS[0]] == (2.2, "BRL", False, 0.0)
     token, query = bq.asked
     assert str(token.url) == "https://oauth2.googleapis.com/token"
     form = dict(x.split("=", 1) for x in token.content.decode().split("&"))
@@ -848,10 +852,10 @@ def test_a_gcp_day_without_usage_before_the_latest_reads_as_zero() -> None:
     bq = BigQuery({DAYS[0]: 2.0, DAYS[3]: 3.0})
     got = billing.gcp_fetch(bq.client(), GCP_KEY, "acme-prod", TABLE, GCP_TAG, DAYS[0], DAYS[5])
     assert got == {
-        DAYS[0]: (2.0, "BRL", False),
-        DAYS[1]: (0.0, "BRL", False),
-        DAYS[2]: (0.0, "BRL", False),
-        DAYS[3]: (3.0, "BRL", False),
+        DAYS[0]: (2.0, "BRL", False, 0.0),
+        DAYS[1]: (0.0, "BRL", False, 0.0),
+        DAYS[2]: (0.0, "BRL", False, 0.0),
+        DAYS[3]: (3.0, "BRL", False, 0.0),
     }
 
 
@@ -959,7 +963,7 @@ async def test_a_gcp_bill_in_brl_is_compared_with_brl_prices_only(store: Store) 
     nodes(fake)
     for money, note in (("BRL", None), ("USD", "not converted")):
         c = gcp_billed(money)
-        await store.save_bill(c.id, "test", {d: (2.2, "BRL", False) for d in DAYS}, NOW)
+        await store.save_bill(c.id, "test", {d: (2.2, "BRL", False, 0.0) for d in DAYS}, NOW)
         got = await row(store, c, fake)
         assert (got["gap"] is not None) == (note is None)
         assert note is None or note in got["note"]
@@ -969,7 +973,7 @@ async def test_a_gcp_bill_in_brl_is_compared_with_brl_prices_only(store: Store) 
 async def test_two_gcp_contracts_bills_stay_apart(store: Store) -> None:
     a, b = gcp_billed(), gcp_billed()
     b = b.model_copy(update={"id": "other"})
-    await store.save_bill(a.id, "test", {d: (2.2, "BRL", False) for d in DAYS}, NOW)
+    await store.save_bill(a.id, "test", {d: (2.2, "BRL", False, 0.0) for d in DAYS}, NOW)
     days, tries = await store.bills(b.id)
     assert days == {} and tries == {}
 
@@ -998,3 +1002,167 @@ def test_an_azure_day_in_two_currencies_is_refused() -> None:
     http = httpx.Client(transport=httpx.MockTransport(handler))
     with pytest.raises(ValueError, match="two currencies"):
         billing.azure_fetch(http, TENANT, CLIENT, AZ_SECRET, SUB, TAG, DAYS[0], DAYS[2])
+
+
+# --- the bill's spot part (slice 16.4b) -------------------------------------------------
+
+
+def grouped(day: str, *groups: tuple[str, float], estimated: bool = False) -> dict[str, Any]:
+    """One day of Cost Explorer's reply grouped by usage type."""
+    return {"TimePeriod": {"Start": day}, "Estimated": estimated, "Total": {}, "Groups": [
+        {"Keys": [k], "Metrics": {"UnblendedCost": {"Amount": str(a), "Unit": "USD"}}}
+        for k, a in groups
+    ]}  # fmt: skip
+
+
+def test_aws_reads_its_spot_lines_grouped_by_usage_type_in_a_read_of_its_own() -> None:
+    assert "GroupBy" not in billing.request(TAG, "a", "b")  # the total's read as it was
+    assert billing.request(TAG, "a", "b", spot=True)["GroupBy"] == [
+        {"Type": "DIMENSION", "Key": "USAGE_TYPE"}
+    ]
+    page1 = {"ResultsByTime": [
+        grouped(DAYS[0], ("USE1-BoxUsage:m5.large", 2.0), ("USE1-SpotUsage:m5.large", 0.5)),
+        grouped(DAYS[1], ("USE1-SpotUsage:c5.xlarge", 0.25)),
+    ]}  # fmt: skip
+    page2 = {"ResultsByTime": [  # the same day's groups go on: added, never replaced
+        grouped(DAYS[1], ("SpotUsage:m5.large", 0.5), ("BoxUsage:m5.large", 9.0)),
+        grouped(DAYS[2]),  # no usage that day
+    ]}  # fmt: skip
+    got = billing.parse_spot(page2, billing.parse_spot(page1))
+    assert got == {DAYS[0]: 0.5, DAYS[1]: 0.75, DAYS[2]: 0.0}
+
+
+def test_azure_reads_its_spot_rows_grouped_by_pricing_model_in_a_read_of_its_own() -> None:
+    assert "grouping" not in billing.azure_request(TAG, "1972-09-01", "1972-09-26")["dataset"]
+    sent = billing.azure_request(TAG, "1972-09-01", "1972-09-26", spot=True)
+    assert sent["dataset"]["grouping"] == [{"type": "Dimension", "name": "PricingModel"}]
+
+    def page(*rows: tuple[float, str]) -> dict[str, Any]:
+        reply = azure_body({})
+        reply["properties"]["columns"].insert(2, {"name": "PricingModel", "type": "String"})
+        reply["properties"]["rows"] = [
+            [a, int(DAYS[0].replace("-", "")), m, "BRL"] for a, m in rows
+        ]
+        return reply
+
+    one = billing.azure_parse_spot(page((2.0, "OnDemand"), (0.5, "Spot")))
+    assert one == {DAYS[0]: 0.5}
+    assert billing.azure_parse_spot(page((0.25, "Spot")), one) == {DAYS[0]: 0.75}
+    with pytest.raises(ValueError, match="no PricingModel column"):
+        billing.azure_parse_spot(azure_body({DAYS[0]: 1.0}))  # not grouped as asked
+
+
+def test_gcp_sums_its_spot_skus_in_its_one_query() -> None:
+    sql = billing.gcp_request(TABLE, GCP_TAG, "1972-09-01", "1972-09-26")["query"]
+    assert "STARTS_WITH(sku.description, 'Spot Preemptible')" in sql
+    assert "STARTS_WITH(sku.description, 'Preemptible')" in sql and "AS spot" in sql
+    reply = {"jobComplete": True, "rows": [
+        {"f": [{"v": DAYS[0]}, {"v": "USD"}, {"v": "3.0"}, {"v": "1.25"}]},
+        {"f": [{"v": DAYS[1]}, {"v": "USD"}, {"v": "2.0"}, {"v": None}]},
+    ]}  # fmt: skip
+    assert billing.gcp_parse(reply) == {
+        DAYS[0]: (3.0, "USD", False, 1.25),
+        DAYS[1]: (2.0, "USD", False, 0.0),
+    }
+    assert billing.spot_reader(gcp_billed(), gcp_billed().clusters[0]) is None
+
+
+@pytest.mark.anyio
+async def test_a_spot_read_that_fails_costs_only_the_spot_part(store: Store) -> None:
+    """The Operator's choice: a shape not as expected never takes the total with it."""
+    c, calls = billed(), []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent = json.loads(request.content)
+        calls.append("spot" if "GroupBy" in sent else "total")
+        if "GroupBy" not in sent:
+            return httpx.Response(200, json=body(dict.fromkeys(DAYS, 2.2)))
+        if len(calls) > 2:  # the next day's spot read: refused
+            return httpx.Response(400, json={"__type": "ValidationException", "message": SECRET})
+        return httpx.Response(200, json={"ResultsByTime": [
+            grouped(d, ("USE1-BoxUsage:m5.large", 1.7), ("USE1-SpotUsage:m5.large", 0.5))
+            for d in DAYS
+        ]})  # fmt: skip
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    await billing.refresh(store, [c], http, NOW)
+    days, tries = await store.bills(c.id)
+    assert calls == ["total", "spot"]
+    assert days["test"][DAYS[0]]["amount"] == 2.2 and days["test"][DAYS[0]]["spot_amount"] == 0.5
+    assert tries["test"]["spot_error"] is None
+    await billing.refresh(store, [c], http, NOW + billing.DAY)
+    days, tries = await store.bills(c.id)
+    assert days["test"][DAYS[0]]["amount"] == 2.2  # the total saved all the same
+    assert days["test"][DAYS[0]]["spot_amount"] == 0.5  # and the last known spot part kept
+    assert tries["test"]["error"] is None
+    assert tries["test"]["spot_error"] == "HTTP 400 from ce.us-east-1.amazonaws.com"
+    assert SECRET not in str(tries)
+
+
+@pytest.mark.anyio
+async def test_the_bills_spot_part_is_set_beside_the_estimates(store: Store) -> None:
+    from tests.test_spot import SPOT as RATE
+
+    c, fake = billed(spot=RATE), FakePrometheus()
+    nodes(fake)
+    fake.add("kube_node_labels", [1.0] * 168, node="n1", label_karpenter_sh_capacity_type="spot")
+    await store.save_bill(c.id, "test", {d: (2.2, "USD", False, 0.5) for d in DAYS}, NOW)
+    got = await row(store, c, fake)
+    assert got["spot_billed"] == pytest.approx(3.5)
+    # n1 on spot all week: its hours at a spot node's rate, the typed price's 0.35
+    assert got["spot_estimated"] == pytest.approx(ESTIMATE * 0.35)
+    plain = billed("bank")
+    await store.save_bill(plain.id, "test", {d: (2.2, "USD", False, 0.25) for d in DAYS}, NOW)
+    got = await row(store, plain, fake)
+    assert got["spot_estimated"] is None and got["spot_billed"] == pytest.approx(1.75)  # its own
+    assert got["note"].startswith("the bill has spot lines: name the cluster's spot nodes")
+    await store.save_bill(plain.id, "test", {d: (2.2, "USD", False, 0.0) for d in DAYS}, NOW)
+    assert (await row(store, plain, fake))["note"] is None  # no spot lines: nothing to say
+
+
+@pytest.mark.anyio
+async def test_a_spot_part_not_read_says_why(store: Store) -> None:
+    from tests.test_spot import SPOT as RATE
+
+    c, fake = billed(spot=RATE), FakePrometheus()
+    nodes(fake)
+    await store.save_bill(c.id, "test", {d: (2.2, "USD", False, None) for d in DAYS}, NOW)
+    got = await row(store, c, fake)
+    assert got["spot_billed"] is None
+    assert "its spot lines come with the next daily read of the bill" in got["note"]
+    await store.save_bill(c.id, "test", {}, NOW, "HTTP 400 from ce.us-east-1.amazonaws.com")
+    got = await row(store, c, fake)
+    assert "its spot lines failed to read: HTTP 400 from ce.us-east-1.amazonaws.com" in got["note"]
+
+
+def test_the_cli_prints_the_bills_spot_part_beside_the_estimates(
+    database_url: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import asyncio
+    import time
+
+    from squero import cli
+    from tests.test_spot import SPOT as RATE
+
+    c, fake = billed(spot=RATE), FakePrometheus()
+    nodes(fake)
+    fake.add("kube_node_labels", [1.0] * 168, node="n1", label_karpenter_sh_capacity_type="spot")
+
+    async def seed() -> None:
+        async with connect(database_url) as pool:
+            store = Store(pool)
+            await store.migrate()
+            await store.save_bill(c.id, "test", {d: (2.2, "USD", False, 0.5) for d in DAYS}, NOW)
+
+    asyncio.run(seed())
+    report = billing.report
+
+    async def reported(store: Store, c: Any, now: float, days: int) -> Any:
+        return await report(store, c, now, days, prom_of(fake))
+
+    monkeypatch.setattr(billing, "report", reported)
+    monkeypatch.setattr(cli, "contract", lambda settings, cid: c)
+    monkeypatch.setenv("SQUERO_DATABASE_URL", database_url)
+    monkeypatch.setattr(time, "time", lambda: NOW)
+    cli.main(["sizing", "bill", "--contract", c.id])
+    assert f"; spot billed 3.50, estimated {ESTIMATE * 0.35:.2f}" in capsys.readouterr().out

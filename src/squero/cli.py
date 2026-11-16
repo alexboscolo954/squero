@@ -443,9 +443,12 @@ async def sizing_bill(contract_id: str, days: int, refresh: bool, as_json: bool)
         flag = {True: "within", False: "OUTSIDE", None: "no verdict"}[r["within"]]
         gap = "no gap (nothing billed)" if r["gap"] is None else f"gap {r['gap']:+.1%}"
         note = f"; {r['note']}" if r["note"] else ""
+        spot = ""
+        if r.get("spot_estimated") is not None and r.get("spot_billed") is not None:
+            spot = f"; spot billed {r['spot_billed']:.2f}, estimated {r['spot_estimated']:.2f}"
         print(
             f"{r['cluster']} ({span}): billed {r['billed']:.2f} {r['currency']}, estimated "
-            f"{r['estimated']:.2f}, {gap} ({flag} {billing.TOLERANCE:.0%}){note}"
+            f"{r['estimated']:.2f}, {gap} ({flag} {billing.TOLERANCE:.0%}){spot}{note}"
         )
     # a gap judged on too few sampled hours is no failure; any other row without "within" is
     return (

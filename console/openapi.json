@@ -341,6 +341,28 @@
             ],
             "title": "Sampled"
           },
+          "spot_billed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spot Billed"
+          },
+          "spot_estimated": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spot Estimated"
+          },
           "start": {
             "title": "Start",
             "type": "string"
