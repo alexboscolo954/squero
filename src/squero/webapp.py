@@ -455,6 +455,7 @@ class CouldGo(BaseModel):
 class Scenarios(BaseModel):
     now: CouldGo  # with today's requests
     after: CouldGo  # once the stored Sizings are applied
+    note: str | None = None  # why none is counted (audit A3: its pods' needs not known)
 
 
 class PlacementShown(BaseModel):

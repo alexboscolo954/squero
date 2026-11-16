@@ -14,6 +14,10 @@ The nodes that could go (`could_go`, slice 15.4): clear ones whose pods fit, pod
 in the Room of the others with the same taints; `after` gives the same read with the
 requests the ready Sizings would leave. Every gap means the node stays.
 
+What a pod needs of a node (audit A3): its Actuator reports each pod's nodeSelector and
+node affinity, required and preferred, with the labels of the nodes those name; `fit`
+applies the autoscaler's rule, and a pod moves only to a node that meets it.
+
 Placement (slice 15.2a): where the Contract names a cluster's label, the Hub lists for
 its Actuator the Workloads whose pods block a node for a reason set in their spec
 (`placing`), whose new pods its webhook will prefer the Pinned nodes for; a Pinned node
@@ -22,6 +26,7 @@ says which Workloads to restart to free it once the Actuator places."""
 
 import math
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
@@ -55,6 +60,47 @@ WORKLOAD = re.compile(f"{KIND.pattern}/{NAME.pattern}")  # a pod's, as its Actua
 
 
 SKIP_KEY = r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?/[a-z0-9]([-.a-z0-9]{0,251}[a-z0-9])?$"
+
+# Audit A3: what Kubernetes lets a label's key and value be
+LABEL_KEY = re.compile(
+    r"([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?"
+    r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?"
+)
+LABEL_VALUE = re.compile(r"([A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?")
+MAX_NEEDS = 1000  # distinct ones in a report
+MAX_NEEDED = 10_000  # pods that need something of a node
+MAX_NODES = 5000  # nodes whose labels it sends
+Fits = Callable[[dict[str, Any], str], bool]  # a moving pod, a node it could land on
+
+
+class Expr(BaseModel):
+    """One expression of a node selector term, as the pod's spec has it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(max_length=317)
+    operator: Literal["In", "NotIn", "Exists", "DoesNotExist", "Gt", "Lt"]
+    values: list[str] = Field([], max_length=100)
+    field: bool = False  # a matchFields expression: on the node's name, not a label
+
+
+class Preferred(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    weight: int = Field(ge=1, le=100)
+    match: list[Expr] = Field([], max_length=50)
+
+
+class Need(BaseModel):
+    """What one pod needs of a node, as its Actuator read it from the pod's spec (audit
+    A3): no verdict, which depends on who places pods there."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    selector: dict[str, str] = Field({}, max_length=50)  # its nodeSelector
+    # its required node affinity's terms: a node meets one of them, every expression of it
+    required: list[list[Expr]] = Field([], max_length=50)
+    preferred: list[Preferred] = Field([], max_length=50)
 
 
 class PodFacts(BaseModel):
@@ -101,6 +147,14 @@ class Report(BaseModel):
     spot_skipped: dict[
         Annotated[str, Field(pattern=SKIP_KEY)], Literal["no_retry", "ignores_disruptions"]
     ] = Field(default_factory=dict, max_length=MAX_PODS)
+    # audit A3, sent when the Hub asks (`Desired.constraints`): what its pods need of a node.
+    # "read": in full; "cut": more than it may send; "nodes_refused": it may not read the
+    # nodes' labels; None: not reported (an older Actuator, or an older Hub's)
+    constraints: Literal["read", "cut", "nodes_refused"] | None = None
+    needs: list[Need] = Field([], max_length=MAX_NEEDS)  # each distinct one once
+    needed: dict[str, int] = Field({}, max_length=MAX_NEEDED)  # `namespace/pod`: its need
+    # each node's values of the label keys `needs` name: a key not there, a label it lacks
+    labels: dict[str, dict[str, str]] = Field({}, max_length=MAX_NODES)
 
 
 def sent(r: Report) -> dict[str, Any]:
@@ -117,6 +171,9 @@ def sent(r: Report) -> dict[str, Any]:
         del body["spot_runs"]
     if not r.spot_skipped:
         del body["spot_skipped"]
+    if r.constraints is None:  # audit A3, the same way
+        for key in ("constraints", "needs", "needed", "labels"):
+            del body[key]
     for p in body["pods"]:
         if not p["placed"]:
             del p["placed"]
@@ -143,6 +200,35 @@ def unreal(r: Report) -> str | None:
         names = [*p.empty_dir, *p.in_memory, *p.host_path, *p.annotations.values()]
         if any(len(n) > 253 for n in names) or set(p.annotations) - set(ANNOTATIONS):
             return "pods"
+    return _unreal_needs(r)
+
+
+def _unreal_needs(r: Report) -> str | None:
+    """Audit A3: a need, a pod or a node's labels shaped as no Actuator sends them."""
+    for n in r.needs:
+        exprs = [e for term in n.required for e in term] + [e for p in n.preferred for e in p.match]
+        pairs = [(e.key, e.values, e.field) for e in exprs]
+        pairs += [(k, [v], False) for k, v in n.selector.items()]
+        for key, values, field in pairs:
+            if field:  # a node's name
+                ok = key == "metadata.name"
+                ok = ok and all(len(v) <= 253 and NAME.fullmatch(v) for v in values)
+            else:
+                ok = len(key) <= 317 and bool(LABEL_KEY.fullmatch(key))
+                ok = ok and all(LABEL_VALUE.fullmatch(v) for v in values)
+            if not ok:
+                return "needs"
+    for key, i in r.needed.items():
+        ns, _, pod = key.partition("/")
+        if not (NAME.fullmatch(ns) and NAME.fullmatch(pod) and 0 <= i < len(r.needs)):
+            return "needed"
+        if len(ns) > 253 or len(pod) > 253:
+            return "needed"
+    for node, labels in r.labels.items():
+        if not NAME.fullmatch(node) or len(node) > 253 or len(labels) > 100:
+            return "labels"
+        if not all(LABEL_KEY.fullmatch(k) and LABEL_VALUE.fullmatch(v) for k, v in labels.items()):
+            return "labels"
     return None
 
 
@@ -259,6 +345,10 @@ SETTINGS: dict[str | None, list[str]] = {
         "waits before it is consolidated",
         "NodePool spec.disruption.budgets (10% of nodes by default): how many nodes may "
         "be disrupted at once",
+        "--feature-gates SpotToSpotConsolidation (alpha, false by default): false, a spot "
+        "node is consolidated only by deleting it, its pods fitting on the other nodes; true, "
+        "it may also be replaced by a cheaper spot node, and only for a single node, when "
+        "at least 15 cheaper instance types could take its pods",
     ],
     None: [],
 }
@@ -557,6 +647,9 @@ def verdicts(
         out[n["node"]] = {"state": state, "why": why, "blockers": found}
     if not cluster.placement:
         return out
+    # a restarted pod is placed by the scheduler, where a preference only scores: its
+    # requirements alone, whoever consolidates the nodes
+    fits = fit(report if not missing else None, None)
     pins = pinned(read, cluster)
     for n in read.get("nodes") or []:
         v = out[n["node"]]
@@ -564,7 +657,7 @@ def verdicts(
             kept = [{**b, "changes": []} for b in v["blockers"]]
             out[n["node"]] = {"state": "pinned", "why": None, "blockers": kept}
         elif v["state"] == "blocked" and not missing and report and report.get("placing"):
-            v["restart"] = _restart(v["blockers"], read, pins, cluster.placement.label)
+            v["restart"] = _restart(v["blockers"], read, pins, cluster.placement.label, fits)
     return out
 
 
@@ -587,7 +680,7 @@ def placing(verdict: dict[str, dict[str, Any]]) -> list[str]:
 
 
 def _restart(
-    found: list[dict[str, Any]], read: dict[str, Any], pins: set[str], label: str
+    found: list[dict[str, Any]], read: dict[str, Any], pins: set[str], label: str, fits: Fits | str
 ) -> dict[str, Any]:
     """Which Workloads to restart so that a blocked node (its Blockers `found`) is freed,
     their new pods preferring the Pinned nodes (`pins`, slice 15.2a), or why that
@@ -595,7 +688,8 @@ def _restart(
     that isn't placed, or Pinned nodes without the room for every pod of those Workloads
     not on one already (a restart moves them all), placed pod by pod as `could_go` does,
     on Pinned nodes that take pods, whatever their taints (a placed pod tolerates the
-    Placement's). Each node on its own: two nodes' advice may count on the same room."""
+    Placement's) and that meet what each pod needs of a node (`fits`, audit A3). Each
+    node on its own: two nodes' advice may count on the same room."""
     held = [f"{b['namespace']}/{b['pod']}" for b in found if not b.get("placement")]
     if held:
         more = f" and {len(held) - SAID} more" if len(held) > SAID else ""
@@ -609,6 +703,8 @@ def _restart(
     if not kept:
         why = f"no node carries the label {label}, as kube-state-metrics shows it"
         return {"workloads": [], "why_not": why}
+    if isinstance(fits, str):
+        return {"workloads": [], "why_not": fits.split(":")[0]}
     free = {
         m["node"]: [
             m["allocatable"]["cpu"] - m["requests"]["cpu"],
@@ -638,11 +734,20 @@ def _restart(
         fit = next(
             (
                 left
-                for left in free.values()
-                if left[0] >= p["cpu"] - 1e-9 and left[1] >= p["memory"] - 1e-9 and left[2] >= 1
+                for node, left in free.items()
+                if left[0] >= p["cpu"] - 1e-9
+                and left[1] >= p["memory"] - 1e-9
+                and left[2] >= 1
+                and fits(p, node)
             ),
             None,
         )
+        if fit is None and free and not any(fits(p, node) for node in free):
+            why = (
+                f"pod {p['namespace']}/{p['pod']} needs of a node what no pinned node has "
+                "(its nodeSelector or node affinity)"
+            )
+            return {"workloads": [], "why_not": why}
         if fit is None:
             parts = [f"{short['cpu']:.1f} cores"] if short["cpu"] > 0.05 else []
             if short["memory"] > 0.05 * 2**30:
@@ -677,6 +782,80 @@ def _closed(n: dict[str, Any]) -> bool:
     itself for its condition (not ready, under pressure). Its own pods can still leave."""
     held = (t for t in n["taints"] if t.startswith(OWN_TAINT))
     return n["cordoned"] or any(not t.endswith(":PreferNoSchedule") for t in held)
+
+
+def _holds(e: dict[str, Any], labels: dict[str, str], node: str) -> bool:
+    """One expression on a node, as the scheduler reads it: a label the node lacks meets
+    NotIn and DoesNotExist only; Gt and Lt compare integers, anything else meets neither."""
+    have = node if e.get("field") else labels.get(e["key"])
+    op, values = e["operator"], e.get("values") or []
+    if op == "In":
+        return have in values  # None, a label it lacks, is in no list of strings
+    if op == "NotIn":
+        return have not in values
+    if op == "Exists":
+        return have is not None
+    if op == "DoesNotExist":
+        return have is None
+    try:
+        mine, given = int(have or ""), int(values[0])
+    except (ValueError, IndexError):
+        return False
+    return mine > given if op == "Gt" else mine < given
+
+
+def _terms(need: dict[str, Any], autoscaler: str | None) -> list[list[dict[str, Any]]]:
+    """A pod's need as the terms a node must meet one of, every expression of it: its
+    nodeSelector with each of its required terms (an empty term meets no node), and under
+    Karpenter its heaviest preferred term too, which Karpenter's scheduler holds as
+    required while any node could meet it, a new one too (`NewPodRequirements`). It
+    sorts them unstably, so of several of the heaviest weight which one it holds isn't
+    fixed: every one of them is held. Other autoscalers place by required terms only."""
+    base = [{"key": k, "operator": "In", "values": [v]} for k, v in need["selector"].items()]
+    if autoscaler == "karpenter" and need["preferred"]:
+        heaviest = max(p["weight"] for p in need["preferred"])
+        base += [e for p in need["preferred"] if p["weight"] == heaviest for e in p["match"]]
+    if not need["required"]:
+        return [base]
+    return [base + term for term in need["required"] if term]
+
+
+def fit(report: dict[str, Any] | None, autoscaler: str | None) -> Fits | str:
+    """Whether a moving pod may land on a node, by what it needs of one (audit A3), from
+    its cluster's usable `report`; or why that can't be told, so that no node goes. A pod
+    its Actuator names no need of lands anywhere; one it does, only on a node whose
+    labels it sent and that meets one of its terms. No usable report: anywhere, since no
+    node is clear without one."""
+    if report is None:
+        return lambda p, node: True
+    got = report.get("constraints")
+    if got is None:
+        return (
+            "its Actuator doesn't report what its pods need of a node (one from before "
+            "that, or a Hub that didn't ask): no node is counted as one that could go"
+        )
+    if got == "nodes_refused":
+        return (
+            "its Actuator may not read the nodes' labels (the optional ClusterRole "
+            "squero-actuator-nodes): no node is counted as one that could go"
+        )
+    if got == "cut":
+        return (
+            f"its Actuator had more than {MAX_NEEDED} pods' needs to report: no node is "
+            "counted as one that could go"
+        )
+    terms = [_terms(n, autoscaler) for n in report["needs"]]
+    needed, labels = report["needed"], report["labels"]
+
+    def fits(p: dict[str, Any], node: str) -> bool:
+        i = needed.get(f"{p['namespace']}/{p['pod']}")
+        if i is None:
+            return True
+        if node not in labels:
+            return False
+        return any(all(_holds(e, labels[node], node) for e in term) for term in terms[i])
+
+    return fits
 
 
 def after(read: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -738,7 +917,9 @@ def after(read: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {**read, "nodes": nodes}
 
 
-def could_go(read: dict[str, Any], verdict: dict[str, dict[str, Any]]) -> list[str] | None:
+def could_go(
+    read: dict[str, Any], verdict: dict[str, dict[str, Any]], fits: Fits | str
+) -> list[str] | None:
     """The nodes of a cluster's read that could be removed, by name, in the order the
     arithmetic lets them go: a node whose `verdict` is clear (so every pod on it is
     known, and none blocks), not a control-plane node, each of whose pods that would
@@ -747,14 +928,18 @@ def could_go(read: dict[str, Any], verdict: dict[str, dict[str, Any]]) -> list[s
     under a condition taint) and isn't going itself. Fewest requests first, the largest
     pod placed first, each on the first node by name with room, and what a node
     receives is no longer free for the next;
-    a node that received pods and then goes itself must find room for those too.
+    a node that received pods and then goes itself must find room for those too. A pod
+    lands only where `fits` lets it (audit A3: what it needs of a node); none goes where
+    that can't be told (`fits` says why).
 
-    An upper bound: affinity, spread and tolerations can't be seen. A node without its
+    An upper bound: spread and tolerations can't be seen. A node without its
     allocatable or its pod slots neither goes nor receives. None for a read from before
     15.4, which lacks what this goes by."""
     nodes = read.get("nodes") or []
     if any("slots" not in n or any("containers" not in p for p in n["own"]) for n in nodes):
         return None
+    if isinstance(fits, str):
+        return []
 
     def whole(n: dict[str, Any]) -> bool:
         return n["slots"] is not None and all(r in n["allocatable"] for r in ("cpu", "memory"))
@@ -803,7 +988,10 @@ def could_go(read: dict[str, Any], verdict: dict[str, dict[str, Any]]) -> list[s
                 (
                     other
                     for other, left in room.items()
-                    if left[0] >= p["cpu"] - 1e-9 and left[1] >= p["memory"] - 1e-9 and left[2] >= 1
+                    if left[0] >= p["cpu"] - 1e-9
+                    and left[1] >= p["memory"] - 1e-9
+                    and left[2] >= 1
+                    and fits(p, other)
                 ),
                 None,
             )

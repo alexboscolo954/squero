@@ -949,4 +949,5 @@ def test_the_autoscalers_own_settings_are_named_for_the_cluster_it_names() -> No
         "spec.disruption.consolidationPolicy",
         "spec.disruption.consolidateAfter",
         "spec.disruption.budgets",
+        "SpotToSpotConsolidation",  # audit A3
     ]

@@ -1,0 +1,369 @@
+"""What a pod needs of a node (audit A3, the Hub's side): its Actuator reports each pod's
+nodeSelector and node affinity with the nodes' labels, and a pod that would move fits only
+on a node meeting them: Part A's three refusals by Karpenter first."""
+
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+
+from squero import blockers, sizing
+from squero.config import Settings
+from tests.test_actuator import A_TOKEN, B_TOKEN, actuated, as_actuator, hub, sql
+from tests.test_blockers import a_pod, a_report
+from tests.test_could_go import FRESH, node, pod, read_of
+from tests.test_sizing_store import NOW
+
+KARPENTER, CA = "karpenter", "cluster-autoscaler"
+NEEDS = ("constraints", "needs", "needed", "labels")
+BARE = {k: v for k, v in FRESH.items() if k not in NEEDS}  # an Actuator from before A3
+SPOT = "karpenter.sh/capacity-type"
+
+
+def expr(key: str, op: str, *values: str, field: bool = False) -> dict[str, Any]:
+    return {"key": key, "operator": op, "values": list(values), "field": field}
+
+
+def need(
+    selector: dict[str, str] | None = None,
+    required: list[list[dict[str, Any]]] | None = None,
+    preferred: list[tuple[int, list[dict[str, Any]]]] | None = None,
+) -> dict[str, Any]:
+    prefs = [{"weight": w, "match": m} for w, m in preferred or []]
+    return {"selector": selector or {}, "required": required or [], "preferred": prefs}
+
+
+def told(
+    needs: dict[str, dict[str, Any]], labels: dict[str, dict[str, str]], **more: Any
+) -> dict[str, Any]:
+    """A fresh report whose pods (`shop/<pod>`) need these, with the nodes' labels."""
+    distinct = list(needs.values())
+    needed = {f"shop/{p}": distinct.index(n) for p, n in needs.items()}
+    body = {"constraints": "read", "needs": distinct, "needed": needed, "labels": labels}
+    return FRESH | body | more
+
+
+def go(nodes: list[dict[str, Any]], report: dict[str, Any], autoscaler: str | None) -> Any:
+    verdict = {n["node"]: {"state": "clear"} for n in nodes}
+    return blockers.could_go(read_of(*nodes), verdict, blockers.fit(report, autoscaler))
+
+
+# --- Part A's three -----------------------------------------------------------------------
+
+
+def test_a_pod_preferring_spot_keeps_its_spot_node_under_karpenter_only() -> None:
+    """Karpenter holds the heaviest preference as required while a new spot node could
+    meet it: "SpotToSpotConsolidation is disabled" kept the spot node. Cluster Autoscaler
+    places by requirements alone."""
+    spot = node("spot-1", pod("web-1", 0.5))
+    on_demand = node("od-1", pod("web-2", 3.0))
+    report = told(
+        {"web-1": need(preferred=[(1, [expr(SPOT, "In", "spot")])])},
+        {"spot-1": {SPOT: "spot"}, "od-1": {SPOT: "on-demand"}},
+    )
+    assert go([spot, on_demand], report, KARPENTER) == ["od-1"]  # web-2 needs nothing
+    assert go([spot, on_demand], report, CA) == ["spot-1"]
+    another = node("spot-2", pod("web-3", 3.0))  # an existing spot node with room: deleted
+    with_spot = told(report_needs(report), report["labels"] | {"spot-2": {SPOT: "spot"}})
+    assert go([spot, on_demand, another], with_spot, KARPENTER) == ["spot-1"]
+
+
+def report_needs(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {key.partition("/")[2]: report["needs"][i] for key, i in report["needed"].items()}
+
+
+def test_a_node_selector_keeps_pods_off_nodes_without_its_label() -> None:
+    """web's `karpenter.sh/nodepool: default`: "Can't replace with a cheaper node"."""
+    pool = "karpenter.sh/nodepool"
+    od = node("od-1", pod("web-1", 0.5))
+    system = node("sys-1", pod("dns", 0.5))
+    report = told({"web-1": need({pool: "default"})}, {"od-1": {pool: "default"}, "sys-1": {}})
+    assert go([od, system], report, KARPENTER) == ["sys-1"]  # dns needs nothing: it moves
+    labelled = told({"web-1": need({pool: "default"})}, {"sys-1": {pool: "default"}})
+    assert go([od, system], labelled, KARPENTER) == ["od-1"]  # then dns has nowhere left
+
+
+def test_a_required_not_in_keeps_a_pod_off_the_nodes_it_names() -> None:
+    """keeper's `role NotIn [system]`: never onto a system node, onto any other."""
+    off_system = need(required=[[expr("role", "NotIn", "system")]])
+    a, system = node("a", pod("keeper", 0.5)), node("sys", pod("s1", 1.0))
+    report = told({"keeper": off_system}, {"a": {}, "sys": {"role": "system"}})
+    assert go([a, system], report, CA) == ["sys"]  # s1 needs nothing: it moves to a
+    worker = node("w", pod("w1", 3.0))
+    report = told({"keeper": off_system}, {"a": {}, "sys": {"role": "system"}, "w": {}})
+    assert go([a, system, worker], report, CA) == ["a"]  # keeper onto w
+
+
+# --- the scheduler's reading ------------------------------------------------------------
+
+
+def holds(e: dict[str, Any], labels: dict[str, str], name: str = "n1") -> bool:
+    return blockers._holds(e, labels, name)
+
+
+@pytest.mark.parametrize(
+    ("e", "labels", "expected"),
+    [
+        (expr("k", "In", "a", "b"), {"k": "b"}, True),
+        (expr("k", "In", "a"), {"k": "b"}, False),
+        (expr("k", "In", "a"), {}, False),
+        (expr("k", "NotIn", "a"), {"k": "b"}, True),
+        (expr("k", "NotIn", "a"), {"k": "a"}, False),
+        (expr("k", "NotIn", "a"), {}, True),  # a label it lacks meets NotIn
+        (expr("k", "Exists"), {"k": ""}, True),
+        (expr("k", "Exists"), {}, False),
+        (expr("k", "DoesNotExist"), {}, True),
+        (expr("k", "DoesNotExist"), {"k": "x"}, False),
+        (expr("k", "Gt", "4"), {"k": "5"}, True),
+        (expr("k", "Gt", "5"), {"k": "5"}, False),
+        (expr("k", "Lt", "5"), {"k": "4"}, True),
+        (expr("k", "Lt", "4"), {"k": "4"}, False),
+        (expr("k", "Gt", "4"), {}, False),  # no label: no number
+        (expr("k", "Lt", "4"), {}, False),  # nor taken as 0
+        (expr("k", "Gt", "4"), {"k": "big"}, False),
+        (expr("k", "Gt"), {"k": "5"}, False),  # no value given
+        (expr("metadata.name", "In", "n1", field=True), {"metadata.name": "n2"}, True),
+        (expr("metadata.name", "NotIn", "n1", field=True), {}, False),
+    ],
+)
+def test_each_operator_reads_as_the_scheduler_reads_it(
+    e: dict[str, Any], labels: dict[str, str], expected: bool
+) -> None:
+    assert holds(e, labels) is expected
+
+
+def fits_on(n: dict[str, Any], labels: dict[str, str], autoscaler: str | None = CA) -> bool:
+    report = told({"p": n}, {"n1": labels})
+    check = blockers.fit(report, autoscaler)
+    assert not isinstance(check, str)
+    return check({"namespace": "shop", "pod": "p"}, "n1")
+
+
+def test_a_selector_and_a_term_both_hold_and_one_term_of_several_is_enough() -> None:
+    both = need({"zone": "a"}, [[expr("disk", "In", "ssd")], [expr("gpu", "Exists")]])
+    assert fits_on(both, {"zone": "a", "disk": "ssd"})
+    assert fits_on(both, {"zone": "a", "gpu": "1"})
+    assert not fits_on(both, {"zone": "b", "disk": "ssd"})  # the selector holds in every term
+    assert not fits_on(both, {"zone": "a"})
+    every = need(required=[[expr("disk", "In", "ssd"), expr("zone", "In", "a")]])
+    assert not fits_on(every, {"disk": "ssd"})  # every expression of a term
+
+
+def test_an_empty_required_term_meets_no_node() -> None:
+    assert not fits_on(need(required=[[]]), {})
+    assert fits_on(need(required=[[], [expr("k", "Exists")]]), {"k": "x"})
+
+
+def test_karpenter_holds_every_one_of_the_heaviest_preferences_and_no_lighter_one() -> None:
+    """It sorts them unstably: of two as heavy, which one it holds isn't fixed."""
+    prefs = [
+        (10, [expr("zone", "In", "a")]),
+        (50, [expr("disk", "In", "ssd")]),
+        (50, [expr("gpu", "Exists")]),  # as heavy
+    ]
+    p = need(preferred=prefs)
+    assert fits_on(p, {"disk": "ssd", "gpu": "1"}, KARPENTER)  # no zone needed
+    assert not fits_on(p, {"disk": "ssd"}, KARPENTER)
+    assert not fits_on(p, {"gpu": "1", "zone": "a"}, KARPENTER)
+    assert fits_on(p, {}, CA) and fits_on(p, {}, None)  # preferences place nothing there
+    held = need(
+        {"pool": "x"}, [[expr("role", "NotIn", "system")]], [(1, [expr(SPOT, "In", "spot")])]
+    )
+    assert fits_on(held, {"pool": "x", SPOT: "spot"}, KARPENTER)
+    assert not fits_on(held, {"pool": "x", SPOT: "on-demand"}, KARPENTER)
+    assert not fits_on(held, {"pool": "x", SPOT: "spot", "role": "system"}, KARPENTER)
+
+
+def test_a_pod_with_no_need_lands_anywhere_and_one_with_a_need_only_on_a_node_with_labels() -> None:
+    report = told({"p": need({"k": "v"})}, {"n1": {"k": "v"}})
+    check = blockers.fit(report, CA)
+    assert not isinstance(check, str)
+    assert check({"namespace": "shop", "pod": "free"}, "unlabelled")
+    assert check({"namespace": "shop", "pod": "p"}, "n1")
+    assert not check({"namespace": "shop", "pod": "p"}, "unlabelled")  # not seen: no match
+    assert check({"namespace": "bank", "pod": "p"}, "unlabelled")  # keyed by namespace too
+
+
+# --- when it can't be told -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("constraints", "said"),
+    [
+        (None, "its Actuator doesn't report what its pods need of a node"),
+        ("nodes_refused", "its Actuator may not read the nodes' labels"),
+        ("cut", f"its Actuator had more than {blockers.MAX_NEEDED} pods' needs to report"),
+    ],
+)
+def test_no_node_goes_where_what_pods_need_is_not_known_and_the_page_says_why(
+    constraints: str | None, said: str
+) -> None:
+    report = BARE | ({"constraints": constraints} if constraints else {})
+    c = actuated("acme", A_TOKEN)
+    read = read_of(node("a", pod("a1")), node("b", pod("b1")))
+    (shown, *_) = sizing.nodes_report({"test": read}, c, {"test": report}, NOW)
+    assert shown["could_go"]["now"]["nodes"] == shown["could_go"]["after"]["nodes"] == []
+    assert shown["could_go"]["note"].startswith(said)
+    assert shown["judged"]["clear"] == 2  # judged, and still none counted
+    known = FRESH | {"constraints": "read", "needs": [], "needed": {}, "labels": {}}
+    (fine, *_) = sizing.nodes_report({"test": read}, c, {"test": known}, NOW)
+    assert fine["could_go"]["now"]["nodes"] == ["a"] and fine["could_go"]["note"] is None
+
+
+def test_no_usable_report_lets_any_pod_land_anywhere() -> None:
+    check = blockers.fit(None, KARPENTER)
+    assert not isinstance(check, str) and check({"namespace": "shop", "pod": "p"}, "n")
+
+
+# --- restart advice ----------------------------------------------------------------------
+
+
+def test_a_restart_is_not_advised_when_a_pod_needs_what_no_pinned_node_has() -> None:
+    pins = {"pin"}
+    pinned = node("pin", cores=8.0, gib=32.0)
+    moving = node("a", pod("db-1", 1.0, workload=("StatefulSet", "db")))
+    read = read_of(pinned, moving)
+    found = [{"namespace": "shop", "pod": "db-1", "placement": "shop/StatefulSet/db"}]
+    selector = told({"db-1": need({"disk": "ssd"})}, {"pin": {}, "a": {"disk": "ssd"}})
+    got = blockers._restart(found, read, pins, "pool=pinned", blockers.fit(selector, CA))
+    assert got == {
+        "workloads": [],
+        "why_not": "pod shop/db-1 needs of a node what no pinned node has (its nodeSelector "
+        "or node affinity)",
+    }
+    met = told({"db-1": need({"disk": "ssd"})}, {"pin": {"disk": "ssd"}})
+    ok = blockers._restart(found, read, pins, "pool=pinned", blockers.fit(met, CA))
+    assert ok == {"workloads": ["shop/StatefulSet/db"], "why_not": None}
+    unknown = blockers._restart(found, read, pins, "pool=pinned", blockers.fit(BARE, CA))
+    assert unknown["why_not"] == (
+        "its Actuator doesn't report what its pods need of a node (one from before that, "
+        "or a Hub that didn't ask)"
+    )
+
+
+# --- the report ------------------------------------------------------------------------
+
+
+def test_the_hub_asks_for_what_pods_need_under_the_kill_switch_too(
+    settings: Settings, database_url: str
+) -> None:
+    with TestClient(hub(settings, database_url, actuated("acme", A_TOKEN))) as c:
+        got = c.get("/actuator/desired", headers=as_actuator(A_TOKEN)).json()
+        sql(database_url, ("insert into kill_switches values ('acme', 't', 1)", ()))
+        killed = c.get("/actuator/desired", headers=as_actuator(A_TOKEN)).json()
+    assert got["constraints"] is True and killed["constraints"] is True
+
+
+GOOD = {
+    "constraints": "read",
+    "needs": [
+        need(
+            {"karpenter.sh/nodepool": "default"},
+            [[expr("role", "NotIn", "system"), expr("metadata.name", "In", "n1", field=True)]],
+            [(100, [expr("squero.io/pinned", "In", "yes")])],
+        )
+    ],
+    "needed": {"shop/api-1": 0},
+    "labels": {"n1": {"karpenter.sh/nodepool": "default", "role": "worker"}},
+}
+
+
+@pytest.mark.parametrize(
+    ("change", "field"),
+    [
+        ({"needed": {"shop/api-1": 1}}, "needed"),  # no such need
+        ({"needed": {"shop/api-1": -1}}, "needed"),
+        ({"needed": {"shop/" + "p" * 254: 0}}, "needed"),
+        ({"labels": {"n" * 254: {}}}, "labels"),
+        (
+            {"needs": [need(required=[[expr("metadata.name", "In", "n" * 254, field=True)]])]},
+            "needs",
+        ),
+        ({"needed": {"shop/API": 0}}, "needed"),
+        ({"labels": {"N1": {}}}, "labels"),
+        ({"labels": {"n1": {"bad key!": "x"}}}, "labels"),
+        ({"labels": {"n1": {"k": "-x"}}}, "labels"),
+        ({"labels": {"n1": {f"k{i}": "v" for i in range(101)}}}, "labels"),
+        ({"needs": [need({"k": "v" * 64})]}, "needs"),
+        ({"needs": [need({".".join(["a" * 60] * 5) + "/" + "k" * 20: "v"})]}, "needs"),  # 325
+        ({"needs": [need(required=[[expr("bad key!", "Exists")]])]}, "needs"),
+        ({"needs": [need(required=[[expr("labels.x", "In", "n1", field=True)]])]}, "needs"),
+        ({"needs": [need(required=[[expr("metadata.name", "In", "N1", field=True)]])]}, "needs"),
+        ({"needs": [need(preferred=[(1, [expr("k", "In", "-v")])])]}, "needs"),
+    ],
+)
+def test_a_need_no_actuator_sends_is_refused_and_named(
+    settings: Settings, database_url: str, change: dict[str, Any], field: str
+) -> None:
+    with TestClient(hub(settings, database_url, actuated("acme", A_TOKEN))) as c:
+        post = lambda body: c.post(  # noqa: E731
+            "/actuator/blockers", headers=as_actuator(A_TOKEN), json=body
+        )
+        assert post(a_report(a_pod(), **GOOD)).status_code == 204
+        odd = post(a_report(a_pod(), **(GOOD | change)))
+    assert odd.status_code == 422 and odd.json()["detail"] == f"not what an Actuator sends: {field}"
+
+
+def test_a_need_of_a_pod_outside_the_clusters_namespaces_is_refused(
+    settings: Settings, database_url: str
+) -> None:
+    with TestClient(hub(settings, database_url, actuated("acme", A_TOKEN))) as c:
+        r = c.post(
+            "/actuator/blockers",
+            headers=as_actuator(A_TOKEN),
+            json=a_report(**(GOOD | {"needed": {"bank/api-1": 0}})),
+        )
+    assert (
+        r.status_code == 422 and r.json()["detail"] == "namespaces not in cluster 'test': ['bank']"
+    )
+
+
+def test_needs_are_sent_only_when_read_so_an_older_hub_takes_the_report() -> None:
+    plain = blockers.Report(at=NOW, namespaces=["shop"], pods=[])
+    assert not {"constraints", "needs", "needed", "labels"} & set(blockers.sent(plain))
+    full = blockers.Report.model_validate(a_report(**GOOD))
+    assert blockers.sent(full)["needed"] == {"shop/api-1": 0}
+
+
+def test_each_contracts_needs_stay_its_own(settings: Settings, database_url: str) -> None:
+    """Two Contracts' Actuators on clusters of one name: each report, with its needs and
+    its nodes' labels, is stored as its own token's only."""
+    acme, bank = actuated("acme", A_TOKEN), actuated("bank", B_TOKEN)
+    theirs = GOOD | {"labels": {"n1": {"bank-only": "yes"}}}
+    with TestClient(hub(settings, database_url, acme, bank)) as c:
+        for token, body in ((A_TOKEN, GOOD), (B_TOKEN, theirs)):
+            c.post("/actuator/blockers", headers=as_actuator(token), json=a_report(**body))
+    rows = sql(database_url, ("select contract_id, report from cluster_blockers order by 1", ()))
+    assert [(cid, r["labels"]) for cid, r in rows] == [
+        ("acme", GOOD["labels"]),
+        ("bank", theirs["labels"]),
+    ]
+
+
+def test_a_nodes_restart_advice_goes_by_what_its_pods_need() -> None:
+    """Through the verdicts: a placed pod needing a label no pinned node has is never
+    advised onto one."""
+    from tests.test_placement import KEEP, facts, pinned, restart
+    from tests.test_placement import report as placing_report
+
+    rep = placing_report(facts("api-1", "b", annotations=KEEP), placing=True)
+    a, b = pinned(node("a")), node("b", pod("api-1"))
+    assert restart(rep, a, b) == {"workloads": ["shop/Deployment/api"], "why_not": None}
+    needy = rep | {"needs": [need({"disk": "ssd"})], "needed": {"shop/api-1": 0}}
+    needy |= {"labels": {"a": {}, "b": {"disk": "ssd"}}}
+    assert restart(needy, a, b)["why_not"].startswith("pod shop/api-1 needs of a node")
+
+
+def test_restart_advice_goes_by_requirements_alone_under_karpenter_too() -> None:
+    """A restarted pod is placed by the scheduler, where its own preference only scores:
+    a zone it prefers that no pinned node is in doesn't stop the advice."""
+    from tests.test_placement import facts, pinned, verdict
+    from tests.test_placement import report as placing_report
+
+    kept = {blockers.DO_NOT_DISRUPT: "true"}  # Karpenter's Blocker
+    rep = placing_report(facts("api-1", "b", annotations=kept), placing=True)
+    zoned = rep | {"needs": [need(preferred=[(100, [expr("zone", "In", "a")])])]}
+    zoned |= {"needed": {"shop/api-1": 0}, "labels": {"a": {}, "b": {"zone": "a"}}}
+    a, b = pinned(node("a")), node("b", pod("api-1"))
+    got = verdict(zoned, a, b, autoscaler=KARPENTER)["b"]["restart"]
+    assert got == {"workloads": ["shop/Deployment/api"], "why_not": None}

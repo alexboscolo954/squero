@@ -372,6 +372,9 @@ class Desired(BaseModel):
     # sent under the Kill switch too (a read is no change). None, as from an older Hub:
     # nothing is reported
     blockers: list[str] | None = None
+    # audit A3: report, with them, what those pods need of a node and the nodes' labels it
+    # names. False, as from an older Hub, whose report refuses fields it doesn't know
+    constraints: bool = False
     # slice 15.2a: the cluster's Placement; None: off (as from an older Hub). Not sent
     # under the Kill switch, where the Actuator keeps what it had and places nothing
     placement: Placing | None = None

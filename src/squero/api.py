@@ -1918,7 +1918,9 @@ def create_app(
             await store().actuator_types(cid, cluster.name, types, time.time())
             knows[(cid, cluster.name)] = types
         if await store().kill_switch(cid) is not None:  # a read is no change: slice 15.1b
-            return actuator.Desired(kill_switch=True, sizings=[], blockers=cluster.namespaces)
+            return actuator.Desired(
+                kill_switch=True, sizings=[], blockers=cluster.namespaces, constraints=True
+            )
         reverted = await store().reverted(cid, cluster.name)  # an approval before it is undone
         approved = [
             actuator.Wanted.model_validate({**a, "types": of})
@@ -1954,6 +1956,7 @@ def create_app(
             node_types=node_types,
             placement=await placement(cid, cluster),
             spot=await spotting(cid, cluster),
+            constraints=True,  # audit A3: and what its pods need of a node
             blockers=cluster.namespaces,  # slice 15.1b: where to report Blockers' facts of
             eviction=by_id[cid].actuator.evicting(datetime.now(UTC)),
             sizings=approved,
@@ -2017,6 +2020,7 @@ def create_app(
         if len(report.pods) > blockers.MAX_PODS:
             raise HTTPException(413, f"at most {blockers.MAX_PODS} pods in a report")
         named = {p.namespace for p in report.pods} | set(report.namespaces)
+        named |= {key.partition("/")[0] for key in report.needed}  # audit A3
         outside = sorted(named - set(cluster.namespaces))
         if outside:
             raise HTTPException(422, f"namespaces not in cluster {cluster.name!r}: {outside}")

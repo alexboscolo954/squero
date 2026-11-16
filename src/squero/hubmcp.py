@@ -514,9 +514,10 @@ def build(
     ) -> dict[str, Any]:
         """The Contract's nodes as the Hub's latest hourly run read them. Per cluster:
         could_go, the nodes that could be removed `now` and `after` its Sizings are
-        applied, with their capacity and monthly cost: an upper bound (affinity and
-        spread rules are not seen) and a figure of its own, never part of Savings or
-        waste; None when the read can't say. judged: how many nodes are blocked, clear
+        applied, with their capacity and monthly cost: an upper bound (spread rules and
+        tolerations are not seen; a pod moves only where its node affinity lets it) and a
+        figure of its own, never part of Savings or waste; its note says why none is
+        counted; None when the read can't say. judged: how many nodes are blocked, clear
         or unknown (or pinned), so "none could go" of nodes nobody judged is no finding.
         spot: where the cluster names spot nodes, their label, the discount they are priced
         at (the share of on-demand they cost) and how many nodes carry it; each node says

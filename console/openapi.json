@@ -3475,6 +3475,17 @@
           "after": {
             "$ref": "#/components/schemas/CouldGo"
           },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
           "now": {
             "$ref": "#/components/schemas/CouldGo"
           }

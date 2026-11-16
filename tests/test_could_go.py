@@ -57,6 +57,10 @@ def node(
     return n | {"bound": sum(p["bound"] for p in own)}
 
 
+def ANYWHERE(p: dict[str, Any], node: str) -> bool:  # what pods need of a node: nothing
+    return True
+
+
 def read_of(*nodes: dict[str, Any]) -> dict[str, Any]:
     return {"nodes": list(nodes), "problem": None, "budgets": [], "at": NOW}
 
@@ -64,7 +68,7 @@ def read_of(*nodes: dict[str, Any]) -> dict[str, Any]:
 def go(*nodes: dict[str, Any], **states: str) -> list[str] | None:
     """The nodes that could go, every node clear but the ones given another verdict."""
     verdict = {n["node"]: {"state": states.get(n["node"], "clear")} for n in nodes}
-    return blockers.could_go(read_of(*nodes), verdict)
+    return blockers.could_go(read_of(*nodes), verdict, ANYWHERE)
 
 
 # --- the fit ---------------------------------------------------------------------------
@@ -319,17 +323,21 @@ def test_a_node_that_cannot_go_now_may_go_after_the_sizings() -> None:
     a, b = node("a", pod("a1", 2.0)), node("b", pod("b1", 3.0, workload=("Deployment", "web")))
     read = read_of(a, b)
     verdict = {"a": {"state": "clear"}, "b": {"state": "blocked"}}
-    assert blockers.could_go(read, verdict) == []
-    assert blockers.could_go(blockers.after(read, [sizing_row(cpu=1.0)]), verdict) == ["a"]
+    assert blockers.could_go(read, verdict, ANYWHERE) == []
+    assert blockers.could_go(blockers.after(read, [sizing_row(cpu=1.0)]), verdict, ANYWHERE) == [
+        "a"
+    ]
     # and the other way: a Sizing that asks more fills the room another node had
     raised = blockers.after(read_of(node("a", pod("a1", 0.5)), b), [sizing_row(cpu=1.5)])
-    assert blockers.could_go(read_of(node("a", pod("a1", 0.5)), b), verdict) == ["a"]
-    assert blockers.could_go(raised, verdict) == []
+    assert blockers.could_go(read_of(node("a", pod("a1", 0.5)), b), verdict, ANYWHERE) == ["a"]
+    assert blockers.could_go(raised, verdict, ANYWHERE) == []
 
 
 # --- priced, and counted ----------------------------------------------------------------
 
 FRESH = {"received": NOW, "at": NOW, "namespaces": ["shop"], "truncated": False, "pods": []}
+# audit A3: its Actuator reports what its pods need of a node, here nothing
+FRESH |= {"constraints": "read", "needs": [], "needed": {}, "labels": {}}
 
 
 def reported(
@@ -355,6 +363,7 @@ def test_the_nodes_that_could_go_come_with_their_capacity_now_and_after() -> Non
         "now": {"nodes": [], "cpu": 0, "memory": 0, "cost": None},
         # its capacity, which is what it is priced at, not its allocatable
         "after": {"nodes": ["a"], "cpu": 4.1, "memory": 16.5 * GI, "cost": None},
+        "note": None,
     }
     (plain, *_) = sizing.nodes_report({"test": read_of(a, b)}, c, report, NOW)  # no Sizings
     assert plain["could_go"]["after"] == plain["could_go"]["now"]

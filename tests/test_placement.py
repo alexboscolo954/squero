@@ -14,7 +14,7 @@ from squero import blockers, contracts, hubmcp, sizing, usage, webapp
 from squero.blockers import DO_NOT_DISRUPT, SAFE
 from squero.config import Settings
 from tests.test_actuator import A_TOKEN, B_TOKEN, actuated, as_actuator, hub, sql
-from tests.test_could_go import node, pod
+from tests.test_could_go import ANYWHERE, node, pod
 from tests.test_could_go import read_of as plain_read
 from tests.test_nodes import SHOP, _prom, cluster
 from tests.test_nodes import node as prom_node
@@ -40,7 +40,9 @@ def facts(pod_: str, on: str, ns: str = "shop", **more: Any) -> dict[str, Any]:
 
 
 def report(*pods: dict[str, Any], **more: Any) -> dict[str, Any]:
-    return {"received": NOW, "at": NOW, "namespaces": ["shop"], "pods": list(pods), **more}
+    rep = {"received": NOW, "at": NOW, "namespaces": ["shop"], "pods": list(pods)}
+    # audit A3: its Actuator reports what its pods need of a node, here nothing
+    return rep | {"constraints": "read", "needs": [], "needed": {}, "labels": {}} | more
 
 
 def pinned(n: dict[str, Any]) -> dict[str, Any]:
@@ -236,9 +238,11 @@ def test_the_list_is_every_placed_workload_pinned_nodes_included() -> None:
 def test_a_pinned_node_neither_goes_nor_receives() -> None:
     a, b, c = pinned(node("a")), node("b", pod("b1", 0.5)), node("c", pod("c1", 3.9))
     states = {"a": {"state": "pinned"}, "b": {"state": "clear"}, "c": {"state": "blocked"}}
-    assert blockers.could_go(read_of(a, b, c), states) == []  # b's pod fits only on a
+    assert blockers.could_go(read_of(a, b, c), states, ANYWHERE) == []  # b's pod fits only on a
     states["a"] = {"state": "clear"}
-    assert blockers.could_go(read_of(a, b, c), states) == ["a"]  # then b's pod has no room
+    assert blockers.could_go(read_of(a, b, c), states, ANYWHERE) == [
+        "a"
+    ]  # then b's pod has no room
 
 
 # --- what frees a node ------------------------------------------------------------------

@@ -898,7 +898,7 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
         clusters: [
           { cluster: "kind", at: 1_700_000_000, autoscaler: "karpenter", problem: null, largest: { cpu: 7.5, memory: 30 * GI },
             rules: "Karpenter's rules", reported: 1_700_000_600, settings: ["NodePool spec.disruption.budgets (10% of nodes by default)"], judged: { clear: 1, blocked: 1, unknown: 1 },
-            could_go: { now: { nodes: ["n2"], cpu: 4, memory: 16 * GI, cost: 120 }, after: { nodes: ["n2", "n<b>4</b>"], cpu: 8, memory: 32 * GI, cost: null } },
+            could_go: { now: { nodes: ["n2"], cpu: 4, memory: 16 * GI, cost: 120 }, after: { nodes: ["n2", "n<b>4</b>"], cpu: 8, memory: 32 * GI, cost: null }, note: "its Actuator may not read the <b>labels</b>" },
             nodes: [
               { ...node, node: "n2", verdict: { state: "clear", why: null, blockers: [] }, allocatable: { cpu: 4, memory: 16 * GI }, requests: { cpu: 0, memory: 0 },
                 room: { cpu: 4, memory: 16 * GI }, mine: { pods: 0, cpu: 0, memory: 0 }, others: { pods: 0, cpu: 0, memory: 0 }, own: [] },
@@ -941,7 +941,9 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
   const could = kind?.querySelector(".could-go")?.textContent;
   expect(could).toContain("Could go now: up to 1 (n2), 120.00 EUR/month.");
   expect(could).toContain("After the Sizings: up to 2 (n2, n<b>4</b>), 8.00 cores, 32.00 GiB.");
-  expect(could).toContain("An upper bound: affinity and spread rules can't be seen. Not part of Savings. 1 of 3 nodes not judged.");
+  expect(could).toContain("An upper bound: tolerations and spread rules can't be seen. Not part of Savings. 1 of 3 nodes not judged.");
+  // audit A3: why none is counted, as text
+  expect(could).toContain("None counted: its Actuator may not read the <b>labels</b>.");
   expect(page.querySelector(".could-go b")).toBeNull();
   expect(edge?.querySelector(".could-go")).toBeNull();
   const cells = [...(kind?.querySelectorAll("tbody tr:last-child td") ?? [])].map((td) => td.textContent);

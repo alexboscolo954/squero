@@ -166,8 +166,9 @@ export function NodesPage({ contract }: { contract: string }) {
                   </span>
                 );
               })}{" "}
+              {c.could_go.note && <span className="hint"> None counted: {c.could_go.note}.</span>}{" "}
               <span className="hint">
-                An upper bound: affinity and spread rules can't be seen. Not part of Savings.
+                An upper bound: tolerations and spread rules can't be seen. Not part of Savings.
                 {(c.judged.unknown ?? 0) > 0 && ` ${c.judged.unknown} of ${c.nodes.length} nodes not judged.`}
               </span>
             </p>

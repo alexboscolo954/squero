@@ -1617,6 +1617,8 @@ export interface components {
         /** Scenarios */
         Scenarios: {
             after: components["schemas"]["CouldGo"];
+            /** Note */
+            note?: string | null;
             now: components["schemas"]["CouldGo"];
         };
         /**

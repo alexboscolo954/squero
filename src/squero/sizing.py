@@ -795,17 +795,19 @@ def nodes_report(
         report = (reports or {}).get(cl.name)
         verdict = blockers.verdicts(read, report, cl, now)
         went = None
-        first = None if read.get("problem") else blockers.could_go(read, verdict)
+        usable = report if report and not blockers.gap(report, cl, now) else None
+        fits = blockers.fit(usable, cl.autoscaler)  # audit A3: what its pods need of a node
+        first = None if read.get("problem") else blockers.could_go(read, verdict, fits)
         if first is not None:
             sized = [r for r in rows or [] if r["cluster"] == cl.name]
-            later = blockers.could_go(blockers.after(read, sized), verdict) or []
+            later = blockers.could_go(blockers.after(read, sized), verdict, fits) or []
             price, rate = c.price(cl.name), rates(read, c, cl.name)
             went = {
                 "now": _worth(first, read, price, rate),
                 "after": _worth(later, read, price, rate),
+                "note": fits if isinstance(fits, str) else None,
             }
         blocking = blocking_of(read, report, cl, now)  # slice 16.1c
-        usable = report if report and not blockers.gap(report, cl, now) else None
         # slice 16.3a: the CronJobs its Actuator reported it doesn't steer, and why, only
         # ever looked up by the read's own CronJobs: another namespace's key shows nowhere
         skipped: dict[str, str] = (usable or {}).get("spot_skipped") or {}
