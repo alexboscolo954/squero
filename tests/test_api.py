@@ -90,12 +90,15 @@ def client(
 
 
 def wait_for(c: TestClient, investigation_id: str, status: str) -> dict[str, Any]:
-    for _ in range(100):
+    # 15 s, not 2: a loaded CI runner once took longer than 2 s to run a scripted triage
+    deadline = time.monotonic() + 15
+    while True:
         t: dict[str, Any] = c.get(f"/investigations/{investigation_id}", headers=AUTH).json()
         if t["status"] == status:
             return t
+        if time.monotonic() > deadline:
+            raise AssertionError(f"triage stuck in {t['status']}: {t}")
         time.sleep(0.02)
-    raise AssertionError(f"triage stuck in {t['status']}: {t}")
 
 
 def test_refuses_to_start_without_token_contracts_or_database(settings: Settings) -> None:
