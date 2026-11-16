@@ -499,3 +499,23 @@ def test_no_node_could_go_until_the_nodes_are_read_with_the_label(label: str | N
 def test_karpenters_consolidate_after_names_a_cronjobs_node() -> None:
     (said,) = [s for s in blockers.SETTINGS[KARPENTER] if "consolidateAfter" in s]
     assert "CronJob" in said and "never consolidated" in said
+
+
+def test_a_placed_blocker_gets_no_change_where_no_node_shows_the_label() -> None:
+    """Audit A5b: with the label unseen, the Pinned node can't be told, and the change
+    offered would undo what keeps its placed pod there on purpose."""
+    rep = report(facts("api-1", "a", annotations=KEEP), facts("job-1", "a", kind=""))
+    a = node("a", pod("api-1"), pod("job-1", workload=None))
+    got = verdict(rep, a)["a"]
+    assert got["state"] == "blocked"
+    placed_, other = got["blockers"]
+    assert placed_["placement"] == "shop/Deployment/api" and placed_["changes"] == []
+    assert placed_["note"] == (
+        "its node may be a Pinned node, which keeps it on purpose: no node shows "
+        "squero.io/pinned=yes"
+    )
+    assert other["placement"] is None and other["changes"] and other["note"] is None
+    seen = verdict(rep, a, pinned(node("p")))["a"]["blockers"][0]
+    assert seen["changes"] and seen["note"] is None  # a's not a Pinned node: as before
+    plain = verdict(rep, a, placement=None)["a"]["blockers"][0]
+    assert plain["changes"] and "note" not in plain

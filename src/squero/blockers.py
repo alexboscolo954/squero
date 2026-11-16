@@ -635,7 +635,8 @@ def verdicts(
     Workload it is placed by (`placement`), from a usable report only, and one that
     carries the preference but runs elsewhere says so (`note`); and once the Actuator
     places (`report.placing`), a blocked node says which Workloads to restart to free
-    it, or why that wouldn't (`restart`)."""
+    it, or why that wouldn't (`restart`). Where no node shows the label (audit A5b), any
+    node may be a Pinned one: a placed pod's Blocker gets no change, and says why."""
     missing = gap(report, cluster, now)
     if not missing:
         read = known(read, report, cluster)
@@ -701,6 +702,15 @@ def verdicts(
             out[n["node"]] = {"state": "pinned", "why": None, "blockers": kept}
         elif v["state"] == "blocked" and not missing and report and report.get("placing"):
             v["restart"] = _restart(v["blockers"], read, pins, cluster.placement.label, fits)
+        if not pins:  # audit A5b: any node may be a Pinned one, its placed pods kept there
+            label = cluster.placement.label
+            said = (
+                f"its node may be a Pinned node, which keeps it on purpose: no node shows {label}"
+            )
+            v["blockers"] = [
+                {**b, "changes": [], "note": said} if b.get("placement") else b
+                for b in v["blockers"]
+            ]
     return out
 
 
