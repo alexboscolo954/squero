@@ -458,3 +458,44 @@ def test_a_report_may_say_its_actuator_places_and_which_pods_carry_the_preferenc
     assert r.placing and r.pods[0].placed
     plain = blockers.Report.model_validate({"at": NOW, "namespaces": [], "pods": [facts("a", "b")]})
     assert not plain.placing and not plain.pods[0].placed
+
+
+# --- audit A5: no node could go where the Pinned nodes can't be told --------------------
+
+
+def gone(read: dict[str, Any], c: Any) -> Any:
+    (shown,) = [x for x in sizing.nodes_report({"test": read}, c, {"test": report()}, NOW)]
+    return shown["could_go"]
+
+
+def test_no_node_could_go_where_no_node_shows_the_pinned_label() -> None:
+    """Part A finding 5: the label not allowlisted in kube-state-metrics, the pinned node
+    was listed as one that could go."""
+    a, b = node("a", pod("a1", 0.5)), node("b", pod("b1", 1.0))
+    off = actuated("acme", A_TOKEN, autoscaler=CA)
+    assert gone(plain_read(a, b), off)["now"]["nodes"] == ["a"]  # no Placement: as before
+    unseen = gone(read_of(a, b), placed())
+    assert unseen["now"]["nodes"] == [] and unseen["after"]["nodes"] == []
+    assert unseen["note"] == (
+        "no node carries squero.io/pinned=yes as kube-state-metrics shows it, so its Pinned "
+        "nodes can't be told: no node is counted as one that could go"
+    )
+    seen = gone(read_of(a, pinned(b)), placed())
+    assert seen["now"]["nodes"] == [] and seen["note"] is None  # a's pod can't go to b
+    roomy = gone(read_of(a, b, pinned(node("c"))), placed())
+    assert roomy["now"]["nodes"] == ["a"] and roomy["note"] is None
+
+
+@pytest.mark.parametrize("label", [None, "pool=old"])
+def test_no_node_could_go_until_the_nodes_are_read_with_the_label(label: str | None) -> None:
+    a, b = node("a", pod("a1", 0.5)), pinned(node("b", pod("b1", 1.0)))
+    stale = gone(plain_read(a, b, node("c")) | {"placement": label}, placed())
+    assert stale["now"]["nodes"] == [] and stale["note"] == (
+        "its nodes were not read with squero.io/pinned=yes yet, so its Pinned nodes can't be "
+        "told: no node is counted as one that could go until the next hourly run"
+    )
+
+
+def test_karpenters_consolidate_after_names_a_cronjobs_node() -> None:
+    (said,) = [s for s in blockers.SETTINGS[KARPENTER] if "consolidateAfter" in s]
+    assert "CronJob" in said and "never consolidated" in said

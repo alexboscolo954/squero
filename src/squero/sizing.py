@@ -797,6 +797,15 @@ def nodes_report(
         went = None
         usable = report if report and not blockers.gap(report, cl, now) else None
         fits = blockers.fit(usable, cl.autoscaler)  # audit A3: what its pods need of a node
+        pins = blockers.pinned(read, cl)
+        if (p := cl.placement) and not pins:  # audit A5: a Pinned node would look like any
+            fits = (
+                f"its nodes were not read with {p.label} yet, so its Pinned nodes can't be told: "
+                "no node is counted as one that could go until the next hourly run"
+                if read.get("placement") != p.label
+                else f"no node carries {p.label} as kube-state-metrics shows it, so its Pinned "
+                "nodes can't be told: no node is counted as one that could go"
+            )
         counted = blockers.known(read, usable, cl)  # audit A4: its Actuator's own pod moves too
         first = None if read.get("problem") else blockers.could_go(counted, verdict, fits)
         if first is not None:
@@ -818,7 +827,6 @@ def nodes_report(
         for v in verdict.values():
             judged[v["state"]] += 1
         placement = None
-        pins = blockers.pinned(read, cl)
         if p := cl.placement:
             note = None
             if read.get("placement") != p.label:

@@ -377,7 +377,9 @@ SETTINGS: dict[str | None, list[str]] = {
         "NodePool spec.disruption.consolidationPolicy (WhenEmptyOrUnderutilized by "
         "default): WhenEmpty removes only empty nodes",
         "NodePool spec.disruption.consolidateAfter (0s by default): how long a node "
-        "waits before it is consolidated",
+        "waits, after a pod was added to it or removed, before it is consolidated: a node "
+        "where that happens more often (a CronJob's runs every few minutes) is never "
+        "consolidated, and the Hub can't see it",
         "NodePool spec.disruption.budgets (10% of nodes by default): how many nodes may "
         "be disrupted at once",
         "--feature-gates SpotToSpotConsolidation (alpha, false by default): false, a spot "
