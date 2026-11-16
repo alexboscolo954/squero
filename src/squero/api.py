@@ -1956,7 +1956,7 @@ def create_app(
             node_types=node_types,
             placement=await placement(cid, cluster),
             spot=await spotting(cid, cluster),
-            constraints=True,  # audit A3: and what its pods need of a node
+            constraints=True,  # audit A3: and what its pods need of a node; A4: its own pod
             blockers=cluster.namespaces,  # slice 15.1b: where to report Blockers' facts of
             eviction=by_id[cid].actuator.evicting(datetime.now(UTC)),
             sizings=approved,
@@ -2012,9 +2012,10 @@ def create_app(
         report: blockers.Report,
         creds: HTTPAuthorizationCredentials = Depends(bearer),  # noqa: B008
     ) -> None:
-        """An Actuator's hourly facts of the pods that may block a node's removal (slice
-        15.1b), stored as its Contract's cluster's latest, by its token only. Refused
-        whole: more pods than it may send, a namespace outside the cluster's, a value
+        """An Actuator's facts of the pods that may block a node's removal (slice 15.1b),
+        sent when they change and hourly at least (audit A4), stored as its Contract's
+        cluster's latest, by its token only. Refused whole: more pods than it may send, a
+        namespace outside the cluster's (its own pod, `itself`, is outside them), a value
         no Actuator sends. Dated by the Hub's clock."""
         cid, cluster = actuator_of(creds)
         if len(report.pods) > blockers.MAX_PODS:

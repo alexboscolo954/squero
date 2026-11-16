@@ -1,7 +1,8 @@
 /** Nodes (slice 15.1a): each cluster's nodes and their Room, as the latest hourly run read
- * them. Pods outside the Contract's namespaces are a count and a sum, never named. Each
+ * them. Pods outside the Contract's namespaces are a count and a sum, never named (but for
+ * the Actuator's own pod, where it blocks: audit A4). Each
  * node's verdict (slice 15.1b): whether it could be removed, by its cluster's rules, going
- * by its Actuator's hourly report of Blockers. Placement (slice 15.2a): the cluster's Pinned
+ * by its Actuator's latest report of Blockers. Placement (slice 15.2a): the cluster's Pinned
  * nodes, the Workloads placed on them, and which to restart to free a node. */
 import * as api from "./api";
 import { useLoaded } from "./Checks";

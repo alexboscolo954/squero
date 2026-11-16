@@ -797,10 +797,11 @@ def nodes_report(
         went = None
         usable = report if report and not blockers.gap(report, cl, now) else None
         fits = blockers.fit(usable, cl.autoscaler)  # audit A3: what its pods need of a node
-        first = None if read.get("problem") else blockers.could_go(read, verdict, fits)
+        counted = blockers.known(read, usable, cl)  # audit A4: its Actuator's own pod moves too
+        first = None if read.get("problem") else blockers.could_go(counted, verdict, fits)
         if first is not None:
             sized = [r for r in rows or [] if r["cluster"] == cl.name]
-            later = blockers.could_go(blockers.after(read, sized), verdict, fits) or []
+            later = blockers.could_go(blockers.after(counted, sized), verdict, fits) or []
             price, rate = c.price(cl.name), rates(read, c, cl.name)
             went = {
                 "now": _worth(first, read, price, rate),

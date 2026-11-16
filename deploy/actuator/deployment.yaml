@@ -12,6 +12,9 @@ spec:
   template:
     metadata:
       labels: {app: squero-actuator}
+      annotations:
+        # its /tmp holds nothing to keep: Cluster Autoscaler may remove its node (audit A4)
+        cluster-autoscaler.kubernetes.io/safe-to-evict-local-volumes: tmp
     spec:
       serviceAccountName: squero-actuator
       automountServiceAccountToken: true
@@ -29,6 +32,8 @@ spec:
             - {name: SQUERO_ACTUATOR_HUB, value: "https://hub.example.com"}
             - name: SQUERO_ACTUATOR_NAMESPACE   # where its ConfigMap lives
               valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - name: SQUERO_ACTUATOR_POD   # its own pod, reported so its node can be judged
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
           envFrom:
             - secretRef: {name: squero-actuator}   # SQUERO_ACTUATOR_TOKEN
           ports:

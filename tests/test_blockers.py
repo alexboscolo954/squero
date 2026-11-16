@@ -2,6 +2,7 @@
 from being removed, the Hub's endpoint for them, the rules of each autoscaler and of
 `kubectl drain`, and each node's verdict, which is clear only on positive evidence."""
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
@@ -260,6 +261,60 @@ def test_its_blockers_go_once_an_hour_and_again_soon_after_one_that_did_not_arri
     assert len(seen) == 5
     a.blocked(["shop"], NOW + 10800 + 600)
     assert len(seen) == 6
+
+
+def test_a_change_is_told_within_five_minutes_and_the_same_facts_wait_the_hour() -> None:
+    """Audit A4: a rollout's new pod reached the Hub only with the next hourly report."""
+    seen: list[httpx.Request] = []
+    handler = lambda r: seen.append(r) or httpx.Response(204)  # noqa: E731
+    http = httpx.Client(base_url="http://hub", transport=httpx.MockTransport(handler))
+    pods = {"shop": [[kpod("a", by=None)]]}
+    core, policy = apis(pods)
+    a = actuator.Actuator(http, core, MagicMock(), "x")
+    a.policy = policy
+    sent = lambda: [p["pod"] for p in json.loads(seen[-1].content)["pods"]]  # noqa: E731
+    a.blocked(["shop"], NOW)
+    assert len(seen) == 1 and core.list_namespaced_pod.call_count == 1
+    a.blocked(["shop"], NOW + 299)  # not read
+    assert core.list_namespaced_pod.call_count == 1
+    a.blocked(["shop"], NOW + 300)  # read: the same facts, a later time
+    assert core.list_namespaced_pod.call_count == 2 and len(seen) == 1
+    pods["shop"][0] = [kpod("b", by=None)]  # a rollout replaced it
+    a.blocked(["shop"], NOW + 599)
+    assert len(seen) == 1
+    a.blocked(["shop"], NOW + 600)
+    assert len(seen) == 2 and sent() == ["b"]
+    a.blocked(["shop"], NOW + 900)
+    assert len(seen) == 2
+    a.blocked(["shop"], NOW + 600 + 3600)  # the hour since the last it told: told again
+    assert len(seen) == 3 and sent() == ["b"]
+
+
+def test_a_change_the_hub_did_not_take_goes_again_and_one_it_refused_does_not() -> None:
+    seen: list[httpx.Request] = []
+    answers = iter([204, httpx.ConnectError("down"), 204, 404])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return httpx.Response(answer)
+
+    http = httpx.Client(base_url="http://hub", transport=httpx.MockTransport(handler))
+    pods = {"shop": [[kpod("a", by=None)]]}
+    core, policy = apis(pods)
+    a = actuator.Actuator(http, core, MagicMock(), "x")
+    a.policy = policy
+    a.blocked(["shop"], NOW)
+    pods["shop"][0] = [kpod("b", by=None)]
+    a.blocked(["shop"], NOW + 300)  # no connection
+    a.blocked(["shop"], NOW + 600)  # again: taken
+    assert len(seen) == 3
+    pods["shop"][0] = [kpod("c", by=None)]
+    a.blocked(["shop"], NOW + 900)  # refused: counts as answered
+    a.blocked(["shop"], NOW + 1200)
+    assert len(seen) == 4
 
 
 def desired(**more: Any) -> actuator.Desired:

@@ -147,6 +147,34 @@ subjects:
     name: squero-actuator
     namespace: squero-actuator
 ---
+# Audit A4, optional: its own pod, read by name in its own namespace (nothing else runs
+# there), so the Hub counts it on its node with the rules any pod's go by. A client who
+# would not grant it deletes this Role and its RoleBinding: its node is then "unknown",
+# one pod there not visible.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: squero-actuator-self
+  namespace: squero-actuator
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: squero-actuator-self
+  namespace: squero-actuator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: squero-actuator-self
+subjects:
+  - kind: ServiceAccount
+    name: squero-actuator
+    namespace: squero-actuator
+---
 # What it applied, in its own namespace: one ConfigMap, read and replaced by name.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

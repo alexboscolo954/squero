@@ -310,7 +310,7 @@ Here one node of three is busy, and the pooled Sizing follows it: the two small 
 
 A **Blocker** is a pod that keeps its node from being removed. The Nodes page gives each node a verdict: **blocked** (with the pods and why), **clear** ("yes: nothing on it blocks") or **unknown** (with why). It is read-only: the Hub evicts nothing for it, and it does not yet say whether a node's pods would fit elsewhere (that comes with the nodes that could go).
 
-- **Where the facts come from.** A cluster's [Actuator](client-cluster.md#blockers-what-the-actuator-reports) reports hourly the facts of the pods in the Contract's namespaces that may block: its controller, its emptyDir and hostPath volumes by name, three annotations as they are, and the PodDisruptionBudget covering it that allows the fewest disruptions. It sends facts and no conclusion; the Hub applies the rules, so they can change without redeploying an Actuator.
+- **Where the facts come from.** A cluster's [Actuator](client-cluster.md#blockers-what-the-actuator-reports) reports the facts of the pods in the Contract's namespaces that may block when they change (it reads them every five minutes), and hourly at least, with its own pod's (audit A4, judged by the same rules, so its node isn't unknown for a pod the Hub can't see): its controller, its emptyDir and hostPath volumes by name, three annotations as they are, and the PodDisruptionBudget covering it that allows the fewest disruptions. It sends facts and no conclusion; the Hub applies the rules, so they can change without redeploying an Actuator.
 - **Whose rules.** Those of the autoscaler the Contract names for the cluster, from each one's own documentation:
 
   | Removes nodes | A pod blocks when |

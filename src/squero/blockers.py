@@ -1,14 +1,14 @@
 """Blockers (slice 15.1b): what keeps a node from being removed.
 
-An Actuator reports, hourly, the facts of the pods in its namespaces that may block a
-node's removal (`Report`): never a conclusion, since which facts block depends on who
-removes nodes there. The Hub applies the rules of the autoscaler the Contract names for
-the cluster (`reasons`), `kubectl drain`'s where it names none, and gives each node a
-verdict (`verdicts`): blocked, clear or unknown. Clear needs positive evidence: no gap
-(no Actuator, a report too old or cut short, a namespace it could not read, pods the Hub
-can't see) ever gives it. Without a usable report the Hub goes by what Prometheus shows
-(`seen`, slice 15.1c): a pod with no controller still blocks, the rest is unknown.
-Read-only: nothing is evicted for it.
+An Actuator reports, when they change and hourly at least, the facts of the pods in its
+namespaces that may block a node's removal (`Report`): never a conclusion, since which
+facts block depends on who removes nodes there. The Hub applies the rules of the
+autoscaler the Contract names for the cluster (`reasons`), `kubectl drain`'s where it
+names none, and gives each node a verdict (`verdicts`): blocked, clear or unknown. Clear
+needs positive evidence: no gap (no Actuator, a report too old or cut short, a namespace
+it could not read, pods the Hub can't see) ever gives it. Without a usable report the
+Hub goes by what Prometheus shows (`seen`, slice 15.1c): a pod with no controller still
+blocks, the rest is unknown. Read-only: nothing is evicted for it.
 
 The nodes that could go (`could_go`, slice 15.4): clear ones whose pods fit, pod by pod,
 in the Room of the others with the same taints; `after` gives the same read with the
@@ -17,6 +17,10 @@ requests the ready Sizings would leave. Every gap means the node stays.
 What a pod needs of a node (audit A3): its Actuator reports each pod's nodeSelector and
 node affinity, required and preferred, with the labels of the nodes those name; `fit`
 applies the autoscaler's rule, and a pod moves only to a node that meets it.
+
+Its own pod (audit A4): outside the Contract's namespaces, so one the Hub can't see; it
+reports that pod's facts, and the Hub counts it as known on its node (`known`), judged
+by the same rules and moved with the node's other pods.
 
 Placement (slice 15.2a): where the Contract names a cluster's label, the Hub lists for
 its Actuator the Workloads whose pods block a node for a reason set in their spec
@@ -37,6 +41,9 @@ if TYPE_CHECKING:  # the Actuator imports this module, and reads no Contract
 
 MAX_PODS = 1000  # in one report: the Actuator cuts it there and says so
 MAX_BYTES = 900_000  # and there: the Hub's proxy refuses a body over 1 MB
+# audit A4: its own pod is counted on a node read this long after it started at least, so
+# that the read (kube-state-metrics, scraped every minute or so) holds it
+SEEN = 300
 STALE = 7200  # seconds since the Hub received a report after which it says nothing
 SAFE = "cluster-autoscaler.kubernetes.io/safe-to-evict"
 SAFE_VOLUMES = "cluster-autoscaler.kubernetes.io/safe-to-evict-local-volumes"
@@ -129,8 +136,18 @@ class PodFacts(BaseModel):
     workload: str | None = Field(None, max_length=64 + 254)
 
 
+class Itself(PodFacts):
+    """Its Actuator's own pod (audit A4), outside the Contract's namespaces: its facts as
+    any pod's, its requests (cores and bytes) and what it needs of a node (an index into
+    the report's `needs`)."""
+
+    cpu: float = Field(0.0, ge=0)
+    memory: float = Field(0.0, ge=0)
+    need: int | None = Field(None, ge=0)
+
+
 class Report(BaseModel):
-    """An Actuator's hourly report: the pods in `namespaces` with a fact that may block.
+    """An Actuator's report: the pods in `namespaces` with a fact that may block.
     `namespaces`: the ones it read in full. `truncated`: there were more than it sent."""
 
     model_config = ConfigDict(extra="forbid")
@@ -156,6 +173,8 @@ class Report(BaseModel):
     needed: dict[str, int] = Field({}, max_length=MAX_NEEDED)  # `namespace/pod`: its need
     # each node's values of the label keys `needs` name: a key not there, a label it lacks
     labels: dict[str, dict[str, str]] = Field({}, max_length=MAX_NODES)
+    # audit A4, sent when the Hub asks as for `constraints`: its own pod; None: not read
+    itself: Itself | None = None
 
 
 def sent(r: Report) -> dict[str, Any]:
@@ -175,6 +194,8 @@ def sent(r: Report) -> dict[str, Any]:
     if r.constraints is None:  # audit A3, the same way
         for key in ("constraints", "needs", "needed", "labels"):
             del body[key]
+    if r.itself is None:  # audit A4, the same way
+        del body["itself"]
     for p in body["pods"]:
         if not p["placed"]:
             del p["placed"]
@@ -192,16 +213,29 @@ def unreal(r: Report) -> str | None:
         return "pods"
     if any(len(ns) > 253 for ns in r.namespaces):
         return "namespaces"
-    for p in r.pods:
-        named = [p.namespace, p.pod, p.node, *([] if p.budget is None else [p.budget])]
-        if not all(NAME.fullmatch(n) for n in named):  # what Kubernetes itself refuses
-            return "pods"
-        if p.workload is not None and not WORKLOAD.fullmatch(p.workload):
-            return "pods"
-        names = [*p.empty_dir, *p.in_memory, *p.host_path, *p.annotations.values()]
-        if any(len(n) > 253 for n in names) or set(p.annotations) - set(ANNOTATIONS):
-            return "pods"
+    if (it := r.itself) is not None:  # audit A4: checked as a pod is, below
+        if it.started is not None and not math.isfinite(it.started):
+            return "itself"
+        if not (math.isfinite(it.cpu) and math.isfinite(it.memory)):
+            return "itself"
+        if it.need is not None and it.need >= len(r.needs):
+            return "itself"
+        if _unreal_pod(it):
+            return "itself"
+    if any(_unreal_pod(p) for p in r.pods):
+        return "pods"
     return _unreal_needs(r)
+
+
+def _unreal_pod(p: PodFacts) -> bool:
+    """A pod's facts shaped as no Actuator sends them."""
+    named = [p.namespace, p.pod, p.node, *([] if p.budget is None else [p.budget])]
+    if not all(NAME.fullmatch(n) for n in named):  # what Kubernetes itself refuses
+        return True
+    if p.workload is not None and not WORKLOAD.fullmatch(p.workload):
+        return True
+    names = [*p.empty_dir, *p.in_memory, *p.host_path, *p.annotations.values()]
+    return any(len(n) > 253 for n in names) or bool(set(p.annotations) - set(ANNOTATIONS))
 
 
 def _unreal_needs(r: Report) -> str | None:
@@ -601,6 +635,8 @@ def verdicts(
     places (`report.placing`), a blocked node says which Workloads to restart to free
     it, or why that wouldn't (`restart`)."""
     missing = gap(report, cluster, now)
+    if not missing:
+        read = known(read, report, cluster)
     out: dict[str, dict[str, Any]] = {}
     for n in read.get("nodes") or []:
         if missing or report is None:
@@ -608,9 +644,11 @@ def verdicts(
             continue
         found = []
         whose = {(p["namespace"], p["pod"]): p.get("workload") for p in n["own"]}
-        for p in report["pods"]:
+        # audit A4: its Actuator's own pod, where `known` counted it on this node
+        it = report["itself"] if any(p.get("itself") for p in n["own"]) else None
+        for p in [*report["pods"], *([it] if it else [])]:
             # a namespace the Contract has since left is no longer its own to show
-            if p["node"] != n["node"] or p["namespace"] not in cluster.namespaces:
+            if p["node"] != n["node"] or (p["namespace"] not in cluster.namespaces and p is not it):
                 continue
             w = whose.get((p["namespace"], p["pod"]))
             if p.get("workload"):  # slice 15.2b: its Actuator's, from the pod itself
@@ -631,7 +669,9 @@ def verdicts(
                     }
                 )
         own = [p for p in n["own"] if not p.get("bound")]
-        unread = sorted({p["namespace"] for p in own} - set(report["namespaces"]))
+        unread = sorted(
+            {p["namespace"] for p in own if not p.get("itself")} - set(report["namespaces"])
+        )
         why = None  # of unknown: asked only where nothing is known to block
         if found:
             pass
@@ -660,6 +700,32 @@ def verdicts(
         elif v["state"] == "blocked" and not missing and report and report.get("placing"):
             v["restart"] = _restart(v["blockers"], read, pins, cluster.placement.label, fits)
     return out
+
+
+def known(
+    read: dict[str, Any], report: dict[str, Any] | None, cluster: "Cluster"
+) -> dict[str, Any]:
+    """The read with its Actuator's own pod (audit A4) among the `own` pods of the node it
+    runs on, as one the Hub sees: only where that node has a pod the Hub can't see, and
+    the read was made `SEEN` after the pod started (an older read can't hold it, and would
+    lose a pod it can't see for it); never in one of the cluster's namespaces, where the
+    read already holds it. Its requests move as one container's, with no Sizing."""
+    it = (report or {}).get("itself")
+    if not it or it["namespace"] in cluster.namespaces or it.get("started") is None:
+        return read
+    if it["started"] > read["at"] - SEEN:
+        return read
+    nodes = []
+    for n in read.get("nodes") or []:
+        own = [p for p in n["own"] if not p.get("bound")]
+        hidden = n["pods"] - n["bound"] - len(own) if "bound" in n else 0
+        if n["node"] == it["node"] and hidden > 0:
+            asks = {"cpu": it["cpu"], "memory": it["memory"]}
+            pod = {"namespace": it["namespace"], "pod": it["pod"], **asks, "bound": False}
+            pod |= {"kind": it["kind"], "pvc": False, "containers": [{"name": "", **asks}]}
+            n = {**n, "own": [*n["own"], {**pod, "workload": None, "itself": True}]}
+        nodes.append(n)
+    return {**read, "nodes": nodes}
 
 
 def pinned(read: dict[str, Any], cluster: "Cluster") -> set[str]:
@@ -852,6 +918,8 @@ def fit(report: dict[str, Any] | None, autoscaler: str | None) -> Fits | str:
         )
     terms = [_terms(n, autoscaler) for n in report["needs"]]
     needed, labels = report["needed"], report["labels"]
+    if (it := report.get("itself")) and it.get("need") is not None:  # audit A4
+        needed = {**needed, f"{it['namespace']}/{it['pod']}": it["need"]}
 
     def fits(p: dict[str, Any], node: str) -> bool:
         i = needed.get(f"{p['namespace']}/{p['pod']}")

@@ -111,6 +111,7 @@ RUN_AGE = 30 * 1440  # minutes: how old a CronJob run's scheduled time may be (s
 MAX_REPORTS = 1000  # per POST, and kept unsent while the Hub is unreachable
 BLOCKERS_EVERY = 3600  # seconds between its reports of Blockers' facts (slice 15.1b)
 BLOCKERS_RETRY = 300  # after one that didn't reach the Hub: its reports go stale at two hours
+BLOCKERS_CHECK = 300  # audit A4: read this often, and reported when they changed
 PAGE = 200  # pods a list call when it reads whole namespaces: its memory limit is 256Mi
 MIRROR = "kubernetes.io/config.mirror"  # on a node's own static pods
 MIN_MINOR = 33  # Kubernetes 1.33: in-place pod resize on by default
@@ -214,6 +215,7 @@ class ActuatorSettings(BaseSettings):
     hub: str  # https://<the Hub's domain>
     token: SecretStr
     namespace: str  # its own, where its ConfigMap lives (the manifest's downward API)
+    pod: str | None = None  # its own pod's name, the same way (audit A4)
     interval: float = 60
 
 
@@ -373,7 +375,8 @@ class Desired(BaseModel):
     # nothing is reported
     blockers: list[str] | None = None
     # audit A3: report, with them, what those pods need of a node and the nodes' labels it
-    # names. False, as from an older Hub, whose report refuses fields it doesn't know
+    # names, and its own pod (audit A4). False, as from an older Hub, whose report refuses
+    # fields it doesn't know
     constraints: bool = False
     # slice 15.2a: the cluster's Placement; None: off (as from an older Hub). Not sent
     # under the Kill switch, where the Actuator keeps what it had and places nothing
@@ -1271,7 +1274,9 @@ def selects(s: Any, labels: dict[str, str]) -> bool:
     return all(labels.get(k) == v for k, v in (s.match_labels or {}).items())
 
 
-def pod_facts(p: Any, budgets: list[Any], label: str | None = None) -> blockers.PodFacts | None:
+def pod_facts(
+    p: Any, budgets: list[Any], label: str | None = None, known: bool = False
+) -> blockers.PodFacts | None:
     """A pod's facts for the Hub's Blocker rules (slice 15.1b), or None for one that
     blocks no one's removal of its node: not on a node yet, finished or on its way out,
     a DaemonSet's or the node's own static pod (they stay with it), or with no fact at
@@ -1279,7 +1284,8 @@ def pod_facts(p: Any, budgets: list[Any], label: str | None = None) -> blockers.
     allows the fewest disruptions is named, one whose status isn't written yet as
     allowing none. Facts only: which of them block is the Hub's to say. With the
     cluster's Placement `label` (slice 15.2b): whether the pod carries its preference,
-    and its Workload as the webhook names it, where it names one."""
+    and its Workload as the webhook names it, where it names one. `known` (audit A4,
+    its own pod): its facts even with none that may block."""
     meta, spec = p.metadata, p.spec
     noted = meta.annotations or {}
     if stays(p):
@@ -1311,7 +1317,7 @@ def pod_facts(p: Any, budgets: list[Any], label: str | None = None) -> blockers.
     )
     told = bool(f.empty_dir or f.host_path or f.annotations) or allowed == 0
     told = told or f.kind not in blockers.BUILT_IN
-    if not (told or (f.namespace == "kube-system" and budget is None)):
+    if not (known or told or (f.namespace == "kube-system" and budget is None)):
         return None
     if not label:  # only to a Hub that gave it a Placement: an older one refuses the field
         return f
@@ -1400,6 +1406,29 @@ def constrained(core: Any, needs_of: dict[str, blockers.Need], cut: bool) -> dic
     return {"constraints": "read", "needs": needs, "needed": needed, "labels": labels}
 
 
+def own_pod(core: Any, namespace: str, name: str) -> tuple[blockers.Itself, Any] | None:
+    """Its own pod (audit A4), read through the optional Role `squero-actuator-self` in its
+    own namespace: its facts as any pod's and its containers' requests, with the pod. None:
+    not read (no such Role, or its read failed) or on its way out; the Hub then can't see
+    it, as before. No PodDisruptionBudget of its namespace is read: the manifest ships
+    none."""
+    try:
+        p = core.read_namespaced_pod(name, namespace)
+    except ApiException as e:
+        (log.info if e.status == 403 else log.warning)("its own pod not read: %s", why(e))
+        return None
+    f = pod_facts(p, [], known=True)
+    if f is None:
+        return None
+    asks = {"cpu": 0.0, "memory": 0.0}
+    for c in p.spec.containers or []:
+        got = (c.resources.requests if c.resources else None) or {}
+        for res in asks:
+            if res in got:
+                asks[res] += float(qty(got[res]))
+    return blockers.Itself(**f.model_dump(), **asks), p
+
+
 def carries(p: Any, label: str) -> bool:
     """Whether a pod prefers the nodes with `label` (`key=value`), as Placement's
     preference does (slice 15.2b): its own or the webhook's, the same fact."""
@@ -1423,13 +1452,15 @@ def blocking(
     label: str | None = None,
     spotting: bool = False,
     constraints: bool = False,
+    me: tuple[str, str] | None = None,
 ) -> blockers.Report:
     """The Blocker facts of `namespaces`' pods (slice 15.1b), read a page at a time. A
     namespace it may not read, or whose read fails, is left out of `namespaces`: the Hub
     then knows what it wasn't told. Over `MAX_PODS`, or over the size the Hub's proxy
     lets through: cut there, and said. With the cluster's Placement `label` (slice
     15.2b) it says it places, and which pods carry the preference. With `constraints`
-    (audit A3), what its pods that would move need of a node (`constrained`)."""
+    (audit A3), what its pods that would move need of a node (`constrained`), and its
+    own pod `me` (audit A4: its namespace and name), as `itself`."""
     read, found = [], []
     needs_of: dict[str, blockers.Need] = {}
     cut = False
@@ -1458,6 +1489,17 @@ def blocking(
         found += here
         needs_of |= needing
     found.sort(key=lambda f: (f.namespace, f.pod))
+    itself, key = None, "/".join(me or ())
+    if constraints and me and (mine := own_pod(core, *me)):
+        itself, p = mine
+        try:
+            if n := need_of(p):
+                needs_of[key] = n
+        except ValidationError:
+            cut = True
+    told = constrained(core, needs_of, cut) if constraints else {}
+    if itself:  # its need's index, never a key of `needed`: no Contract namespace's pod
+        itself = itself.model_copy(update={"need": (told.get("needed") or {}).pop(key, None)})
     report = blockers.Report(
         at=now,
         namespaces=read,
@@ -1465,10 +1507,13 @@ def blocking(
         pods=found[: blockers.MAX_PODS],
         placing=label is not None,
         spotting=spotting,  # slice 16.2b: only a Hub that sent spot nodes is told
-        **(constrained(core, needs_of, cut) if constraints else {}),
+        **told,
+        itself=itself,
     )
     if report.needs and len(report.model_dump_json()) > blockers.MAX_BYTES:
         cleared: dict[str, Any] = {"needs": [], "needed": {}, "labels": {}}
+        if itself:
+            cleared["itself"] = itself.model_copy(update={"need": None})
         report = report.model_copy(update={"constraints": "cut", **cleared})
     while report.pods and len(report.model_dump_json()) > blockers.MAX_BYTES:
         fewer = report.pods[: len(report.pods) * 3 // 4]  # long names: cut by size too
@@ -2575,6 +2620,11 @@ class Actuator:
     burst_peaks: dict[str, float | None] = field(default_factory=dict)
     burst_said: dict[str, tuple[str, float]] = field(default_factory=dict)
     blockers_due: float = 0.0  # when its next report of Blockers' facts goes (slice 15.1b)
+    # audit A4: when it next reads them, and the last the Hub answered (taken or refused),
+    # without its time
+    blockers_next: float = 0.0
+    blockers_told: dict[str, Any] | None = None
+    pod: str | None = None  # its own pod's name (audit A4)
     # slice 15.3b: each node's instance type, as the Hub last said it from a good read
     node_types: dict[str, str] = field(default_factory=dict)
     # slice 15.2b: the cluster's Placement as the Hub last said it, its list the last one
@@ -3052,19 +3102,22 @@ class Actuator:
             post(self.core, ns, ("apps/v1", kind, name), reason, message, False)
 
     def blocked(self, namespaces: list[str], now: float, constraints: bool = False) -> None:
-        """Report the Blocker facts of `namespaces` to the Hub once an hour (slice 15.1b).
-        One that didn't reach it goes again in five minutes; one it refused (an older
-        Hub has no such route) waits the hour: sending it again changes nothing."""
-        if now < self.blockers_due:
+        """Report the Blocker facts of `namespaces` to the Hub (slice 15.1b): read every
+        five minutes (audit A4) and sent when they differ from the last the Hub answered,
+        and once an hour whatever they are (the Hub drops a report two hours old). One
+        that didn't reach it goes again five minutes on; one it refused (an older Hub has
+        no such route) counts as answered: sending it again changes nothing."""
+        if now < self.blockers_due and now < self.blockers_next:
             return
-        self.blockers_due = now + BLOCKERS_EVERY
+        self.blockers_next = now + BLOCKERS_CHECK
         # placing nothing under the Kill switch: no Workload to restart is named then
         label = self.placement.label if self.placement and not self.killed else None
         # slice 16.2b, the same way, and only once it knows its list: before, it steers nothing
         spotting = self.spot is not None and self.spot.workloads is not None and not self.killed
         # slice 16.3b, the same way: its CronJobs' runs, and the ones it skips, with a code
         runs = self.spot is not None and self.spot.cronjobs is not None and not self.killed
-        report = blocking(self.core, self.policy, namespaces, now, label, spotting, constraints)
+        me = (self.namespace, self.pod) if self.pod else None
+        report = blocking(self.core, self.policy, namespaces, now, label, spotting, constraints, me)
         if runs:
             listed = set(self.spot.cronjobs or []) if self.spot else set()
             skipped = {k: v for k, v in self.spot_checked.items() if v and k in listed}
@@ -3072,16 +3125,22 @@ class Actuator:
             report = blockers.Report.model_validate(
                 {**report.model_dump(), "spot_runs": True, "spot_skipped": skipped}
             )
+        body = blockers.sent(report)
+        facts = {k: v for k, v in body.items() if k != "at"}
+        if facts == self.blockers_told and now < self.blockers_due:
+            return
         try:
-            r = self.http.post("/actuator/blockers", json=blockers.sent(report))
+            r = self.http.post("/actuator/blockers", json=body)
             r.raise_for_status()
         except httpx.HTTPError as e:
             code = e.response.status_code if isinstance(e, httpx.HTTPStatusError) else None
-            if code and 400 <= code < 500 and code not in (401, 403, 429):
-                log.error("the Hub refused its Blockers (%d)", code)
+            if not (code and 400 <= code < 500 and code not in (401, 403, 429)):
+                log.warning("reporting its Blockers to the Hub: %s", code or type(e).__name__)
+                self.blockers_due = now + BLOCKERS_RETRY
                 return
-            log.warning("reporting its Blockers to the Hub: %s", code or type(e).__name__)
-            self.blockers_due = now + BLOCKERS_RETRY
+            log.error("the Hub refused its Blockers (%d)", code)
+        self.blockers_told = facts
+        self.blockers_due = now + BLOCKERS_EVERY
 
     def send(self) -> None:
         self.report()
@@ -4287,7 +4346,7 @@ def main(s: ActuatorSettings) -> None:  # pragma: no cover - the cluster's own p
     cert, key = certificate(f"{WEBHOOK}.{s.namespace}.svc")
     headers = {"Authorization": f"Bearer {s.token.get_secret_value()}"}
     with httpx.Client(base_url=s.hub, headers=headers, timeout=15) as http:
-        a = Actuator(http, core, apps, s.namespace)
+        a = Actuator(http, core, apps, s.namespace, pod=s.pod)
         a.autoscaling, a.custom = Calm(client.AutoscalingV2Api()), custom
         a.policy = Calm(client.PolicyV1Api())
         a.load()

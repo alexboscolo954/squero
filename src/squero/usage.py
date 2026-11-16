@@ -746,7 +746,8 @@ def rooms(
     Node series carry no namespace, and a node's Room needs every pod on it: `requests`,
     `daemonsets` (its DaemonSets' pods' share) and `pods` are summed by Prometheus over
     all namespaces, scoped by the cluster's labels only, so a pod outside the Contract's
-    namespaces reaches the Hub as part of a sum and a count per node, never by name.
+    namespaces reaches the Hub as part of a sum and a count per node, never by name (the
+    Actuator's own pod comes by name from its report, audit A4: `blockers.known`).
     `own`: the Contract's pods there, each with its requests, read in its namespaces.
     `bound` (slice 15.1b): how many of the node's pods stay with it whoever removes it,
     a DaemonSet's and the node's own static pods, counted over all namespaces like
