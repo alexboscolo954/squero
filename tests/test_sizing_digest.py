@@ -359,3 +359,68 @@ async def test_the_digest_compares_its_time_with_a_week_before_it(store: Store) 
         await store.finish_sizing_run(run, "acme", {"test": None}, rows_of(container(pods=pods)))
     text = await sizing.digest(store, prometheus_contract(), NOW, None)
     assert "Waste: 0.89 cores, 0.91 GiB (-0.89 cores, -0.91 GiB vs 7 days ago)" in text
+
+
+def acted(outcome: str, name: str = "api", cluster: str = "test", **more: Any) -> dict[str, Any]:
+    """One Actuation as the store reads it."""
+    return {
+        "cluster": cluster,
+        "namespace": "shop",
+        "kind": "Deployment",
+        "name": name,
+        "container": "app",
+        "run_id": 1,
+        "outcome": outcome,
+        "cpu": 0.1,
+        "memory": None,
+        "pods": 1,
+        "reason": "",
+        "at": NOW,
+    } | more
+
+
+def test_the_digest_sums_the_weeks_actuations_by_the_containers_they_reached() -> None:
+    """Audit A13: one line, an outcome counting each container once (reported again, or
+    by a later run), the same name in another cluster apart; what changed nothing left out."""
+    week = sizing.report([], {})
+    rows = [
+        acted("burst", name="web"),  # first: the line keeps its own order
+        acted("applied"),
+        acted("applied", run_id=2),  # the same container again
+        acted("applied", cluster="other"),
+        acted("applied", name="web"),
+        acted("rolled_back", name="web"),
+        acted("reverted"),
+        acted("failed", name="db"),
+        acted("stepped_up"),
+        *(acted(o) for o in ("skipped", "oom_killed", "throttled", "step_ended", "burst_ended")),
+        acted("handed_back"),
+    ]
+    lines = sizing.digest_text("acme", now_report(), week, acted=rows).splitlines()
+    assert lines[2] == (
+        "Actuator this week: 3 resized, 1 rolled back, 1 reverted, 1 failed, "
+        "1 with a Step-up, 1 with a Burst."
+    )
+    quiet = [acted(o) for o in ("skipped", "oom_killed", "step_ended", "handed_back")]
+    for nothing in (None, [], quiet):
+        assert "Actuator" not in sizing.digest_text("acme", now_report(), week, acted=nothing)
+
+
+@pytest.mark.anyio
+async def test_the_digest_counts_its_own_contracts_actuations_of_its_week(store: Store) -> None:
+    """The week up to the digest's time, never before it or after it, and never another
+    Contract's Actuations (isolation)."""
+    run = await store.claim_sizing_run("acme", NOW, 0)
+    assert run is not None
+    await store.finish_sizing_run(run, "acme", {"test": None}, rows_of(container()))
+    report = {k: v for k, v in acted("applied").items() if k != "cluster"}
+    for contract, name, at in (
+        ("acme", "api", NOW - 3600),  # in its week
+        ("acme", "old", NOW - WEEK - 3600),  # the week before
+        ("acme", "late", NOW + 3600),  # after the digest's time
+        ("bank", "theirs", NOW - 3600),  # another Contract's two
+        ("bank", "theirs-too", NOW - 3600),
+    ):
+        await store.record_actuations(contract, "test", [report | {"name": name, "at": at}], at)
+    text = await sizing.digest(store, prometheus_contract(), NOW, None)
+    assert "Actuator this week: 1 resized." in text.splitlines()

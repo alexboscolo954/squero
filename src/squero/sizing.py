@@ -2089,6 +2089,31 @@ def realized_line(r: dict[str, Any]) -> str | None:
     return f"Realized this week: {quantities(r['week'])} ({quantities(r['rate'])} in all)."
 
 
+# Audit A13: the Actuations the digest counts, as it names them; the rest (skipped, an
+# OOM kill or throttling seen, a Step-up's or Burst's end, handed back) changed nothing.
+ACTED = {
+    "applied": "resized",
+    "rolled_back": "rolled back",
+    "reverted": "reverted",
+    "failed": "failed",
+    "stepped_up": "with a Step-up",
+    "burst": "with a Burst",
+}
+
+
+def actuations_line(acted: list[dict[str, Any]]) -> str | None:
+    """The digest's line on the week's Actuations (audit A13), each outcome counting the
+    containers it reached, so one the Actuator reports again counts once; None when
+    none of them happened."""
+    reached: dict[str, set[tuple[str, ...]]] = {}
+    for a in acted:
+        if label := ACTED.get(a["outcome"]):
+            key = (a["cluster"], a["namespace"], a["kind"], a["name"], a["container"])
+            reached.setdefault(label, set()).add(key)
+    parts = [f"{len(reached[label])} {label}" for label in ACTED.values() if label in reached]
+    return f"Actuator this week: {', '.join(parts)}." if parts else None
+
+
 def digest_text(
     contract_id: str,
     now: dict[str, Any],
@@ -2097,10 +2122,12 @@ def digest_text(
     realized: dict[str, Any] | None = None,
     floors: dict[str, Any] | None = None,
     nodes: list[dict[str, Any]] | None = None,
+    acted: list[dict[str, Any]] | None = None,
 ) -> str:
     """The weekly digest (Slack mrkdwn) from report() now and as of a week ago: total
     waste and its change, the realized Savings (10.3b), the Floors' line (14.1b,
-    floors_report), the top Workloads by waste,
+    floors_report), the nodes that could go (15.4), the week's Actuations (`acted`,
+    audit A13), the top Workloads by waste,
     risk kinds a Workload didn't have a week ago, stale clusters, the containers still
     learning, then the link."""
     total = now["total"]
@@ -2136,6 +2163,8 @@ def digest_text(
         if floors and (line := floors_line(floors, currency)):
             lines.append(line)
         if nodes and (line := nodes_line(nodes, currency)):  # slice 15.4
+            lines.append(line)
+        if acted and (line := actuations_line(acted)):
             lines.append(line)
         top = [w for w in now["workloads"] if rank(w) > 0][:TOP]
         if top:
@@ -2186,4 +2215,5 @@ async def digest(store: "Store", c: Contract, at: float, console_url: str | None
     nodes = nodes_report(
         await store.latest_rooms(c.id, names), c, await store.latest_blockers(c.id, names), at, rows
     )
-    return digest_text(c.id, now, week, link, await savings(store, c, at), stored, nodes)
+    acted = [a for a in await store.actuations(c.id, at - WEEK) if a["at"] <= at]
+    return digest_text(c.id, now, week, link, await savings(store, c, at), stored, nodes, acted)
