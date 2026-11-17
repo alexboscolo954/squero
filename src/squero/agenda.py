@@ -112,16 +112,19 @@ async def of(st: Store, c: Contract, now: float) -> Agenda:
         )
     for t in (t for t in mine if t.status == "running"):  # oldest first, as stored
         items.append(Item(kind="investigation", title=f"Running: {t.title}", at=t.started, id=t.id))
-    # its waste is read again at the next hourly run, which supersedes the approval
+    # its waste is read again at the next run that sizes it, which supersedes the approval
     actuated = {cl.name for cl in c.clusters if cl.actuator_token_secret}
     approved = {
-        "/".join(a[k] for k in ("cluster", "namespace", "kind", "name"))
+        "/".join(a[k] for k in ("cluster", "namespace", "kind", "name", "container"))
         for a in await st.approved_sizings(c.id)
         if a["cluster"] in actuated
     }
     wasting = [x for x in w.workloads if x.waste.cpu or x.waste.memory]
-    held = sum(x.workload in approved for x in wasting)
-    for x in [x for x in wasting if x.workload not in approved][:WASTE_TOP]:
+    # by container (audit A7b): one approved of a container the Workload no longer has is
+    # never sized again, so current for good: it hides nothing
+    hidden = {x.workload for x in wasting if any(k.workload in approved for k in x.containers)}
+    held = len(hidden)
+    for x in [x for x in wasting if x.workload not in hidden][:WASTE_TOP]:
         size = f"{show('cpu', x.waste.cpu)} and {show('memory', x.waste.memory)}"
         money = f"{x.cost.waste:.2f} {w.currency} a month, " if x.cost and w.currency else ""
         items.append(

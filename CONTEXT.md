@@ -30,7 +30,7 @@ The Operator's own MCP endpoint on the Hub, for an MCP client such as Claude Cod
 _Avoid_: Operator API, admin MCP
 
 **Agenda**:
-What the Operator should look at now in one Contract, ranked without a model in a fixed order of urgency: the Kill switch while it is on, pauses waiting for an Approval decision (soonest deadline first), failing Checks, data the Hub can't read (oldest first; a Relay that is offline counts), Bills outside their tolerance (biggest gap first), running Investigations, and the three Workloads whose waste costs most, leaving out each one with a current Approved Sizing on a cluster that runs an Actuator, applied or not: one line last counts those, as their waste is read again within the hour. Across Contracts it gives only the counts, that line not among them.
+What the Operator should look at now in one Contract, ranked without a model in a fixed order of urgency: the Kill switch while it is on, pauses waiting for an Approval decision (soonest deadline first), failing Checks, data the Hub can't read (oldest first; a Relay that is offline counts), Bills outside their tolerance (biggest gap first), running Investigations, and the three Workloads whose waste costs most, leaving out each one with a current Approved Sizing on a cluster that runs an Actuator, applied or not: one line last counts those, as their waste is read again at the next run that sizes them. Across Contracts it gives only the counts, that line not among them.
 _Avoid_: Inbox, to-do, dashboard
 
 **Proposed change**:
@@ -202,7 +202,7 @@ The CPU and memory requests the Hub computes for one container of a Workload fro
 _Avoid_: Recommendation (that is advice for a human), rightsizing recommendation, node group (a cloud's own word)
 
 **Approved Sizing**:
-One container's Sizing that the Operator approved from the Hub MCP server, kept with the exact requests approved, for the Actuator to apply. It is current, waiting to be applied, until a later Sizing of that container is stored, which supersedes it whatever its values: one superseded before the Actuator applied it never is. Once applied, the Actuator holds its requests until a later Approved Sizing of that container, Automation or a Revert; a later one that changes only one resource keeps the other's held value. Refused for a container that is learning or has no change, and while the Contract's Kill switch is on. Approving changes nothing in a cluster until the Actuator applies it.
+One container's Sizing that the Operator approved from the Hub MCP server, kept with the exact requests approved, for the Actuator to apply. It is current, waiting to be applied, until a later Sizing of that container is stored, which supersedes it whatever its values and for good (a run that read the cluster without that container supersedes nothing): one superseded before the Actuator applied it never is. Once applied, the Actuator holds its requests until a later Approved Sizing of that container, Automation or a Revert; a later one that changes only one resource keeps the other's held value. Refused for a container that is learning or has no change, and while the Contract's Kill switch is on. Approving changes nothing in a cluster until the Actuator applies it.
 _Avoid_: Applied Sizing, Executed action (nothing ran)
 
 **Sizing policy**:

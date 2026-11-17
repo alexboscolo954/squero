@@ -539,6 +539,15 @@ class Store:
                 "update sizing_runs set clusters = %s where id = %s and contract_id = %s",
                 (Jsonb(clusters), run_id, contract_id),
             )
+            # audit A7b: a later Sizing of an approved container supersedes it, for good
+            await conn.execute(
+                "update approved_sizings a set superseded_run = %s where a.contract_id = %s "
+                "and a.superseded_run is null and a.run_id < %s and exists (select 1 from "
+                "sizings s where s.run_id = %s and s.cluster = a.cluster "
+                "and s.namespace = a.namespace and s.kind = a.kind and s.name = a.name "
+                "and s.container = a.container)",
+                (run_id, contract_id, run_id, run_id),
+            )
 
     async def save_needs(
         self,
@@ -888,7 +897,11 @@ class Store:
             for r in ("cpu", "memory")
         ]
         stored = await self._one(
-            "insert into approved_sizings select %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s "
+            "insert into approved_sizings select %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+            # audit A7b: one of a run whose container a later run sized again is no current one
+            "(select min(s.run_id) from sizings s where s.contract_id = %s and s.cluster = %s "
+            "and s.namespace = %s and s.kind = %s and s.name = %s and s.container = %s "
+            "and s.run_id > %s) "
             "where not exists (select 1 from kill_switches where contract_id = %s) "
             # approved again after a Revert of that container: its time moves past the
             # Revert, so it is sent to the Actuator once more (slice 12.9b)
@@ -909,6 +922,9 @@ class Store:
                 at,
                 Jsonb(types) if types else None,
                 contract_id,
+                *keys,
+                run_id,
+                contract_id,
             ),
         )
         if stored:
@@ -916,18 +932,17 @@ class Store:
         return "killed" if await self.kill_switch(contract_id) else "already"
 
     async def approved_sizings(self, contract_id: str) -> list[dict[str, Any]]:
-        """The Contract's current Approved Sizings: those no later run read the
-        cluster of (a run still going, or failing there, supersedes nothing). `again`: one
+        """The Contract's current Approved Sizings: those of whose container no later Sizing
+        is stored (audit A7b; a run still going, or failing there, supersedes nothing, nor
+        one that read the cluster without that container). `again`: one
         approved after a Revert of its container (slice 12.9b)."""
         return await self._all(
             "select a.*, exists (select 1 from reverts v where v.contract_id = a.contract_id "
             "and v.cluster = a.cluster and v.namespace = a.namespace and v.kind = a.kind "
             "and v.name = a.name and v.container = a.container "
             "and v.asked_at < a.approved_at) as again "
-            "from approved_sizings a where contract_id = %s and not exists ("
-            "select 1 from sizing_runs r where r.contract_id = a.contract_id "
-            "and r.id > a.run_id and r.clusters -> a.cluster = 'null'::jsonb) "
-            "order by approved_at",
+            "from approved_sizings a where contract_id = %s and superseded_run is null "
+            "order by approved_at, cluster, namespace, kind, name, container",
             (contract_id,),
         )
 

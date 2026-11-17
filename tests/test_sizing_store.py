@@ -597,11 +597,13 @@ async def test_each_run_prunes_its_contracts_old_runs(
 
 
 @pytest.mark.anyio
-async def test_an_approved_sizing_is_current_until_a_later_run_reads_its_cluster(
+async def test_an_approved_sizing_is_current_until_a_later_sizing_of_its_container(
     store: Store,
 ) -> None:
-    """Slice 11.2b. A run still going, one failing on that cluster, one that read
-    only another cluster, and another Contract's run never supersede it."""
+    """Slice 11.2b, audit A7b. A run still going, one failing on that cluster, one that read
+    it without that container, the same container in another cluster, and another
+    Contract's run never supersede it; a later Sizing of it does, for good: pruning that
+    run changes nothing."""
     lowered = row(cpu={"action": "lower", "target": 0.1}, memory={"action": "keep", "target": 1})
     run = await stored(store, "acme", NOW, {"test": None, "edge": None}, lowered)
     assert await store.approve_sizing("acme", run, lowered, "mcp:op", NOW) == "approved"
@@ -613,12 +615,59 @@ async def test_an_approved_sizing_is_current_until_a_later_run_reads_its_cluster
 
     assert await current() == [(run, "api", 0.1, None)]
     await stored(store, "acme", NOW + H, {"test": "boom", "edge": None})
-    await stored(store, "bank", NOW + H, {"test": None})
+    await stored(store, "bank", NOW + H, {"test": None}, lowered)
+    await stored(
+        store, "acme", NOW + H, {"test": None, "edge": None}, row("web"), row(cluster="edge")
+    )
     await store.claim_sizing_run("acme", NOW + 2 * H, 0)  # still running
     assert await current() == [(run, "api", 0.1, None)]
     assert await store.approved_sizings("bank") == []
-    await stored(store, "acme", NOW + 3 * H, {"test": None})
+    await stored(store, "acme", NOW + 3 * H, {"test": None}, row(container="sidecar"), lowered)
     assert await current() == []
+    await store.prune_sizings("acme", NOW + 500 * 86400)  # every run gone
+    assert await current() == []
+
+
+@pytest.mark.anyio
+async def test_one_approved_from_a_run_its_container_was_sized_after_is_no_current_one(
+    store: Store,
+) -> None:
+    """Audit A7b: the Operator approves an older run's Sizing (one read before the next run
+    finished): stored, superseded already."""
+    lowered = row(cpu={"action": "lower", "target": 0.1})
+    old = await stored(store, "acme", NOW, {"test": None}, lowered)
+    later = await stored(store, "acme", NOW + H, {"test": None}, lowered)
+    await stored(store, "bank", NOW + 2 * H, {"test": None}, lowered)  # not acme's
+    assert await store.approve_sizing("acme", old, lowered, "mcp:op", NOW + H) == "approved"
+    assert await store.approved_sizings("acme") == []
+    # without it: another Workload, its other container, the same in another cluster
+    others = (row("web"), row(container="sidecar"), row(cluster="edge"))
+    await stored(store, "acme", NOW + 2 * H, {"test": None, "edge": None}, *others)
+    assert await store.approve_sizing("acme", later, lowered, "mcp:op", NOW + 2 * H) == "approved"
+    assert [a["run_id"] for a in await store.approved_sizings("acme")] == [later]
+
+
+@pytest.mark.anyio
+async def test_approvals_before_a7b_keep_their_answer(store: Store) -> None:
+    """Migration 0046: one a later run read the cluster of is superseded by the first such
+    run, even without its container; one no run read the cluster of since is current."""
+    import pathlib
+
+    from squero import store as store_module
+
+    old = row(cpu={"action": "lower", "target": 0.1})
+    run = await stored(store, "acme", NOW, {"test": None, "edge": None}, old, row(cluster="edge"))
+    await store.approve_sizing("acme", run, old, "mcp:op", NOW)
+    await store.approve_sizing("acme", run, row(cluster="edge"), "mcp:op", NOW)
+    await stored(store, "acme", NOW + H, {"test": "boom", "edge": "boom"})
+    read = await stored(store, "acme", NOW + 2 * H, {"test": None, "edge": "boom"}, row("web"))
+    await stored(store, "acme", NOW + 3 * H, {"test": None, "edge": "boom"})
+    sql = pathlib.Path(store_module.__file__).parent / "migrations/0046_approved_superseded.sql"
+    update = next(q for q in sql.read_text().split(";") if "update approved_sizings" in q)
+    await store._exec("update approved_sizings set superseded_run = null", ())
+    await store._exec(update, ())
+    got = await store._all("select cluster, superseded_run from approved_sizings order by 1", ())
+    assert [(g["cluster"], g["superseded_run"]) for g in got] == [("edge", None), ("test", read)]
 
 
 @pytest.mark.anyio

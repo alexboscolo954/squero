@@ -274,3 +274,18 @@ async def test_another_contracts_approval_never_hides_a_workload(store: Store) -
         "test/shop/Deployment/small",
         "1 Workload approved: its waste is read again within the hour",
     ]
+
+
+@pytest.mark.anyio
+async def test_an_approved_container_its_workload_no_longer_has_hides_nothing(
+    store: Store,
+) -> None:
+    """Audit A7b: big's container `old` approved, then gone from its template: no later run
+    sizes it, so its approval stays current, and big is ranked as any other."""
+    old, app = wasting("big", 3.0, container="old"), wasting("big", 3.0)
+    run = await stored(store, "acme", NOW, {"test": None, "edge": None}, old, app)
+    await approve(store, "acme", run, old)
+    assert ranked(await agenda.of(store, actuated(), NOW))[-1].startswith("1 Workload")
+    await stored(store, "acme", NOW + H, {"test": None, "edge": None}, app)
+    assert len(await store.approved_sizings("acme")) == 1  # still current
+    assert ranked(await agenda.of(store, actuated(), NOW + H)) == ["test/shop/Deployment/big"]

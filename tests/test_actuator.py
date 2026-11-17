@@ -26,6 +26,7 @@ from squero.api import create_app
 from squero.config import Settings
 from squero.store import Store, connect
 from tests.conftest import scripted
+from tests.test_sizing_store import row
 
 A_TOKEN = "a" * 40
 B_TOKEN = "b" * 40
@@ -84,6 +85,19 @@ def run(cid: str, clusters: str = "{}") -> Any:
         "insert into sizing_runs (contract_id, at, clusters) values (%s, 1, %s)",
         (cid, clusters),
     )
+
+
+def finished(database_url: str, cid: str, clusters: dict[str, Any], *rows: Any) -> None:
+    """A Sizing run of `cid` stored as the hourly tick stores one: its rows and clusters."""
+
+    async def go() -> None:
+        async with connect(database_url) as pool:
+            store = Store(pool)
+            run_id = await store.claim_sizing_run(cid, time.time(), 0)
+            assert run_id is not None
+            await store.finish_sizing_run(run_id, cid, clusters, list(rows))
+
+    asyncio.run(go())
 
 
 def as_actuator(token: str) -> dict[str, str]:
@@ -174,8 +188,10 @@ def test_the_kill_switch_and_a_later_run_leave_nothing_to_apply(
         sql(database_url, run("acme"), approve("acme", 1), approve("bank", 1))
         sql(database_url, ("insert into kill_switches values ('acme', 't', 1)", ()))
         killed = c.get("/actuator/desired", headers=as_actuator(A_TOKEN)).json()
-        # bank's run 2 read its cluster test: run 1's approval was never applied, and won't be
-        sql(database_url, run("bank", '{"edge": null}'), run("bank", '{"test": null}'))
+        # bank's run 3 sized its container again: run 1's approval was never applied, and
+        # won't be (audit A7b: run 2, of another cluster, supersedes nothing)
+        finished(database_url, "bank", {"edge": None}, row(cluster="edge"))
+        finished(database_url, "bank", {"test": None}, row())
         superseded = c.get("/actuator/desired", headers=as_actuator(B_TOKEN)).json()
     assert killed == {
         "kill_switch": True,
@@ -838,8 +854,8 @@ def hub_of(answers: list[Any], seen: list[httpx.Request]) -> httpx.Client:
         if request.url.path == "/actuator/desired":
             got = next(pulls)
             return got if isinstance(got, httpx.Response) else httpx.Response(200, json=got)
-        # audit A7: the Hub refuses a report of a kind it doesn't resize, whole
-        assert {a["kind"] for a in json.loads(request.content)} <= set(actuator.KINDS)
+        if request.url.path == "/actuator/reports":  # audit A7: else refused, whole
+            assert {a["kind"] for a in json.loads(request.content)} <= set(actuator.KINDS)
         return reports.pop(0) if reports else httpx.Response(204)
 
     reports: list[httpx.Response] = []
@@ -860,6 +876,33 @@ def make(http: httpx.Client, core: Any, apps: Any, **kw: Any) -> actuator.Actuat
     return actuator.Actuator(
         http, core, apps, "squero-actuator", autoscaling=autoscaling, custom=custom, **kw
     )
+
+
+@pytest.mark.parametrize(
+    ("change", "said"),
+    [("gone", "no such Deployment"), ("renamed", "no container 'app' in its template")],
+)
+def test_an_approval_it_cant_apply_is_reported_once_however_long_it_stays_current(
+    change: str, said: str
+) -> None:
+    """Audit A7b: an approval whose container no run sizes again stays current for good: its
+    Workload deleted, or the container gone from its template. Said once, kept as done."""
+    core, apps = cluster()
+    if change == "gone":
+        apps.read_namespaced_deployment.side_effect = ApiException(status=404)
+    else:
+        apps.read_namespaced_deployment.return_value.spec.template.spec.containers[0].name = "web"
+    seen: list[httpx.Request] = []
+    a = make(hub_of([desired(1)] * 4, seen), core, apps)
+    for _ in range(4):
+        a.step()
+    posted = [
+        (x["outcome"], x["reason"])
+        for r in seen
+        if r.url.path == "/actuator/reports"
+        for x in json.loads(r.content)
+    ]
+    assert posted == [("skipped", said)] and not resized(core)
 
 
 def test_a_rollout_goes_on_only_while_the_hub_answers_and_the_kill_switch_is_off(
@@ -1975,9 +2018,9 @@ def test_an_actuator_gets_its_own_pending_reverts_and_automation_stops_until_an_
             revert("bank", now - 60, "ledger"),
             # none of these closes api's Revert or resumes its Automation: from before it
             rolled_back("acme", now - 120, outcome="reverted"),
-            (
+            (  # of run 0, superseded by run 1's Sizing of it (audit A7b)
                 "insert into approved_sizings values ('acme', 0, 'test', 'shop', 'Deployment', "
-                "'api', 'app', 1, null, 't', %s)",
+                "'api', 'app', 1, null, 't', %s, null, 1)",
                 (now - 120,),
             ),
             approve("acme", 1),  # current, but older than api's Revert: never applied now
@@ -1990,8 +2033,11 @@ def test_an_actuator_gets_its_own_pending_reverts_and_automation_stops_until_an_
         done = report(outcome="reverted", name="web", reason="reverted", at=now)
         c.post("/actuator/reports", json=[done], headers=as_actuator(A_TOKEN))
         # web is approved since its Revert: Automation of it goes on
-        sql(database_url, ("insert into approved_sizings values ('acme', 0, 'test', 'shop', "
-                           "'Deployment', 'web', 'app', 1, null, 't', %s)", (now,)))  # fmt: skip
+        web = (
+            "insert into approved_sizings values ('acme', 0, 'test', 'shop', 'Deployment', "
+            "'web', 'app', 1, null, 't', %s, null, 1)"
+        )  # of run 0, superseded by run 1's Sizing of it, as api's (audit A7b)
+        sql(database_url, (web, (now,)))
         after = c.get("/actuator/desired", headers=as_actuator(A_TOKEN)).json()
         sql(database_url, ("insert into kill_switches values ('acme', 't', 1)", ()))
         killed = c.get("/actuator/desired", headers=as_actuator(A_TOKEN)).json()
