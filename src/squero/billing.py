@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 TOLERANCE = 0.05  # the estimate may differ from the bill by this much and still reconcile
 MIN_COVERAGE = 0.9  # below this share of the window's hours sampled, the estimate can't judge
 LAG_DAYS = 2  # Cost Explorer settles a day within about 24 to 48 hours
+# audit A6a: a day read this soon after it ended may still be filling in GCP's export
+SETTLES = 3 * 86400
 KEPT_DAYS = 30  # days read each time, and the most `--days` takes
 DAY = 86400
 HOUR = 3600
@@ -37,7 +39,9 @@ GCP_QUERY = """
 SELECT FORMAT_DATE('%Y-%m-%d', DATE(usage_start_time, 'UTC')) AS day, currency,
        SUM(cost) AS cost,
        SUM(IF(STARTS_WITH(sku.description, 'Spot Preemptible')
-              OR STARTS_WITH(sku.description, 'Preemptible'), cost, 0)) AS spot
+              OR STARTS_WITH(sku.description, 'Preemptible'), cost, 0)) AS spot,
+       SUM(IF(sku.description LIKE '% Instance Ram running%',
+              usage.amount_in_pricing_units, 0)) AS ram_hours
 FROM `{table}`
 WHERE usage_start_time >= @start AND usage_start_time < @end
   AND service.description = 'Compute Engine' AND cost_type = 'regular'
@@ -47,9 +51,10 @@ WHERE usage_start_time >= @start AND usage_start_time < @end
 GROUP BY day, currency
 """
 LOGIN = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
-# day -> amount, currency, still estimated, and what its spot lines cost (slice 16.4b;
-# None where the total's read doesn't say: AWS's and Azure's come from a read of their own)
-Bill = dict[str, tuple[float, str, bool, float | None]]
+# day -> amount, currency, still estimated, what its spot lines cost (slice 16.4b; None
+# where the total's read doesn't say: AWS's and Azure's come from a read of their own), and
+# the RAM GiB-hours its lines charged for (audit A6a: GCP's export only, else None)
+Bill = dict[str, tuple[float, str, bool, float | None, float | None]]
 COMPUTE = "Amazon Elastic Compute Cloud - Compute"
 
 
@@ -94,7 +99,7 @@ def parse(body: dict[str, Any]) -> Bill:
     for r in body.get("ResultsByTime", []):
         cost = r["Total"]["UnblendedCost"]
         out[r["TimePeriod"]["Start"]] = (
-            float(cost["Amount"]), cost["Unit"], bool(r["Estimated"]), None
+            float(cost["Amount"]), cost["Unit"], bool(r["Estimated"]), None, None
         )  # fmt: skip
     return out
 
@@ -208,7 +213,7 @@ def azure_parse(body: dict[str, Any], before: Bill | None = None) -> Bill:
         key = f"{d[:4]}-{d[4:6]}-{d[6:]}"
         if key in out or key in (before or {}):
             raise ValueError(f"{key} was billed in two currencies")
-        out[key] = (float(row[cost]), row[unit], False, None)
+        out[key] = (float(row[cost]), row[unit], False, None, None)
     return out
 
 
@@ -307,9 +312,10 @@ def fill_gaps(out: Bill, start: str) -> Bill:
     if out:
         unit = next(iter(out.values()))[1]
         spot = None if out[max(out)][3] is None else 0.0  # unread stays unread (16.4b)
+        ram = None if out[max(out)][4] is None else 0.0  # and the same (audit A6a)
         day = date.fromisoformat(start)
         while day.isoformat() < max(out):
-            out.setdefault(day.isoformat(), (0.0, unit, False, spot))
+            out.setdefault(day.isoformat(), (0.0, unit, False, spot, ram))
             day += timedelta(days=1)
     return out
 
@@ -344,10 +350,10 @@ def gcp_parse(body: dict[str, Any]) -> Bill:
         raise ValueError("BigQuery answered in pages: more days than expected")
     out: Bill = {}
     for row in body.get("rows", []):
-        day, unit, cost, spot = (c["v"] for c in row["f"])
+        day, unit, cost, spot, ram = (c["v"] for c in row["f"])
         if day in out:
             raise ValueError(f"{day} was billed in two currencies")
-        out[day] = (float(cost), unit, False, float(spot or 0))
+        out[day] = (float(cost), unit, False, float(spot or 0), float(ram or 0))
     return out
 
 
@@ -481,11 +487,44 @@ async def refresh(
                     spot = await asyncio.to_thread(
                         read_spot, http, cl.billing.tag, start, end.isoformat(), now
                     )
-                    got = {d: (a, u, e, spot.get(d, 0.0)) for d, (a, u, e, _) in got.items()}
+                    got = {
+                        d: (a, u, e, spot.get(d, 0.0), ram) for d, (a, u, e, _, ram) in got.items()
+                    }
                 except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
                     spot_error = listprices.why(e, None)
             await store.save_bill(c.id, cl.name, got, now, spot_error)
     return reads
+
+
+def _settling(billed: list[dict[str, Any]], sampled: list[float], read: float) -> str | None:
+    """Why the window is still settling (audit A6a), or None: a day of it was billed for
+    fewer RAM GiB-hours than its nodes were sampled for, by more than the tolerance, and
+    was read (at `read`, the last good read) less than `SETTLES` after it ended. Not when
+    every day is short: that is a real gap (a label missing from nodes), not a bill still
+    filling; nor a day read later. Only GCP's export says how many hours a day charged
+    for, and GCP's export was seen still filling a day 28 hours after it ended, complete
+    30 to 38 hours after (slice 10.5c), where its estimate of a node's memory was 3%
+    under what GCP billed: a complete day reads at or above its samples."""
+    short = [
+        b.get("ram_hours") is not None and b["ram_hours"] < s * (1 - TOLERANCE)
+        for b, s in zip(billed, sampled, strict=True)
+    ]
+    if all(short):
+        return None
+    fresh = [
+        (b["day"], b["ram_hours"], s)
+        for b, s, low in zip(billed, sampled, short, strict=True)
+        if low
+        and read - (datetime.fromisoformat(b["day"]).replace(tzinfo=UTC).timestamp() + DAY)
+        < SETTLES
+    ]
+    if not fresh:
+        return None
+    said = ", ".join(f"{day} is billed for {ram:.0f} of {s:.0f}" for day, ram, s in fresh)
+    return (
+        f"still settling: {said} GiB-hours its nodes were sampled for; the next daily read "
+        "of the bill has more"
+    )
 
 
 def gap(estimated: float, billed: float) -> float | None:
@@ -571,7 +610,9 @@ async def report(
         first = datetime.fromisoformat(wanted[0]).replace(tzinfo=UTC).timestamp()
         last = datetime.fromisoformat(wanted[-1]).replace(tzinfo=UTC).timestamp() + DAY - 1
         try:
-            vcpu, gib, sampled = await asyncio.to_thread(usage.node_hours, prom(t), t, first, last)
+            vcpu, gib, sampled, daily = await asyncio.to_thread(
+                usage.node_hours, prom(t), t, first, last
+            )
             spot_cpu, spot_gib = (
                 await asyncio.to_thread(usage.spot_hours, prom(t), t, cl.spot.label, first, last)
                 if cl.spot
@@ -611,7 +652,11 @@ async def report(
             )
         if sampled < row["hours"]:
             notes.append(f"the estimate rests on {sampled} of {row['hours']} sampled hours")
+        read = (tries.get(cl.name) or {}).get("ok_at") or now
+        billed_days, sampled_days = [seen[d] for d in wanted], [daily.get(d, 0.0) for d in wanted]
+        if settling := _settling(billed_days, sampled_days, read):
+            notes.append(settling)
         row["note"] = "; ".join(notes) or None
-        if row["coverage"] < MIN_COVERAGE:
-            row["within"] = None  # missing samples, not prices, make this gap: no verdict
+        if row["coverage"] < MIN_COVERAGE or settling:
+            row["within"] = None  # missing samples, or bill lines, not prices: no verdict
     return out

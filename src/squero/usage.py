@@ -20,6 +20,7 @@ from collections import defaultdict
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -667,25 +668,30 @@ def nodes(
     return {"nodes": out, "problem": problem, "spot": spot}
 
 
-def node_hours(prom: Prom, t: Target, start: float, end: float) -> tuple[float, float, int]:
+def node_hours(
+    prom: Prom, t: Target, start: float, end: float
+) -> tuple[float, float, int, dict[str, float]]:
     """The vCPU-hours and GiB-hours of the cluster's nodes between `start` and `end`
-    (slice 10.5a), from kube-state-metrics' node capacity, one sample an hour, and how
-    many hourly samples there were (a sleeping laptop leaves gaps; slice 10.5d). Node
-    series carry no namespace: only the cluster's labels scope them."""
+    (slice 10.5a), from kube-state-metrics' node capacity, one sample an hour, how many
+    hourly samples there were (a sleeping laptop leaves gaps; slice 10.5d), and the
+    GiB-hours of each UTC day (audit A6a: a day's bill checked against them). Node series
+    carry no namespace: only the cluster's labels scope them."""
     # ponytail: an hourly sample stands for its hour; a node that lived 20 minutes is
     # counted whole or not at all. Finer steps if the gap to the bill shows it.
     scoped = ",".join(f"{k}={_string(v)}" for k, v in sorted(t.labels.items()))
 
-    def hours(resource: str) -> tuple[float, int]:
+    def hours(resource: str) -> tuple[float, int, dict[str, float]]:
         match = ",".join(filter(None, [scoped, f"resource={_string(resource)}"]))
         series = prom.range(f"sum(kube_node_status_capacity{{{match}}})", start, end, 3600)
-        return (
-            sum(float(v) for s in series for _, v in s["values"]),
-            sum(len(s["values"]) for s in series),
-        )
+        days: dict[str, float] = {}
+        for s in series:
+            for at, v in s["values"]:
+                day = datetime.fromtimestamp(float(at), UTC).date().isoformat()
+                days[day] = days.get(day, 0.0) + float(v)
+        return sum(days.values()), sum(len(s["values"]) for s in series), days
 
-    (vcpu, sampled), (memory, _) = hours("cpu"), hours("memory")
-    return vcpu, memory / 2**30, sampled
+    (vcpu, sampled, _), (memory, _, days) = hours("cpu"), hours("memory")
+    return vcpu, memory / 2**30, sampled, {d: v / 2**30 for d, v in days.items()}
 
 
 def spot_hours(prom: Prom, t: Target, spot: str, start: float, end: float) -> tuple[float, float]:

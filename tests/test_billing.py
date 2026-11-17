@@ -4,6 +4,7 @@ is node capacity-hours times the cluster's CPU and GiB prices; the gap is its di
 from the bill as a fraction of the bill, within 5% or flagged."""
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -123,7 +124,7 @@ def test_a_tag_value_may_hold_an_equals_sign() -> None:
 
 def test_the_days_are_parsed_with_their_unit_and_whether_aws_may_still_change_them() -> None:
     assert billing.parse(body({"1972-09-25": 2.5}, "EUR", estimated=True)) == {
-        "1972-09-25": (2.5, "EUR", True, None)  # its spot part: a read of its own (16.4b)
+        "1972-09-25": (2.5, "EUR", True, None, None)  # its spot part: a read of its own (16.4b)
     }
 
 
@@ -132,7 +133,7 @@ def test_the_request_is_signed_and_the_secret_never_sent() -> None:
     got = billing.aws_fetch(
         ce.client(), "AKIAIOSFODNN7EXAMPLE", SECRET, TAG, DAYS[0], "1972-09-26", NOW
     )
-    assert got[DAYS[0]] == (2.2, "USD", False, None)
+    assert got[DAYS[0]] == (2.2, "USD", False, None, None)
     (sent,) = ce.asked
     assert sent.url.host == "ce.us-east-1.amazonaws.com"
     assert sent.headers["x-amz-target"] == "AWSInsightsIndexService.GetCostAndUsage"
@@ -168,7 +169,9 @@ def test_the_gap_is_a_fraction_of_the_bill() -> None:
 async def seed(
     store: Store, c: contracts.Contract, amounts: dict[str, float], unit: str = "USD"
 ) -> None:
-    await store.save_bill(c.id, "test", {d: (a, unit, False, 0.0) for d, a in amounts.items()}, NOW)
+    await store.save_bill(
+        c.id, "test", {d: (a, unit, False, 0.0, None) for d, a in amounts.items()}, NOW
+    )
 
 
 async def row(
@@ -339,15 +342,16 @@ def test_the_estimate_counts_the_clusters_node_hours() -> None:
     fake = FakePrometheus()
     nodes(fake, hours=48)
     t = usage.Target("test", "http://prometheus", None, {}, ["shop"])
-    vcpu, gib, sampled = usage.node_hours(_prom(fake, t), t, 0, 48 * 3600 - 1)
+    vcpu, gib, sampled, daily = usage.node_hours(_prom(fake, t), t, 0, 48 * 3600 - 1)
     assert (vcpu, gib, sampled) == (96.0, 384.0, 48)
+    assert daily == {"1970-01-01": 192.0, "1970-01-02": 192.0}  # audit A6a: by UTC day
 
 
 def test_the_samples_counted_are_the_hours_the_nodes_were_seen() -> None:
     fake = FakePrometheus()
     nodes(fake, hours=30)  # 18 of the 48 hours missing
     t = usage.Target("test", "http://prometheus", None, {}, ["shop"])
-    assert usage.node_hours(_prom(fake, t), t, 0, 48 * 3600 - 1) == (60.0, 240.0, 30)
+    assert usage.node_hours(_prom(fake, t), t, 0, 48 * 3600 - 1)[:3] == (60.0, 240.0, 30)
 
 
 @pytest.mark.parametrize(
@@ -489,7 +493,7 @@ def test_the_azure_request_asks_for_the_tags_vm_usage_before_credits() -> None:
 
 def test_azure_days_are_parsed_by_column_with_their_currency() -> None:
     assert billing.azure_parse(azure_body({"1972-09-25": 2.5})) == {
-        "1972-09-25": (2.5, "BRL", False, None)
+        "1972-09-25": (2.5, "BRL", False, None, None)
     }
 
 
@@ -498,7 +502,7 @@ def test_azure_asks_for_a_token_then_the_query_and_sends_the_secret_only_for_the
     got = billing.azure_fetch(
         cm.client(), TENANT, CLIENT, AZ_SECRET, SUB, TAG, DAYS[0], "1972-09-26"
     )
-    assert got[DAYS[0]] == (2.2, "BRL", False, None)
+    assert got[DAYS[0]] == (2.2, "BRL", False, None, None)
     token, query = cm.asked
     assert str(token.url) == f"https://login.microsoftonline.com/{TENANT}/oauth2/v2.0/token"
     assert f"client_secret={AZ_SECRET.replace('~', '%7E')}" in token.content.decode() or (
@@ -516,10 +520,10 @@ def test_a_day_without_usage_before_the_latest_day_reads_as_zero() -> None:
     cm = CostManagement({DAYS[0]: 2.0, DAYS[3]: 3.0})
     got = billing.azure_fetch(cm.client(), TENANT, CLIENT, AZ_SECRET, SUB, TAG, DAYS[0], DAYS[5])
     assert got == {
-        DAYS[0]: (2.0, "BRL", False, None),
-        DAYS[1]: (0.0, "BRL", False, None),
-        DAYS[2]: (0.0, "BRL", False, None),
-        DAYS[3]: (3.0, "BRL", False, None),
+        DAYS[0]: (2.0, "BRL", False, None, None),
+        DAYS[1]: (0.0, "BRL", False, None, None),
+        DAYS[2]: (0.0, "BRL", False, None, None),
+        DAYS[3]: (3.0, "BRL", False, None, None),
     }  # DAYS[4] may just not have settled: left missing
     empty = CostManagement({})
     assert (
@@ -593,7 +597,7 @@ async def test_a_brl_bill_is_compared_with_brl_prices_and_not_with_usd_ones(stor
     fake = FakePrometheus()
     nodes(fake)
     brl = azure_billed("BRL")
-    await store.save_bill(brl.id, "test", {d: (2.2, "BRL", False, 0.0) for d in DAYS}, NOW)
+    await store.save_bill(brl.id, "test", {d: (2.2, "BRL", False, 0.0, None) for d in DAYS}, NOW)
     got = await row(store, brl, fake)
     assert got["currency"] == "BRL" and got["gap"] is not None and got["note"] is None
     usd = azure_billed("USD")
@@ -636,7 +640,9 @@ def test_the_cli_prints_a_bill_of_nothing_beside_an_estimate(
         async with connect(database_url) as pool:
             store = Store(pool)
             await store.migrate()
-            await store.save_bill(c.id, "test", {d: (0.0, "USD", False, 0.0) for d in DAYS}, NOW)
+            await store.save_bill(
+                c.id, "test", {d: (0.0, "USD", False, 0.0, None) for d in DAYS}, NOW
+            )
 
     asyncio.run(seed_zero())
     report = billing.report
@@ -712,7 +718,9 @@ def test_the_cli_does_not_fail_a_row_for_missing_samples_alone(
         async with connect(database_url) as pool:
             store = Store(pool)
             await store.migrate()
-            await store.save_bill(c.id, "test", {d: (2.2, "USD", False, 0.0) for d in DAYS}, NOW)
+            await store.save_bill(
+                c.id, "test", {d: (2.2, "USD", False, 0.0, None) for d in DAYS}, NOW
+            )
 
     asyncio.run(seed_bills())
     report = billing.report
@@ -759,11 +767,15 @@ def gcp_billed(
     return contracts.build(data, secrets={"gcp-key": SecretStr(GCP_KEY)})
 
 
-def gcp_body(amounts: dict[str, float], unit: str = "BRL") -> dict[str, Any]:
+def gcp_body(
+    amounts: dict[str, float], unit: str = "BRL", ram: dict[str, float] | None = None
+) -> dict[str, Any]:
+    ram_ = ram or {}
     return {
         "jobComplete": True,
         "rows": [
-            {"f": [{"v": d}, {"v": unit}, {"v": str(a)}, {"v": "0"}]} for d, a in amounts.items()
+            {"f": [{"v": d}, {"v": unit}, {"v": str(a)}, {"v": "0"}, {"v": str(ram_.get(d, 0))}]}
+            for d, a in amounts.items()
         ],
     }
 
@@ -776,6 +788,7 @@ class BigQuery:
         self.amounts = amounts if amounts is not None else dict.fromkeys(DAYS, 2.2)
         self.unit = unit
         self.status = 200
+        self.ram: dict[str, float] = {}  # audit A6a: each day's billed RAM GiB-hours
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.asked.append(request)
@@ -783,7 +796,7 @@ class BigQuery:
             return httpx.Response(200, json={"access_token": "tok", "expires_in": 3600})
         if self.status != 200:
             return httpx.Response(self.status, json={"error": {"message": GCP_KEY}})
-        return httpx.Response(200, json=gcp_body(self.amounts, self.unit))
+        return httpx.Response(200, json=gcp_body(self.amounts, self.unit, self.ram))
 
     def client(self) -> httpx.Client:
         return httpx.Client(transport=httpx.MockTransport(self))
@@ -809,7 +822,7 @@ def test_the_gcp_query_asks_for_the_labels_core_and_ram_usage_spot_included() ->
 
 def test_gcp_days_are_parsed_with_their_currency() -> None:
     assert billing.gcp_parse(gcp_body({"1972-09-25": 2.5})) == {
-        "1972-09-25": (2.5, "BRL", False, 0.0)
+        "1972-09-25": (2.5, "BRL", False, 0.0, 0.0)
     }
     assert billing.gcp_parse({"jobComplete": True}) == {}  # a label with no usage
 
@@ -830,7 +843,7 @@ def test_gcp_mints_a_bigquery_only_token_at_googles_endpoint_then_queries() -> N
     got = billing.gcp_fetch(
         bq.client(), GCP_KEY, "acme-prod", TABLE, GCP_TAG, DAYS[0], "1972-09-26"
     )
-    assert got[DAYS[0]] == (2.2, "BRL", False, 0.0)
+    assert got[DAYS[0]] == (2.2, "BRL", False, 0.0, 0.0)
     token, query = bq.asked
     assert str(token.url) == "https://oauth2.googleapis.com/token"
     form = dict(x.split("=", 1) for x in token.content.decode().split("&"))
@@ -852,10 +865,10 @@ def test_a_gcp_day_without_usage_before_the_latest_reads_as_zero() -> None:
     bq = BigQuery({DAYS[0]: 2.0, DAYS[3]: 3.0})
     got = billing.gcp_fetch(bq.client(), GCP_KEY, "acme-prod", TABLE, GCP_TAG, DAYS[0], DAYS[5])
     assert got == {
-        DAYS[0]: (2.0, "BRL", False, 0.0),
-        DAYS[1]: (0.0, "BRL", False, 0.0),
-        DAYS[2]: (0.0, "BRL", False, 0.0),
-        DAYS[3]: (3.0, "BRL", False, 0.0),
+        DAYS[0]: (2.0, "BRL", False, 0.0, 0.0),
+        DAYS[1]: (0.0, "BRL", False, 0.0, 0.0),
+        DAYS[2]: (0.0, "BRL", False, 0.0, 0.0),
+        DAYS[3]: (3.0, "BRL", False, 0.0, 0.0),
     }
 
 
@@ -963,7 +976,7 @@ async def test_a_gcp_bill_in_brl_is_compared_with_brl_prices_only(store: Store) 
     nodes(fake)
     for money, note in (("BRL", None), ("USD", "not converted")):
         c = gcp_billed(money)
-        await store.save_bill(c.id, "test", {d: (2.2, "BRL", False, 0.0) for d in DAYS}, NOW)
+        await store.save_bill(c.id, "test", {d: (2.2, "BRL", False, 0.0, None) for d in DAYS}, NOW)
         got = await row(store, c, fake)
         assert (got["gap"] is not None) == (note is None)
         assert note is None or note in got["note"]
@@ -973,7 +986,7 @@ async def test_a_gcp_bill_in_brl_is_compared_with_brl_prices_only(store: Store) 
 async def test_two_gcp_contracts_bills_stay_apart(store: Store) -> None:
     a, b = gcp_billed(), gcp_billed()
     b = b.model_copy(update={"id": "other"})
-    await store.save_bill(a.id, "test", {d: (2.2, "BRL", False, 0.0) for d in DAYS}, NOW)
+    await store.save_bill(a.id, "test", {d: (2.2, "BRL", False, 0.0, None) for d in DAYS}, NOW)
     days, tries = await store.bills(b.id)
     assert days == {} and tries == {}
 
@@ -1057,12 +1070,12 @@ def test_gcp_sums_its_spot_skus_in_its_one_query() -> None:
     assert "STARTS_WITH(sku.description, 'Spot Preemptible')" in sql
     assert "STARTS_WITH(sku.description, 'Preemptible')" in sql and "AS spot" in sql
     reply = {"jobComplete": True, "rows": [
-        {"f": [{"v": DAYS[0]}, {"v": "USD"}, {"v": "3.0"}, {"v": "1.25"}]},
-        {"f": [{"v": DAYS[1]}, {"v": "USD"}, {"v": "2.0"}, {"v": None}]},
+        {"f": [{"v": DAYS[0]}, {"v": "USD"}, {"v": "3.0"}, {"v": "1.25"}, {"v": "48.5"}]},
+        {"f": [{"v": DAYS[1]}, {"v": "USD"}, {"v": "2.0"}, {"v": None}, {"v": None}]},
     ]}  # fmt: skip
     assert billing.gcp_parse(reply) == {
-        DAYS[0]: (3.0, "USD", False, 1.25),
-        DAYS[1]: (2.0, "USD", False, 0.0),
+        DAYS[0]: (3.0, "USD", False, 1.25, 48.5),
+        DAYS[1]: (2.0, "USD", False, 0.0, 0.0),
     }
     assert billing.spot_reader(gcp_billed(), gcp_billed().clusters[0]) is None
 
@@ -1106,17 +1119,17 @@ async def test_the_bills_spot_part_is_set_beside_the_estimates(store: Store) -> 
     c, fake = billed(spot=RATE), FakePrometheus()
     nodes(fake)
     fake.add("kube_node_labels", [1.0] * 168, node="n1", label_karpenter_sh_capacity_type="spot")
-    await store.save_bill(c.id, "test", {d: (2.2, "USD", False, 0.5) for d in DAYS}, NOW)
+    await store.save_bill(c.id, "test", {d: (2.2, "USD", False, 0.5, None) for d in DAYS}, NOW)
     got = await row(store, c, fake)
     assert got["spot_billed"] == pytest.approx(3.5)
     # n1 on spot all week: its hours at a spot node's rate, the typed price's 0.35
     assert got["spot_estimated"] == pytest.approx(ESTIMATE * 0.35)
     plain = billed("bank")
-    await store.save_bill(plain.id, "test", {d: (2.2, "USD", False, 0.25) for d in DAYS}, NOW)
+    await store.save_bill(plain.id, "test", {d: (2.2, "USD", False, 0.25, None) for d in DAYS}, NOW)
     got = await row(store, plain, fake)
     assert got["spot_estimated"] is None and got["spot_billed"] == pytest.approx(1.75)  # its own
     assert got["note"].startswith("the bill has spot lines: name the cluster's spot nodes")
-    await store.save_bill(plain.id, "test", {d: (2.2, "USD", False, 0.0) for d in DAYS}, NOW)
+    await store.save_bill(plain.id, "test", {d: (2.2, "USD", False, 0.0, None) for d in DAYS}, NOW)
     assert (await row(store, plain, fake))["note"] is None  # no spot lines: nothing to say
 
 
@@ -1126,7 +1139,7 @@ async def test_a_spot_part_not_read_says_why(store: Store) -> None:
 
     c, fake = billed(spot=RATE), FakePrometheus()
     nodes(fake)
-    await store.save_bill(c.id, "test", {d: (2.2, "USD", False, None) for d in DAYS}, NOW)
+    await store.save_bill(c.id, "test", {d: (2.2, "USD", False, None, None) for d in DAYS}, NOW)
     got = await row(store, c, fake)
     assert got["spot_billed"] is None
     assert "its spot lines come with the next daily read of the bill" in got["note"]
@@ -1152,7 +1165,9 @@ def test_the_cli_prints_the_bills_spot_part_beside_the_estimates(
         async with connect(database_url) as pool:
             store = Store(pool)
             await store.migrate()
-            await store.save_bill(c.id, "test", {d: (2.2, "USD", False, 0.5) for d in DAYS}, NOW)
+            await store.save_bill(
+                c.id, "test", {d: (2.2, "USD", False, 0.5, None) for d in DAYS}, NOW
+            )
 
     asyncio.run(seed())
     report = billing.report
@@ -1166,3 +1181,106 @@ def test_the_cli_prints_the_bills_spot_part_beside_the_estimates(
     monkeypatch.setattr(time, "time", lambda: NOW)
     cli.main(["sizing", "bill", "--contract", c.id])
     assert f"; spot billed 3.50, estimated {ESTIMATE * 0.35:.2f}" in capsys.readouterr().out
+
+
+# --- audit A6a: a GCP day still settling ---------------------------------------------------
+
+
+def billed_hours(*ram: float | None) -> list[dict[str, Any]]:
+    return [{"day": d, "ram_hours": r} for d, r in zip(DAYS, ram, strict=False)]
+
+
+def ended(i: int) -> float:
+    """When DAYS[i] ended."""
+    return datetime.fromisoformat(DAYS[i]).replace(tzinfo=UTC).timestamp() + billing.DAY
+
+
+@pytest.mark.parametrize(
+    ("ram", "read", "settling"),
+    [
+        ((192.0, 192.0, 150.0), ended(2) + 28 * H, True),  # 10.5c: still filling at 28 h
+        ((192.0, 192.0, 182.5), ended(2) + 28 * H, False),  # 95% of it: within the tolerance
+        ((192.0, 192.0, 182.3), ended(2) + 28 * H, True),  # just under
+        ((192.0, 150.0, 150.0), ended(2) + 28 * H, True),  # two days, both read soon after
+        ((150.0, 150.0, 150.0), ended(2) + 28 * H, False),  # every day short: a real gap
+        ((150.0, 192.0, 192.0), ended(2) + 28 * H, False),  # read 76 h after it ended
+        ((192.0, 192.0, 150.0), ended(2) + 73 * H, False),  # read 3 days on, still short
+        ((192.0, 192.0, 150.0), ended(2) + 71 * H, True),
+        ((192.0, 192.0, None), ended(2) + 28 * H, False),  # AWS and Azure say no hours
+        ((192.0, 192.0, 0.0), ended(2) + 28 * H, True),  # nothing of it in the export yet
+    ],
+)
+def test_a_day_billed_for_fewer_hours_than_sampled_soon_after_it_ended_is_settling(
+    ram: tuple[float | None, ...], read: float, settling: bool
+) -> None:
+    got = billing._settling(billed_hours(*ram), [192.0] * len(ram), read)
+    assert (got is not None) == settling
+
+
+def test_the_settling_days_are_named_with_their_hours() -> None:
+    got = billing._settling(billed_hours(192.0, 150.0, 20.0), [192.0] * 3, ended(2) + 28 * H)
+    assert got == (
+        "still settling: 1972-09-20 is billed for 150 of 192, 1972-09-21 is billed for 20 of "
+        "192 GiB-hours its nodes were sampled for; the next daily read of the bill has more"
+    )
+
+
+@pytest.mark.anyio
+async def test_a_window_whose_newest_day_is_settling_has_no_verdict(store: Store) -> None:
+    """Slice 10.5c's live finding: a newly enabled export still filling a day 28 hours
+    after it ended read +15.3% "outside"."""
+    fake = FakePrometheus()
+    nodes(fake)
+    c = gcp_billed()
+    full = {d: (1.6, "USD", False, 0.0, 192.0) for d in DAYS}  # 8 GiB a node-hour, 24 hours
+    await store.save_bill(c.id, "test", full | {DAYS[-1]: (0.2, "USD", False, 0.0, 20.0)}, NOW)
+    got = await row(store, c, fake)
+    assert got["gap"] is not None and got["within"] is None
+    assert got["note"] == (
+        "still settling: 1972-09-25 is billed for 20 of 192 GiB-hours its nodes were sampled "
+        "for; the next daily read of the bill has more"
+    )
+    await store.save_bill(c.id, "test", full, NOW)  # settled: judged again
+    settled = await row(store, c, fake)
+    assert settled["within"] is not None and settled["note"] is None
+
+
+@pytest.mark.anyio
+async def test_each_day_keeps_its_billed_ram_hours_and_a_new_read_replaces_them(
+    store: Store,
+) -> None:
+    c = gcp_billed()
+    await store.save_bill(c.id, "test", {DAYS[0]: (1.0, "USD", False, 0.0, 20.0)}, NOW)
+    await store.save_bill(c.id, "test", {DAYS[0]: (1.6, "USD", False, 0.0, 192.0)}, NOW)
+    days, _ = await store.bills(c.id)
+    assert days["test"][DAYS[0]]["ram_hours"] == 192.0
+    other = c.model_copy(update={"id": "other"})
+    assert (await store.bills(other.id))[0] == {}
+
+
+def test_the_gcp_query_sums_the_ram_skus_hours() -> None:
+    sql = billing.gcp_request(TABLE, GCP_TAG, "1972-09-01", "1972-09-26")["query"]
+    assert (
+        "SUM(IF(sku.description LIKE '% Instance Ram running%',\n"
+        "              usage.amount_in_pricing_units, 0)) AS ram_hours"
+    ) in sql
+
+
+def test_a_day_billed_for_exactly_the_tolerance_under_is_not_settling() -> None:
+    edge = 192.0 * (1 - billing.TOLERANCE)
+    assert billing._settling(billed_hours(192.0, edge), [192.0, 192.0], ended(1)) is None
+
+
+@pytest.mark.anyio
+async def test_a_gcp_export_still_filling_its_newest_day_reads_as_settling(store: Store) -> None:
+    """From BigQuery's answer through the daily read to the report: 10.5c's case."""
+    fake = FakePrometheus()
+    nodes(fake)
+    c, bq = gcp_billed("BRL"), BigQuery()
+    bq.ram = dict.fromkeys(DAYS, 192.0) | {DAYS[-1]: 20.0}
+    await billing.refresh(store, [c], bq.client(), NOW)
+    got = await row(store, c, fake)
+    assert got["within"] is None and got["note"].startswith("still settling: 1972-09-25 ")
+    bq.ram[DAYS[-1]] = 192.0
+    await billing.refresh(store, [c], bq.client(), NOW + billing.DAY)  # the next daily read
+    assert (await row(store, c, fake))["within"] is not None

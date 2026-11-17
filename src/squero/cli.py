@@ -451,7 +451,8 @@ async def sizing_bill(contract_id: str, days: int, refresh: bool, as_json: bool)
             f"{r['cluster']} ({span}): billed {r['billed']:.2f} {r['currency']}, estimated "
             f"{r['estimated']:.2f}, {gap} ({flag} {billing.TOLERANCE:.0%}){spot}{note}"
         )
-    # a gap judged on too few sampled hours is no failure; any other row without "within" is
+    # a gap judged on too few sampled hours, or a bill still settling, is no failure; any
+    # other row without "within" is
     return (
         0
         if all(r["within"] or (r["within"] is None and r["coverage"] is not None) for r in rows)
