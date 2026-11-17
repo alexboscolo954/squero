@@ -4,8 +4,9 @@ order of urgency, within one Contract only."""
 from typing import Any
 
 import pytest
+from pydantic import SecretStr
 
-from squero import agenda
+from squero import agenda, contracts
 from squero.models import CheckResult, Evidence, Investigation
 from squero.store import Store
 from tests.conftest import REPORT, make_contract
@@ -188,3 +189,88 @@ async def test_an_offline_relay_is_data_the_hub_cant_read(store: Store) -> None:
     assert item.title.startswith("Relay not connected since the Hub started at ")
     assert item.title.endswith(": the Hub can't read cluster edge")
     assert still.items == offline.items and up.items == []
+
+
+# --- audit A6b: an approved Workload leaves the waste ranking ---------------------------------
+
+
+def actuated(cid: str = "acme") -> Any:
+    """contract(cid), its cluster "test" running an Actuator, "edge" not."""
+    data = contract(cid).model_dump()
+    data["clusters"][0]["actuator_token_secret"] = "act"
+    return contracts.build(data, secrets={"act": SecretStr("a" * 40)})
+
+
+def wasting(name: str, cpu: float, cluster: str = "test", container: str = "app") -> Any:
+    where = f"{cluster}/shop/Deployment/{name}/{container}"
+    return row(name, cluster, container=container, workload=where, waste={"cpu": cpu, "memory": 0})
+
+
+async def approve(st: Store, cid: str, run: int, *rows: dict[str, Any]) -> None:
+    for r in rows:
+        assert await st.approve_sizing(cid, run, r, "mcp:op", NOW) == "approved"
+
+
+def ranked(a: agenda.Agenda) -> list[str | None]:
+    return [i.workload if i.kind == "waste" else i.title for i in a.items]
+
+
+@pytest.mark.anyio
+async def test_an_approved_workload_leaves_the_waste_ranking_where_an_actuator_runs(
+    store: Store,
+) -> None:
+    """big and mid (one container of two, then both) approved on "test": the next ones rise,
+    counted as 2 Workloads. edgy approved on "edge", which runs no Actuator: still ranked.
+    idle approved without waste: never ranked, never counted."""
+    big, mid, side = wasting("big", 3.0), wasting("mid", 2.0), wasting("mid", 2.0, container="s")
+    small, tiny, edgy = wasting("small", 1.0), wasting("tiny", 0.5), wasting("edgy", 0.7, "edge")
+    idle = wasting("idle", 0.0)
+    run = await stored(
+        store, "acme", NOW, {"test": None, "edge": None}, big, mid, side, small, tiny, edgy, idle
+    )
+    await approve(store, "acme", run, big, mid, edgy, idle)
+    a = await agenda.of(store, actuated(), NOW)
+    assert ranked(a) == [
+        "test/shop/Deployment/small",
+        "edge/shop/Deployment/edgy",
+        "test/shop/Deployment/tiny",
+        "2 Workloads approved: their waste is read again within the hour",
+    ]
+    assert a.items[-1].kind == "approved" and a.items[-1].workload is None
+    assert agenda.counts(a) == {"waste": 3}  # the line counts Workloads, not an item
+    await approve(store, "acme", run, side)  # mid's other container: still one Workload
+    assert ranked(await agenda.of(store, actuated(), NOW))[-1].startswith("2 Workloads")
+
+
+@pytest.mark.anyio
+async def test_one_approved_workload_is_said_once_and_back_after_the_next_run(
+    store: Store,
+) -> None:
+    big, small = wasting("big", 3.0), wasting("small", 1.0)
+    run = await stored(store, "acme", NOW, {"test": None, "edge": None}, big, small)
+    await approve(store, "acme", run, big)
+    assert ranked(await agenda.of(store, actuated(), NOW)) == [
+        "test/shop/Deployment/small",
+        "1 Workload approved: its waste is read again within the hour",
+    ]
+    await stored(store, "acme", NOW + H, {"test": None, "edge": None}, big, small)  # supersedes
+    assert ranked(await agenda.of(store, actuated(), NOW + H)) == [
+        "test/shop/Deployment/big",
+        "test/shop/Deployment/small",
+    ]
+
+
+@pytest.mark.anyio
+async def test_another_contracts_approval_never_hides_a_workload(store: Store) -> None:
+    big, small = wasting("big", 3.0), wasting("small", 1.0)
+    for cid in ("acme", "bank"):
+        run = await stored(store, cid, NOW, {"test": None, "edge": None}, big, small)
+    await approve(store, "bank", run, big)  # the same cluster, namespace and name, in bank
+    assert ranked(await agenda.of(store, actuated(), NOW)) == [
+        "test/shop/Deployment/big",
+        "test/shop/Deployment/small",
+    ]
+    assert ranked(await agenda.of(store, actuated("bank"), NOW)) == [
+        "test/shop/Deployment/small",
+        "1 Workload approved: its waste is read again within the hour",
+    ]

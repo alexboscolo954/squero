@@ -2572,7 +2572,8 @@
               "stale",
               "bill",
               "investigation",
-              "waste"
+              "waste",
+              "approved"
             ],
             "title": "Kind",
             "type": "string"

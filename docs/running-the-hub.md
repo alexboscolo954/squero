@@ -93,7 +93,7 @@ Anything else gets a 403, including a tagged device, which has no user.
 
 ### Now
 
-**Now** (above the Workloads): the Contract's Agenda, what to look at now, ranked by the Hub without a model in a fixed order of urgency: the Kill switch while it is on, pauses waiting for an Approval decision (soonest to go Stale first), failing Checks (newest first), data the Hub can't read (Sizing or bill reads failing, oldest first), Bills outside their tolerance (biggest gap first), running Investigations (oldest first), and the three Workloads whose waste costs most. Each links where to act: its Investigation, its Workload, or the Cost page. `GET /api/v1/contracts/{id}/agenda`, and `now` on the Hub MCP server.
+**Now** (above the Workloads): the Contract's Agenda, what to look at now, ranked by the Hub without a model in a fixed order of urgency: the Kill switch while it is on, pauses waiting for an Approval decision (soonest to go Stale first), failing Checks (newest first), data the Hub can't read (Sizing or bill reads failing, oldest first), Bills outside their tolerance (biggest gap first), running Investigations (oldest first), and the three Workloads whose waste costs most, leaving out each one with a current Approved Sizing on a cluster that runs an Actuator, applied or not: one line last counts them ("2 Workloads approved: their waste is read again within the hour", the next hourly run superseding the approval), and `now()` across Contracts doesn't count that line. Each links where to act: its Investigation, its Workload, or the Cost page. `GET /api/v1/contracts/{id}/agenda`, and `now` on the Hub MCP server.
 
 ### Automation
 

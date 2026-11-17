@@ -622,8 +622,9 @@ def build(
         """What to look at now, most urgent first, ranked without a model: the Kill
         switch while it is on, pauses waiting for a decision (soonest deadline first),
         failing Checks, data the Hub can't read, Bills outside their tolerance, running
-        Investigations, the three Workloads whose waste costs most. Without `contract`:
-        only how many of each per Contract."""
+        Investigations, the three Workloads whose waste costs most (one approved where an
+        Actuator runs left out, counted on a line). Without `contract`: only how many of
+        each per Contract."""
         if contract is not None:
             c = resolve(contract)
 

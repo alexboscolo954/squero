@@ -2,8 +2,10 @@
 what the Hub already stores, ranked without a model in a fixed order of urgency: the
 Kill switch while it is on, pauses waiting for an Approval decision (they go Stale),
 failing Checks, data the Hub can't read (an offline Relay too), Bills outside their
-tolerance, running Investigations, and the Workloads whose waste costs most. The Hub
-MCP server's `now` and the console app's Workloads page show it.
+tolerance, running Investigations, and the Workloads whose waste costs most. Audit A6b:
+one with a current Approved Sizing on a cluster that runs an Actuator leaves that ranking,
+counted on one line last. The Hub MCP server's `now` and the console app's Workloads page
+show it.
 """
 
 from collections import Counter
@@ -17,7 +19,9 @@ from squero.contracts import Contract
 from squero.sizing import show
 from squero.store import Store
 
-Kind = Literal["kill_switch", "approval", "check", "stale", "bill", "investigation", "waste"]
+Kind = Literal[
+    "kill_switch", "approval", "check", "stale", "bill", "investigation", "waste", "approved"
+]
 WASTE_TOP = 3
 
 
@@ -108,8 +112,16 @@ async def of(st: Store, c: Contract, now: float) -> Agenda:
         )
     for t in (t for t in mine if t.status == "running"):  # oldest first, as stored
         items.append(Item(kind="investigation", title=f"Running: {t.title}", at=t.started, id=t.id))
-    wasting = [x for x in w.workloads if x.waste.cpu or x.waste.memory][:WASTE_TOP]
-    for x in wasting:
+    # its waste is read again at the next hourly run, which supersedes the approval
+    actuated = {cl.name for cl in c.clusters if cl.actuator_token_secret}
+    approved = {
+        "/".join(a[k] for k in ("cluster", "namespace", "kind", "name"))
+        for a in await st.approved_sizings(c.id)
+        if a["cluster"] in actuated
+    }
+    wasting = [x for x in w.workloads if x.waste.cpu or x.waste.memory]
+    held = sum(x.workload in approved for x in wasting)
+    for x in [x for x in wasting if x.workload not in approved][:WASTE_TOP]:
         size = f"{show('cpu', x.waste.cpu)} and {show('memory', x.waste.memory)}"
         money = f"{x.cost.waste:.2f} {w.currency} a month, " if x.cost and w.currency else ""
         items.append(
@@ -120,8 +132,14 @@ async def of(st: Store, c: Contract, now: float) -> Agenda:
                 workload=x.workload,
             )
         )
+    if held:
+        its = "their waste is" if held > 1 else "its waste is"
+        title = f"{held} Workload{'s' * (held > 1)} approved: {its} read again within the hour"
+        items.append(Item(kind="approved", title=title))
     return Agenda(contract=c.id, items=items)
 
 
 def counts(a: Agenda) -> dict[str, int]:
-    return dict(Counter(i.kind for i in a.items))
+    """How many items of each kind, the line of approved Workloads not one (it counts
+    Workloads, not something to look at)."""
+    return dict(Counter(i.kind for i in a.items if i.kind != "approved"))
