@@ -5753,7 +5753,7 @@ def test_a_step_up_only_ever_raises_a_pod_one_above_it_keeps_its_own() -> None:
     assert a.keep_steps() == [] and [n for n, _ in resized(core)] == ["api-1-a"]
 
 
-def test_a_resize_its_node_cant_fit_is_put_back_and_the_pod_left_never_tried_again() -> None:
+def test_a_resize_its_node_cant_fit_is_put_back_and_the_pod_left_for_ten_minutes() -> None:
     core, apps = limited()
     a = kept(core, apps)
     b = core.list_namespaced_pod.return_value.items[1]  # asks the step, and was never given it
@@ -5785,6 +5785,38 @@ def test_a_resize_its_node_cant_fit_is_put_back_and_the_pod_left_never_tried_aga
     assert a.stepped[KEY]["left"] == ["api-1-b"] and a.stepped[KEY]["limit"] == "456Mi"
     core.list_namespaced_pod.return_value.items.remove(b)  # gone: forgotten
     assert a.keep_steps() == [] and "left" not in a.stepped[KEY]
+
+
+def test_a_pod_left_is_tried_again_each_ten_minutes_unsaid() -> None:
+    """Audit A8: its node may have room since. Tried again, put back again while it has
+    none, said only when first left; given it at last, nothing more is tried."""
+    core, apps = limited()
+    a = kept(core, apps)
+    b = core.list_namespaced_pod.return_value.items[1]
+    waits = k.V1PodCondition(type="PodResizePending", status="True", reason="Infeasible")
+    b.status.conditions = [waits]
+    given = k.V1ResourceRequirements(limits={"memory": "256Mi"}, requests={"memory": "128Mi"})
+    b.status.container_statuses = [status("app", given)]
+    (said,) = a.keep_steps()  # left: said
+    assert said.reason.endswith("1 left as they were: their node has no room")
+
+    def later() -> list[actuator.Actuation]:
+        a.stepped[KEY]["left_at"] -= actuator.STEP_EVERY
+        return a.keep_steps()
+
+    a.stepped[KEY]["left_at"] -= actuator.STEP_EVERY - 1
+    assert a.keep_steps() == [] and len(resized(core)) == 1  # not yet ten minutes
+    step = (a.stepped[KEY]["limit"], a.stepped[KEY]["request"])
+    assert later() == [] and memory(core, "api-1-b") == step  # tried again
+    assert "left" not in a.stepped[KEY] and a.stepped[KEY]["tried"] == ["api-1-b"]
+    assert a.keep_steps() == [] and memory(core, "api-1-b") == ("256Mi", "128Mi")  # no room
+    assert a.stepped[KEY]["left"] == ["api-1-b"] and len(resized(core)) == 3  # unsaid
+    b.status.conditions = []  # room at last
+    assert later() == [] and memory(core, "api-1-b") == step
+    assert a.keep_steps() == [] and len(resized(core)) == 4  # given: nothing more to try
+    assert "left" not in a.stepped[KEY] and "left_at" not in a.stepped[KEY]
+    core.list_namespaced_pod.return_value.items.remove(b)  # gone: forgotten
+    assert a.keep_steps() == [] and "tried" not in a.stepped[KEY]
 
 
 # --- slice 13.1c: a Step-up's term ----------------------------------------------------------

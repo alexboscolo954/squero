@@ -3605,6 +3605,12 @@ class Actuator:
                 continue
             live = {p.metadata.name for p in pods}
             left = [n for n in st.get("left") or [] if n in live]  # no room on their node
+            # audit A8: tried again each STEP_EVERY, as long as the Step-up lasts, unsaid:
+            # a pod is said once, when first left
+            tried = [n for n in st.get("tried") or [] if n in live]
+            if left and now - st.get("left_at", 0.0) >= STEP_EVERY:
+                tried, left = sorted({*tried, *left}), []
+                st["left_at"] = now
             done, was = 0, len(left)
             for p in pods:
                 spec = next((c for c in p.spec.containers if c.name == container), None)
@@ -3615,7 +3621,7 @@ class Actuator:
                     if qty(asks) < qty(st["limit"]):  # only ever raised
                         body = step_body(container, st["limit"], st["request"])
                         self.core.patch_namespaced_pod_resize(p.metadata.name, ns, body)
-                        done += 1
+                        done += p.metadata.name not in tried
                     elif any(
                         c.type == "PodResizePending" and c.status == "True"
                         for c in (p.status.conditions if p.status else None) or []
@@ -3640,13 +3646,22 @@ class Actuator:
                 st["left"] = left
             if not left:
                 st.pop("left", None)
-            if done or len(left) > was:
+            if left:
+                st.setdefault("left_at", now)
+            else:
+                st.pop("left_at", None)
+            if tried:
+                st["tried"] = tried
+            else:
+                st.pop("tried", None)
+            fresh = len([n for n in left[was:] if n not in tried])  # newly left: said
+            if done or fresh:
                 said = (
                     f"brought to its Step-up, memory limit {st['limit']}, request "
                     f"{st['request']} on {done} of {len(pods)} pods in place"
                 )
-                if len(left) > was:
-                    said += f"; {len(left) - was} left as they were: their node has no room"
+                if fresh:
+                    said += f"; {fresh} left as they were: their node has no room"
                 out.append(
                     Actuation(
                         namespace=ns,
