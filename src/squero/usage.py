@@ -382,6 +382,9 @@ class ContainerUsage:
     # by its pods' nodes' instance type ("" for nodes without the label), each with its
     # own pods' samples and requests; empty with fewer than two types
     groups: dict[str, "ContainerUsage"] = field(default_factory=dict)
+    # audit A9, a DaemonSet's: its CPU samples by node (a pod whose node isn't known by its
+    # own name), so its CPU target is the busiest node's percentile
+    nodes: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
 
 
 @dataclass
@@ -444,12 +447,18 @@ def usage(
             container = label(m, "container")
             r = rows.setdefault((w, container), ContainerUsage(w, container))
             r.pods.add(label(m, "pod"))
-            getattr(r, into).extend((float(at), float(v)) for at, v in s["values"])
+            values = [(float(at), float(v)) for at, v in s["values"]]
+            getattr(r, into).extend(values)
             kind = None if types is None else types.get((label(m, "namespace"), label(m, "pod")))
+            g = None
             if kind is not None and w.kind == "DaemonSet":  # None: its node isn't known
                 g = r.groups.setdefault(kind, ContainerUsage(w, container))
                 g.pods.add(label(m, "pod"))
-                getattr(g, into).extend((float(at), float(v)) for at, v in s["values"])
+                getattr(g, into).extend(values)
+            if into == "cpu" and w.kind == "DaemonSet":  # by pod here, by node below
+                for one in (r, g):
+                    if one is not None:
+                        one.nodes.setdefault(label(m, "pod"), []).extend(values)
     for metric, into in (
         ("kube_pod_container_resource_requests", "requests"),
         ("kube_pod_container_resource_limits", "limits"),
@@ -512,6 +521,17 @@ def usage(
             # what hides the container's real demand hides every group's
             g.throttled, g.oom_killed_pods = r.throttled, r.oom_killed_pods
             g.running = sorted(at for pod in g.pods for at in running.get((w.namespace, pod), ()))
+    if any(r.nodes for r in rows.values()):  # audit A9: each DaemonSet pod's node
+        node_of = {
+            (label(s["metric"], "namespace"), label(s["metric"], "pod")): label(s["metric"], "node")
+            for s in at_end(f"last_over_time({selector('kube_pod_info', t)}[{window}])")
+        }
+        for (w, _), r in rows.items():
+            for one in (r, *r.groups.values()):
+                by_node: dict[str, list[tuple[float, float]]] = {}
+                for name, values in one.nodes.items():
+                    by_node.setdefault(node_of.get((w.namespace, name)) or name, []).extend(values)
+                one.nodes = by_node
     if labels:
         newest = _newest_labels(at_end, t, window, owners, labels)
         for (w, _), r in rows.items():

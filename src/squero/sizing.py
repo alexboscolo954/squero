@@ -4,8 +4,8 @@ A pure function of one container's pooled usage (usage.py), the time and its Siz
 policy (contracts.py; the numbers below are `production`'s):
 
 - CPU: the 95th percentile, recent samples weighted more (half-life 24 h, like VPA),
-  plus 15% headroom. A container that is throttled hides its real demand, so its CPU
-  is never lowered while it is.
+  plus 15% headroom; a DaemonSet's, its busiest node's own (audit A9). A container
+  that is throttled hides its real demand, so its CPU is never lowered while it is.
 - Memory: the peak over the window, plus 20%. Weighting can't move a maximum: memory
   follows a drop only once the old peak leaves the window. After an OOM kill the peak
   is the limit, not the demand, so memory is never lowered then.
@@ -64,7 +64,6 @@ RiskKind = Literal[
     "capped_by_policy",
     "request_unset",
     "needs_larger_node",  # slice 15.1a
-    "type_needs_more_cpu",  # slice 15.3a
 ]
 DERIVED = ("under_requested", "request_unset")  # the action says it: `sizing show` omits them
 
@@ -218,7 +217,11 @@ def size(
         hold = (
             Risk("throttled", "CPU kept: throttling hides how much it needs") if throttled else None
         )
-        basis = weighted_percentile(u.cpu, policy.cpu.percentile, now, policy.half_life)
+        # audit A9: a DaemonSet's, its busiest node's
+        basis = max(
+            weighted_percentile(c, policy.cpu.percentile, now, policy.half_life)
+            for c in (u.nodes.values() if u.nodes else [u.cpu])
+        )
         s.cpu = _resource("cpu", basis, u, s.risks, hold, policy, room.get("cpu"))
     if u.memory:
         hold = None
@@ -695,31 +698,6 @@ def _sized_type(
     return out
 
 
-def _short_of(row: dict[str, Any], policy: Policy) -> dict[str, str] | None:
-    """The risk of a DaemonSet's one CPU Sizing sitting below what its pods on some
-    instance type need (slice 15.3a): CPU is a percentile over every pod's samples, so a
-    busy minority of nodes falls above it, and the one Sizing would ask too little for
-    them. By more than a change the policy would make, for types with a Sizing of their
-    own. Memory, a peak, fits the busiest by construction."""
-    pooled = (row.get("cpu") or {}).get("target")
-    if pooled is None:
-        return None
-    least = max(policy.threshold * pooled, MIN_CHANGE["cpu"])
-    short = [
-        f"{g['type'] or 'nodes with no instance type'} ({show('cpu', g['cpu']['target'])})"
-        for g in row["groups"]
-        if g["state"] == "ready" and "cpu" in g and g["cpu"]["target"] - pooled > least + 1e-9
-    ]
-    if not short:
-        return None
-    more = f" and {len(short) - 3} more" if len(short) > 3 else ""
-    text = (
-        f"its one cpu Sizing of {show('cpu', pooled)} for every node is below what its "
-        f"pods need on {', '.join(short[:3])}{more}"
-    )
-    return {"kind": "type_needs_more_cpu", "text": text}
-
-
 def by_type(row: dict[str, Any]) -> dict[str, dict[str, float | None]]:
     """A DaemonSet's Sizings per instance type as its Actuator applies them (slice 15.3b):
     each ready type's requests where it changes them, None where it keeps one. Empty:
@@ -1010,8 +988,6 @@ def rows(
                             res: sum((g.get("waste") or {}).get(res, 0.0) for g in row["groups"])
                             for res in ("cpu", "memory")
                         }
-                elif short := _short_of(row, policy):
-                    row["risks"].append(short)
             out[row["workload"]] = row
     together: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
     for row in out.values():

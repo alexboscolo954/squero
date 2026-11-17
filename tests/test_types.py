@@ -256,8 +256,8 @@ def test_each_type_is_sized_from_its_own_pods_beside_the_pooled_sizing(
     assert small["memory"]["target"] < 128 * MI < 900 * MI < big["memory"]["target"]
     # memory is a peak: the pooled Sizing is the largest type's
     assert row["memory"]["target"] == big["memory"]["target"]
-    # one busy node of three: the pooled cpu Sizing fits it, and no risk says otherwise
-    assert "type_needs_more_cpu" not in [r["kind"] for r in row["risks"]]
+    # one busy node of three: the pooled cpu Sizing fits it (audit A9: its own percentile)
+    assert row["cpu"]["target"] == big["cpu"]["target"]
     assert row["groups"] == sorted(row["groups"], key=lambda g: g["type"])
 
 
@@ -271,10 +271,11 @@ def test_waste_stays_on_the_pooled_sizing_until_an_actuator_applies_the_groups(
         assert with_groups[key] == plain[key], key
 
 
-def test_the_pooled_cpu_sizing_can_sit_below_a_busy_minority() -> None:
-    """One busy node among thirty: CPU is a percentile over every pod's samples, and a
-    thirtieth of them is above the 95th. The pooled Sizing follows the quiet ones; only
-    the busy node's own type shows what it needs. Memory, a peak, fits the busiest."""
+def test_the_pooled_cpu_sizing_fits_a_busy_minority() -> None:
+    """Audit A9 (15.3a found it): one busy node among thirty. A percentile over every pod's
+    samples pooled followed the quiet ones, under 100m while the busy pod used a core; the
+    pooled Sizing is now the busiest node's own percentile, as its type's is. Memory, a
+    peak, fits the busiest as before."""
     fake = FakePrometheus()
     for i in range(29):
         a_node(fake, f"s{i}", "m5.large")
@@ -283,47 +284,12 @@ def test_the_pooled_cpu_sizing_can_sit_below_a_busy_minority() -> None:
     agent(fake, "agent-big", "big", cores=1.0, peak=900.0 * MI)
     types = usage.pod_types(_prom(fake, SHOP), SHOP, 7 * 86400, NOW)
     (u,) = usage.usage(_prom(fake, SHOP), SHOP, 7 * 86400, NOW, types=types).rows
-    c = acting()
-    (row,) = sizing.rows(c, {7 * 86400: [("test", u)]}, NOW)
+    (row,) = sizing.rows(acting(), {7 * 86400: [("test", u)]}, NOW)
     big = next(g for g in row["groups"] if g["type"] == "m5.4xlarge")
-    assert row["cpu"]["target"] < 0.1 and big["cpu"]["target"] > 1.0  # an order of magnitude
+    small = next(g for g in row["groups"] if g["type"] == "m5.large")
+    assert row["cpu"]["target"] == big["cpu"]["target"] == 1.15  # its 95th, 15% headroom
+    assert small["cpu"]["target"] < 0.1  # a type of quiet nodes keeps its small share
     assert row["memory"]["target"] == big["memory"]["target"]
-    # and the row says so, as a risk: this is the Sizing that gets applied
-    assert [r for r in row["risks"] if r["kind"] == "type_needs_more_cpu"] == [
-        {
-            "kind": "type_needs_more_cpu",
-            "text": "its one cpu Sizing of 58m for every node is below what its pods need on "
-            "m5.4xlarge (1150m)",
-        }
-    ]
-
-
-def typed(kind: str, target: float | None, state: str = "ready") -> dict[str, Any]:
-    g: dict[str, Any] = {"type": kind, "state": state, "pods": 1.0}
-    return g if target is None else g | {"cpu": {"target": target}}
-
-
-def test_the_risk_names_the_types_that_need_more_than_a_change_would_make() -> None:
-    policy = sizing.PRODUCTION
-    least = max(policy.threshold * 1.0, sizing.MIN_CHANGE["cpu"])
-
-    def short(*groups: dict[str, Any], pooled: float | None = 1.0) -> Any:
-        row: dict[str, Any] = {"groups": list(groups)}
-        if pooled is not None:
-            row["cpu"] = {"target": pooled}
-        got = sizing._short_of(row, policy)
-        return got and got["text"]
-
-    assert short(typed("a", 1.0), typed("b", 0.2)) is None  # none needs more
-    assert short(typed("a", 1.0 + least)) is None  # no more than a change it wouldn't make
-    assert "on a (1500m)" in short(typed("a", 1.5), typed("b", 0.2))
-    assert short(typed("a", 1.5, "learning"), typed("b", None)) is None  # no Sizing of its own
-    assert short(typed("a", 1.5), pooled=None) is None  # the row has no cpu Sizing
-    assert short(typed("", 1.5)).endswith("on nodes with no instance type (1500m)")
-    many = [typed(f"t{i}", 2.0) for i in range(5)]
-    assert short(*many).endswith("on t0 (2000m), t1 (2000m), t2 (2000m) and 2 more")
-    tiny = sizing._short_of({"cpu": {"target": 0.001}, "groups": [typed("a", 0.010)]}, policy)
-    assert tiny is None  # under the smallest change counted, 10m
 
 
 def test_a_type_is_sized_under_its_containers_own_policy(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -466,3 +432,46 @@ def test_the_api_and_the_hub_mcp_give_a_containers_groups_capped(
     crowded = hubmcp._by_type(webapp.Container.model_validate({**row, "groups": many}))
     assert len(crowded["by_instance_type"]) == 10 and crowded["more_types"] == 2
     assert hubmcp._by_type(webapp.Container.model_validate({**row, "groups": []})) == {}
+
+
+# --- audit A9: a DaemonSet's CPU is its busiest node's ------------------------------------------
+
+
+def test_a_daemonsets_cpu_is_its_busiest_nodes_percentile_by_node_not_by_pod() -> None:
+    """Twenty quiet nodes and a busier one, y: pooled, its 200m is under the 95th
+    percentile. Node x's pod before a rollout ran minutes at a core: by pod that would be
+    the busiest; by node it is a few samples of x's. A pod whose node isn't known is its
+    own. Read on a cluster without an Actuator too; each type the same way."""
+    fake = FakePrometheus()
+    for i in range(20):
+        a_node(fake, f"q{i}", "m5.large")
+        agent(fake, f"agent-q{i}", f"q{i}", cores=0.05)
+    a_node(fake, "y", "m5.large")
+    agent(fake, "agent-y", "y", cores=0.2)
+    a_node(fake, "x", "c5.large")
+    agent(fake, "agent-old", "x", cores=1.0, samples=3)
+    agent(fake, "agent-new", "x", cores=0.1)
+    agent(fake, "agent-z", None, cores=0.05)
+    (plain,) = usage.usage(_prom(fake, SHOP), SHOP, 7 * 86400, NOW).rows
+    assert sorted(plain.nodes) == sorted(["agent-z", "x", "y", *(f"q{i}" for i in range(20))])
+    (row,) = sizing.rows(prometheus_contract(), {7 * 86400: [("test", plain)]}, NOW)
+    assert row["cpu"]["target"] == 0.23  # y's 200m and 15% headroom
+    read = [q for q in fake.queries if "kube_pod_info" in q]
+    assert read and all('namespace=~"shop"' in q for q in read)
+    types = usage.pod_types(_prom(fake, SHOP), SHOP, 7 * 86400, NOW)
+    (u,) = usage.usage(_prom(fake, SHOP), SHOP, 7 * 86400, NOW, types=types).rows
+    (typed_row,) = sizing.rows(acting(), {7 * 86400: [("test", u)]}, NOW)
+    by = {g["type"]: g["cpu"]["target"] for g in typed_row["groups"]}
+    assert by == {"m5.large": 0.23, "c5.large": 0.115}  # x's 100m, its old pod's minutes under
+
+
+def test_other_workloads_cpu_is_pooled_as_before_and_reads_no_nodes() -> None:
+    fake = FakePrometheus()
+    pods = deployment(fake, "api", pods=21)
+    for p in pods:
+        cpu(fake, p, [0.2 if p == pods[0] else 0.05] * N)
+        mem(fake, p, [64.0 * MI] * N)
+    (u,) = usage.usage(_prom(fake, SHOP), SHOP, 7 * 86400, NOW).rows
+    (row,) = sizing.rows(prometheus_contract(), {7 * 86400: [("test", u)]}, NOW)
+    assert u.nodes == {} and row["cpu"]["target"] == 0.058  # 50m and 15%, rounded up to 1m
+    assert not any("kube_pod_info" in q for q in fake.queries)

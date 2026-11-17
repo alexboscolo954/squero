@@ -55,7 +55,7 @@ def test_where_its_actuator_applies_the_types_its_waste_is_theirs() -> None:
         assert pooled[key] == by_type[key], key
 
 
-def test_a_type_still_learning_has_no_waste_and_the_pooled_line_raises_no_type_risk() -> None:
+def test_a_type_still_learning_has_no_waste() -> None:
     fake = FakePrometheus()
     for i in range(29):
         a_node(fake, f"s{i}", "m5.large")
@@ -64,9 +64,7 @@ def test_a_type_still_learning_has_no_waste_and_the_pooled_line_raises_no_type_r
     agent(fake, "agent-big", "big", cores=1.0, peak=900.0 * 2**20)
     a_node(fake, "new", "c5.large")
     agent(fake, "agent-new", "new", samples=5)  # minutes of history
-    pooled, by_type = typed_rows(fake, None), typed_rows(fake, {"test"})
-    assert "type_needs_more_cpu" in [r["kind"] for r in pooled["risks"]]
-    assert "type_needs_more_cpu" not in [r["kind"] for r in by_type["risks"]]  # not applied
+    by_type = typed_rows(fake, {"test"})
     learning = next(g for g in by_type["groups"] if g["type"] == "c5.large")
     assert learning["state"] == "learning" and "waste" not in learning
     # its pod ran minutes of the window: counted for that time, so the types add up to the
