@@ -205,7 +205,7 @@ Hub settings are `SQUERO_*` environment variables (or `.env`). See [`config.py`]
 
 | Variable | Default | |
 |---|---|---|
-| `SQUERO_MODEL` | `anthropic:claude-sonnet-5-5` | Any `init_chat_model` id |
+| `SQUERO_MODEL` | `anthropic:claude-opus-5-5` | Any `init_chat_model` id. Opus 5.5 runs at its own default effort, medium (audit A12: Sonnet 5.5 sometimes kept calling tools on a Question long after it could answer). Up to v0.59 the default was `anthropic:claude-sonnet-5-5`: a Hub that relied on it now runs Opus, at twice the price per token, and refuses to start while a Contract with `monthly_budget_usd` has no price for it in `SQUERO_MODEL_PRICES`; set `SQUERO_MODEL` to keep Sonnet |
 | `SQUERO_MODEL_BASE_URL` / `_API_KEY` | | OpenAI-compatible gateways |
 | `SQUERO_CONTRACTS_DIR` | | One directory per Contract (required for `serve`, `triage`, `mcp`) |
 | `SQUERO_APPROVER_TOKEN` | | The Operator's token, required for `serve` |

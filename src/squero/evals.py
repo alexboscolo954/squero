@@ -390,9 +390,10 @@ async def run(
                     failures = score(scenario, outcome)
             calls, report, answer = outcome.tool_calls, outcome.report, outcome.answer
             dropped, call_log, verdict = outcome.dropped_links, outcome.call_log, outcome.check
-        except agent.TriageError as e:
-            failures, calls, report, answer, proposed, dropped = [str(e)], [], None, None, [], 0
-            call_log, verdict = [], None
+        except agent.TriageError as e:  # its calls kept, so a Run without a result is explained
+            failures, report, answer, proposed, dropped = [str(e)], None, None, [], 0
+            call_log, verdict = e.call_log, None
+            calls = [c["name"] for c in call_log]
         results.append(
             {
                 "scenario": path.stem,

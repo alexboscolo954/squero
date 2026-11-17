@@ -194,6 +194,34 @@ async def test_the_outcome_logs_each_calls_arguments_and_errors(settings: Settin
 
 
 @pytest.mark.anyio
+async def test_a_run_without_a_report_keeps_its_calls(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Audit A12: a Scenario whose agent stops without a report is scored as such, with
+    the calls it made (one Sonnet run showed none, so it couldn't be explained)."""
+    from langchain_core.messages import AIMessage
+
+    scenario = {
+        "description": "x",
+        "namespace": "shop",
+        "alert": ALERT.model_dump(mode="json"),
+        "expect": {"category": ["app_error"]},
+        "tools": {"kubernetes_list_pods": [{"match": {}, "result": []}]},
+    }
+    (tmp_path / "stops.yaml").write_text(yaml.safe_dump(scenario))
+    model = scripted(
+        call("kubernetes_list_pods", "c1", cluster="kind", namespace="shop"),
+        AIMessage(content="no report from me"),
+    )
+    real = agent.open_agent
+    monkeypatch.setattr(agent, "open_agent", lambda s, tb, **kw: real(s, tb, model, **kw))
+    (result,) = await evals.run(tmp_path, settings, [])
+    assert result["failures"] == ["agent stopped without a report (call limit reached?)"]
+    assert result["tool_calls"] == 1 and result["calls"] == ["kubernetes_list_pods"]
+    assert result["call_log"][0]["args"] == {"cluster": "kind", "namespace": "shop"}
+
+
+@pytest.mark.anyio
 async def test_past_incidents_replay_from_the_recording(settings: Settings) -> None:
     """Never the Hub's database: an id the recording doesn't hold errors, as the real
     tool does for an unknown one."""

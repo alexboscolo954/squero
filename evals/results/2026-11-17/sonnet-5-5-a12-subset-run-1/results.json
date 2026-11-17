@@ -1,0 +1,802 @@
+[
+  {
+    "scenario": "aws-lambda-timeout-cut",
+    "passed": true,
+    "failures": [],
+    "category": "bad_config",
+    "tool_calls": 5,
+    "seconds": 15.4,
+    "calls": [
+      "aws_describe_alarms",
+      "aws_describe_log_groups",
+      "aws_lookup_events",
+      "aws_query_logs",
+      "aws_get_metric_data"
+    ],
+    "call_log": [
+      {
+        "name": "aws_describe_alarms",
+        "args": {
+          "state": "ALARM"
+        },
+        "error": false
+      },
+      {
+        "name": "aws_describe_log_groups",
+        "args": {
+          "prefix": "/aws/lambda/checkout"
+        },
+        "error": false
+      },
+      {
+        "name": "aws_lookup_events",
+        "args": {
+          "resource_name": "checkout"
+        },
+        "error": false
+      },
+      {
+        "name": "aws_query_logs",
+        "args": {
+          "log_groups": [
+            "/aws/lambda/checkout"
+          ],
+          "query": "fields @timestamp, @message | sort @timestamp desc | limit 30"
+        },
+        "error": false
+      },
+      {
+        "name": "aws_get_metric_data",
+        "args": {
+          "namespace": "AWS/Lambda",
+          "metric_name": "Duration",
+          "dimensions": {
+            "FunctionName": "checkout"
+          },
+          "stat": "Maximum",
+          "minutes": 60,
+          "period": 60
+        },
+        "error": false
+      }
+    ],
+    "proposed": [],
+    "dropped_links": 0,
+    "report": "## The checkout Lambda is timing out on every invocation. A config update at 02:48:49Z cut the timeout from 10s to 1s, and the function normally needs about 1.2s.\n\n**Root cause** (high confidence, `bad_config`): UpdateFunctionConfiguration by 'deployer' at 02:48:49Z set timeout=1s. The function was created at 02:43:31Z with timeout=10s. Its normal max duration before the change was about 1202ms, so it can't finish inside 1s. Since the change, every invocation ends at exactly 1000ms with Status: timeout. Memory is not the cause: 37MB used of 128MB. The update request also showed environment {}, but the function was created with an empty environment too, so that isn't a change.\n**Severity:** critical  \u00b7  **Affected:** lambda/checkout\n\n**Evidence**\n- `aws_lookup_events`: 02:48:49Z UpdateFunctionConfiguration20150331v2 by deployer with timeout=1. The function was created at 02:43:31Z with timeout=10.\n- `aws_query_logs`: Every recent REPORT line shows Duration: 1000.00 ms, Status: timeout, Max Memory Used 37 MB of 128 MB.\n- `aws_get_metric_data`: Max Duration was about 1202ms from 02:43 to 02:48. From 02:49 onward it is a flat 1000ms, which is the new timeout cap.\n- `aws_describe_alarms`: checkout-errors (AWS/Lambda Errors, Sum, threshold >0) is in ALARM, with its first datapoint at 02:48.\n\n**Recommendations**\n1. Restore the checkout timeout to 10s (or at least 3-5s, to leave headroom over the ~1.2s normal runtime) with update-function-configuration.\n2. Check what the deployer pipeline or IaC change intended with timeout=1, and fix the source so it doesn't revert.\n3. Check for failed or partial checkouts during the roughly 10 minutes of timeouts, and replay them if needed.\n4. Add a guard in the pipeline against timeouts below the observed p99 duration."
+  },
+  {
+    "scenario": "gcp-who-deployed",
+    "passed": false,
+    "failures": [
+      "28 tool calls > 8"
+    ],
+    "category": null,
+    "tool_calls": 28,
+    "seconds": 79.8,
+    "calls": [
+      "gcp_list_log_entries",
+      "gcp_list_log_entries",
+      "gcp_list_log_entries",
+      "read_more",
+      "read_more",
+      "read_more",
+      "read_more",
+      "read_more",
+      "read_more",
+      "gcp_list_log_entries",
+      "read_more",
+      "gcp_list_log_entries",
+      "read_more",
+      "gcp_list_log_entries",
+      "read_more",
+      "read_more",
+      "gcp_list_timeseries",
+      "read_more",
+      "read_more",
+      "read_more",
+      "gcp_list_log_entries",
+      "read_more",
+      "read_more",
+      "read_more",
+      "gcp_list_log_entries",
+      "read_more",
+      "read_more",
+      "read_more"
+    ],
+    "call_log": [
+      {
+        "name": "gcp_list_log_entries",
+        "args": {
+          "resourceNames": [
+            "projects/shop-prod-4f2a"
+          ],
+          "filter": "logName=\"projects/shop-prod-4f2a/logs/cloudaudit.googleapis.com%2Factivity\" AND resource.type=\"cloud_run_revision\" OR (logName=\"projects/shop-prod-4f2a/logs/cloudaudit.googleapis.com%2Factivity\" AND protoPayload.resourceName:\"checkout\")",
+          "orderBy": "timestamp desc",
+          "pageSize": 20
+        },
+        "error": false
+      },
+      {
+        "name": "gcp_list_log_entries",
+        "args": {
+          "resourceNames": [
+            "projects/shop-prod-4f2a"
+          ],
+          "filter": "resource.type=\"cloud_run_revision\" AND httpRequest.status=503",
+          "orderBy": "timestamp desc",
+          "pageSize": 10
+        },
+        "error": false
+      },
+      {
+        "name": "gcp_list_log_entries",
+        "args": {
+          "resourceNames": [
+            "projects/shop-prod-4f2a"
+          ],
+          "filter": "logName=\"projects/shop-prod-4f2a/logs/cloudaudit.googleapis.com%2Factivity\" AND protoPayload.resourceName:\"checkout\"",
+          "orderBy": "timestamp desc",
+          "pageSize": 10
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "rc1a371",
+          "grep": "methodName"
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "r8885b7",
+          "grep": "principalEmail"
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "rc1a371",
+          "grep": "principalEmail",
+          "fields": "timestamp,protoPayload.methodName,protoPayload.authenticationInfo.principalEmail"
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "r645359",
+          "grep": "checkout-00001",
+          "fields": "timestamp,httpRequest.status,resource.labels.revision_name"
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "r645359",
+          "grep": "\"status\": 503",
+          "fields": "timestamp,resource.labels.revision_name"
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "r645359",
+          "grep": "\"status\": 503",
+          "fields": "timestamp,resource.labels.revision_name",
+          "start": 499
+        },
+        "error": false
+      },
+      {
+        "name": "gcp_list_log_entries",
+        "args": {
+          "resourceNames": [
+            "projects/shop-prod-4f2a"
+          ],
+          "filter": "resource.type=\"cloud_run_revision\" AND httpRequest.status=503 AND resource.labels.revision_name=\"checkout-00002-nt5\" AND timestamp<=\"2026-10-18T22:34:00Z\"",
+          "orderBy": "timestamp asc",
+          "pageSize": 1
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "rb144dc",
+          "grep": "\"status\": 503",
+          "fields": "timestamp"
+        },
+        "error": false
+      },
+      {
+        "name": "gcp_list_log_entries",
+        "args": {
+          "resourceNames": [
+            "projects/shop-prod-4f2a"
+          ],
+          "filter": "resource.type=\"cloud_run_revision\" AND httpRequest.status=503 AND timestamp>=\"2026-10-18T22:20:00Z\" AND timestamp<=\"2026-10-18T22:34:20Z\"",
+          "orderBy": "timestamp asc",
+          "pageSize": 2
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "r8e09b0",
+          "grep": "\"status\": 503",
+          "fields": "timestamp,resource.labels.revision_name"
+        },
+        "error": false
+      },
+      {
+        "name": "gcp_list_log_entries",
+        "args": {
+          "resourceNames": [
+            "projects/shop-prod-4f2a"
+          ],
+          "filter": "timestamp>=\"2026-10-18T22:24:00Z\" AND timestamp<=\"2026-10-18T22:34:00Z\" AND logName=\"projects/shop-prod-4f2a/logs/run.googleapis.com%2Frequests\"",
+          "orderBy": "timestamp asc",
+          "pageSize": 3
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "r1ee2e5",
+          "grep": "requests",
+          "fields": "timestamp,httpRequest.status,resource.labels.revision_name"
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "r1ee2e5",
+          "grep": "checkout-00001",
+          "fields": "timestamp,logName,httpRequest.status"
+        },
+        "error": false
+      },
+      {
+        "name": "gcp_list_timeseries",
+        "args": {
+          "name": "projects/shop-prod-4f2a",
+          "filter": "metric.type=\"run.googleapis.com/request_count\" AND resource.labels.service_name=\"checkout\"",
+          "interval": {
+            "startTime": "2026-10-18T22:15:00Z",
+            "endTime": "2026-10-18T22:40:00Z"
+          },
+          "view": "FULL",
+          "aggregation": {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupByFields": [
+              "resource.labels.revision_name",
+              "metric.labels.response_code"
+            ]
+          }
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "rc1a371",
+          "grep": "UPSTREAM_TIMEOUT_MS",
+          "fields": "timestamp,protoPayload.methodName,protoPayload.resourceName,logName"
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "rc1a371",
+          "grep": "checkout-00002-nt5",
+          "fields": "timestamp,protoPayload.response.metadata.annotations",
+          "start": 0
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "rc1a371",
+          "grep": "\"2026-10-18T22:24:09",
+          "fields": "timestamp,logName,jsonPayload,textPayload"
+        },
+        "error": false
+      },
+      {
+        "name": "gcp_list_log_entries",
+        "args": {
+          "resourceNames": [
+            "projects/shop-prod-4f2a"
+          ],
+          "filter": "logName=\"projects/shop-prod-4f2a/logs/cloudaudit.googleapis.com%2Factivity\" AND timestamp>=\"2026-10-18T22:22:30Z\" AND timestamp<=\"2026-10-18T22:22:45Z\"",
+          "pageSize": 3
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "rc1a371",
+          "grep": "cloudaudit.googleapis.com%2Factivity",
+          "fields": "timestamp,protoPayload.methodName,protoPayload.authenticationInfo.principalEmail,protoPayload.request.service.spec.template.spec.containers"
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "rc1a371",
+          "grep": "cloudaudit.googleapis.com%2Factivity",
+          "fields": "protoPayload.request.service.spec.template.spec.containers",
+          "start": 0
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "r8885b7",
+          "grep": "checkout-00002-nt5",
+          "fields": "timestamp,logName"
+        },
+        "error": false
+      },
+      {
+        "name": "gcp_list_log_entries",
+        "args": {
+          "resourceNames": [
+            "projects/shop-prod-4f2a"
+          ],
+          "filter": "protoPayload.methodName=\"google.cloud.run.v1.Services.ReplaceService\" AND protoPayload.authenticationInfo.principalEmail:\"@\"",
+          "pageSize": 5,
+          "orderBy": "timestamp desc"
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "ra8f8dc",
+          "grep": "principalEmail",
+          "fields": "timestamp,protoPayload.methodName,protoPayload.authenticationInfo.principalEmail,protoPayload.resourceName"
+        },
+        "error": true
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "rc1a371",
+          "grep": "ReplaceService",
+          "fields": "timestamp,protoPayload.authenticationInfo.principalEmail,logName"
+        },
+        "error": true
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "rc1a371",
+          "grep": "principalEmail"
+        },
+        "error": true
+      }
+    ],
+    "proposed": [],
+    "dropped_links": 0,
+    "report": null,
+    "answer": "**oncall@example.com** deployed it at **2026-10-18 22:22:37 UTC**. The deploy was a `google.cloud.run.v1.Services.ReplaceService` call from gcloud 589.0.0. It created revision **checkout-00002-nt5**, which became Ready at 22:24:18 UTC (\"Deploying revision succeeded in 1m40.46s\").\n\n**Why it returns 503s:** the new revision sets the env var `UPSTREAM_TIMEOUT_MS=1`. The container's startup log says \"checkout listening, inventory timeout 1 ms\". The code calls the upstream with a timeout of that many milliseconds. Every request therefore fails with `URLError: <urlopen error timed out>` and the service returns 503 \"inventory unavailable\". The code's default is 2000 ms.\n\n**Timing and impact:**\n- The previous revision, checkout-00001-ldp, served 200s up to about 22:24.\n- Request metrics show 503s only on checkout-00002-nt5: 113 in the 22:24:27\u201322:29:27 window and 100 in 22:29:27\u201322:34:27.\n- Revision 00001 had no more traffic after 22:24:27, so 100% of traffic is on the failing revision.\n- The latest 503s I saw were at 22:34:30 UTC.\n\n**Caveats:**\n- The audit log entry for the deploy does not show the env var. I took `UPSTREAM_TIMEOUT_MS=1` from the revision spec in the Cloud Run system_event audit log.\n- The 22:22:37 deploy is the only Replace/update call from a user in the audit log, so I attribute the revision to it. The revision's `serving.knative.dev/creator` annotation also says oncall@example.com.\n- My log filters on the 503s were not honoured by the tool, so I could not list the very first 503. The metrics put the first ones in the window after 22:24:27.\n\n**Recommendation:** roll back to checkout-00001-ldp, or redeploy with `UPSTREAM_TIMEOUT_MS` restored to a sane value such as 2000.\n\n**Evidence**\n- `gcp_list_log_entries`: Audit log (activity), 2026-10-18T22:22:37.931973Z: google.cloud.run.v1.Services.ReplaceService on namespaces/shop-prod-4f2a/services/checkout, principalEmail oncall@example.com. Earlier entries by the same user are CreateService at 22:17:04 and SetIamPolicy at 22:17:08.\n- `gcp_list_log_entries`: Cloud Run system_event audit log: revision checkout-00002-nt5 created 22:22:38 by oncall@example.com (serving.knative.dev/creator), Ready at 22:24:18 (\"Deploying revision succeeded in 1m40.46s\"). Its spec has env UPSTREAM_TIMEOUT_MS=1. Startup log: \"checkout listening, inventory timeout 1 ms\".\n- `gcp_list_log_entries`: Request and stdout logs: 503 responses from checkout-00002-nt5 (22:34:21\u201322:34:30) paired with ERROR \"inventory lookup failed after 1 ms: URLError: <urlopen error timed out>\".\n- `gcp_list_timeseries`: request_count for service checkout: revision checkout-00001-ldp had 200s only (37 in the window ending 22:19:27, 83 in the window ending 22:24:27, then 0). checkout-00002-nt5 had 503s only: 113 in the window ending 22:29:27 and 100 in the window ending 22:34:27."
+  },
+  {
+    "scenario": "question-checkout-rollout",
+    "passed": false,
+    "failures": [
+      "26 tool calls > 12"
+    ],
+    "category": null,
+    "tool_calls": 26,
+    "seconds": 50.6,
+    "calls": [
+      "kubernetes_describe_deployment",
+      "kubernetes_recent_changes",
+      "kubernetes_list_pods",
+      "kubernetes_pod_logs",
+      "kubernetes_pod_logs",
+      "kubernetes_pod_logs",
+      "kubernetes_get_events",
+      "read_more",
+      "runbooks_search_runbooks",
+      "kubernetes_list_deployments",
+      "kubernetes_describe_pod",
+      "runbooks_read_runbook",
+      "incidents_search",
+      "kubernetes_get_events",
+      "kubernetes_describe_pod",
+      "runbooks_read_runbook",
+      "kubernetes_describe_deployment",
+      "kubernetes_recent_changes",
+      "kubernetes_pod_logs",
+      "runbooks_search_runbooks",
+      "kubernetes_list_pods",
+      "runbooks_read_runbook",
+      "kubernetes_describe_deployment",
+      "incidents_search",
+      "kubernetes_recent_changes",
+      "runbooks_read_runbook"
+    ],
+    "call_log": [
+      {
+        "name": "kubernetes_describe_deployment",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_recent_changes",
+        "args": {
+          "cluster": "kind"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_list_pods",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "label_selector": "app=checkout"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_pod_logs",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout-869fc5bcc6-db5ps",
+          "tail_lines": 20
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_pod_logs",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout-869fc5bcc6-db5ps",
+          "tail_lines": 1,
+          "previous": true
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_pod_logs",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout-869fc5bcc6-db5ps",
+          "tail_lines": 5
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_get_events",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo"
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "none"
+        },
+        "error": false
+      },
+      {
+        "name": "runbooks_search_runbooks",
+        "args": {
+          "keywords": "missing env var crashloop"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_list_deployments",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_describe_pod",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout-869fc5bcc6-db5ps"
+        },
+        "error": false
+      },
+      {
+        "name": "runbooks_read_runbook",
+        "args": {
+          "name": "pod-crashlooping"
+        },
+        "error": false
+      },
+      {
+        "name": "incidents_search",
+        "args": {
+          "keywords": "checkout DATABASE_URL"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_get_events",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "warnings_only": false
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_describe_pod",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout-869fc5bcc6-db5ps"
+        },
+        "error": false
+      },
+      {
+        "name": "runbooks_read_runbook",
+        "args": {
+          "name": "deployment-unavailable"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_describe_deployment",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_recent_changes",
+        "args": {
+          "cluster": "kind",
+          "since_minutes": 30
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_pod_logs",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout-869fc5bcc6-db5ps",
+          "container": "app",
+          "tail_lines": 50
+        },
+        "error": false
+      },
+      {
+        "name": "runbooks_search_runbooks",
+        "args": {
+          "keywords": "rollback"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_list_pods",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "label_selector": "app=checkout"
+        },
+        "error": false
+      },
+      {
+        "name": "runbooks_read_runbook",
+        "args": {
+          "name": "pod-crashlooping"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_describe_deployment",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout"
+        },
+        "error": false
+      },
+      {
+        "name": "incidents_search",
+        "args": {
+          "keywords": "checkout crashloop env var missing"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_recent_changes",
+        "args": {
+          "cluster": "kind",
+          "since_minutes": 10
+        },
+        "error": false
+      },
+      {
+        "name": "runbooks_read_runbook",
+        "args": {
+          "name": "deployment-unavailable"
+        },
+        "error": true
+      }
+    ],
+    "proposed": [],
+    "dropped_links": 0,
+    "report": null,
+    "answer": "**The latest rollout (revision 2) removed the `DATABASE_URL` env var from the `app` container. That is what is breaking checkout.**\n\n- Revision 2 is ReplicaSet `checkout-869fc5bcc6`. It was created about 36\u201348s before I checked.\n- The only change from revision 1 (`checkout-67d9799c78`) is `env_removed: app: [DATABASE_URL]`. The image is `python:3.12-alpine` in both revisions, and the memory request (32Mi) and limit (64Mi) are the same.\n- **Impact:** The new pod `checkout-869fc5bcc6-db5ps` is Running but 0/1 ready. It has exited with code 1 and restarted 3 times, and events show BackOff. Its logs say `FATAL: required env var DATABASE_URL is not set`. The deployment reports Available=False (MinimumReplicasUnavailable), with 0 of 1 replicas ready.\n- **Fix:** Roll back to revision 1, or restore `DATABASE_URL` in the deployment spec. The crash-loop runbook says a rollout that causes a crash loop should be rolled back, and that a restart won't help.\n- I found no past Reports about this.\n\n**Evidence**\n- `kubernetes_recent_changes`: checkout revision 2 rollout 48s ago with diff env_removed: {app: [DATABASE_URL]}. Revision 1 was the creation about 2m ago.\n- `kubernetes_describe_deployment`: Revision 2 (checkout-869fc5bcc6) has env [] and revision 1 (checkout-67d9799c78) has env [DATABASE_URL]. The image is python:3.12-alpine in both. Ready is 0/1 and Available=False.\n- `kubernetes_pod_logs`: checkout-869fc5bcc6-db5ps logs: 'FATAL: required env var DATABASE_URL is not set'.\n- `kubernetes_list_pods`: checkout-869fc5bcc6-db5ps is 0/1 ready with 3 restarts and last terminated Error (exit code 1).\n- `kubernetes_get_events`: Warning BackOff: restarting failed container app in pod checkout-869fc5bcc6-db5ps.\n- `runbooks_read_runbook`: The pod-crashlooping runbook lists missing env config as the most common cause. It says to roll back a revision that caused the crash loop and not to restart."
+  },
+  {
+    "scenario": "question-unhealthy-workloads",
+    "passed": true,
+    "failures": [],
+    "category": null,
+    "tool_calls": 13,
+    "seconds": 21.5,
+    "calls": [
+      "kubernetes_list_pods",
+      "kubernetes_list_deployments",
+      "kubernetes_pod_logs",
+      "kubernetes_describe_pod",
+      "kubernetes_pod_logs",
+      "kubernetes_recent_changes",
+      "kubernetes_list_pods",
+      "kubernetes_get_events",
+      "read_more",
+      "kubernetes_describe_deployment",
+      "kubernetes_describe_deployment",
+      "kubernetes_describe_deployment",
+      "kubernetes_get_events"
+    ],
+    "call_log": [
+      {
+        "name": "kubernetes_list_pods",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_list_deployments",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_pod_logs",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout-869fc5bcc6-db5ps",
+          "tail_lines": 30
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_describe_pod",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "reports-55b4fffc66-hmq7f"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_pod_logs",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "reports-55b4fffc66-hmq7f",
+          "tail_lines": 20
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_recent_changes",
+        "args": {
+          "cluster": "kind",
+          "since_minutes": 60
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_list_pods",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_get_events",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo"
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "none"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_describe_deployment",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "frontend"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_describe_deployment",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_describe_deployment",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "reports"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_get_events",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "warnings_only": false
+        },
+        "error": false
+      }
+    ],
+    "proposed": [],
+    "dropped_links": 0,
+    "report": null,
+    "answer": "All three deployments in `demo` are unhealthy. Each has 0/1 ready replicas and the condition Available=False (MinimumReplicasUnavailable). Each fails for a different reason.\n\n1. **checkout** is crash-looping (Error, exit code 1, 3 restarts). Its logs say `FATAL: required env var DATABASE_URL is not set`. Revision 2 rolled out about 48s ago and removed the `DATABASE_URL` env var from the `app` container. Revision 1 had it. The fix is to restore `DATABASE_URL` or roll back to revision 1.\n2. **frontend** can't start (ErrImagePull / ImagePullBackOff). It uses the image `nginx:1.99.99-does-not-exist`, and the registry returns \"not found\" for that tag. The fix is to set a valid nginx tag. It has only ever had revision 1, so there is nothing to roll back to.\n3. **reports** is crash-looping with OOMKilled (exit code 137, 3 restarts). Its memory limit is 48Mi, and its log says `building monthly report: loading 200MB of rows`. The fix is to raise the memory limit well above 48Mi, or make the job load its rows in smaller batches.\n\nThe early FailedScheduling events (untolerated taint) were from about 2 minutes ago. The pods were scheduled and started afterwards, so that is not the current cause.\n\n**Evidence**\n- `kubernetes_list_pods`: checkout 0/1, Error exit 1, 3 restarts; frontend Pending with ErrImagePull for nginx:1.99.99-does-not-exist (not found); reports 0/1, OOMKilled exit 137, 3 restarts.\n- `kubernetes_list_deployments`: checkout, frontend and reports all 0/1 ready with Available=False MinimumReplicasUnavailable.\n- `kubernetes_pod_logs`: checkout log: 'FATAL: required env var DATABASE_URL is not set'.\n- `kubernetes_recent_changes`: checkout revision 2 rolled out 48s ago with env_removed: app: [DATABASE_URL].\n- `kubernetes_describe_pod`: reports container has memory limit 48Mi and was OOMKilled (exit 137), with BackOff restarts. Its earlier FailedScheduling taint event was followed by a successful schedule.\n- `kubernetes_get_events`: BackOff events for checkout and reports; Failed/ErrImagePull/ImagePullBackOff for frontend with 'not found' for the nginx tag."
+  }
+]

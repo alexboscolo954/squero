@@ -572,6 +572,7 @@ async def test_an_oversized_result_is_kept_and_read_more_reaches_the_rest(
         call("x_logs", "c1b"),
         call("read_more", "c2", result_id=rid, grep="deployed"),
         call("read_more", "c2b", result_id=rid, grep="rotated"),
+        call("read_more", "c2c", result_id=rid, grep="deployed", fields=" n, "),  # audit A12
         call("read_more", "c3", result_id=rid, start=1500),
         call("read_more", "c4", result_id="r000000"),
         call("TriageReport", "c5", **REPORT),
@@ -587,11 +588,12 @@ async def test_an_oversized_result_is_kept_and_read_more_reaches_the_rest(
     assert set(state.values["spilled"]) == {rid, agent_result_id("c1b")}  # both kept
     assert "deployed by ann" in by_id["c2"] and "hunter2" not in by_id["c2"]
     assert by_id["c2"].startswith(f"[{rid}: chars 0-") and "matching" in by_id["c2"]
+    assert by_id["c2c"].splitlines()[1:] == ['{"n": 150}']  # fields as one string
     assert by_id["c3"].startswith(f"[{rid}: chars 1500-") and "next page: start=" in by_id["c3"]
     ids = sorted([rid, agent_result_id("c1b")])
     assert by_id["c4"] == f"no stored result 'r000000' in this Investigation; ids: {ids}"
     assert "hunter2" not in state.values["spilled"][rid]  # stored redacted
-    assert outcome.tool_calls.count("read_more") == 4  # counted against the budget
+    assert outcome.tool_calls.count("read_more") == 5  # counted against the budget
     assert seen == ["x_logs", "x_logs"]  # read_more never recorded
 
 

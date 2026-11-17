@@ -35,7 +35,7 @@ class Settings(BaseSettings):
 
     # LLM. Any init_chat_model string; set model_base_url for an
     # OpenAI-compatible gateway (LiteLLM, vLLM) and use "openai:<model>".
-    model: str = "anthropic:claude-sonnet-5-5"
+    model: str = "anthropic:claude-opus-5-5"  # audit A12: Sonnet 5.5 loops on Questions
     model_base_url: str | None = None
     model_api_key: SecretStr | None = None
     model_headers: dict[str, str] = {}  # JSON, e.g. {"anthropic-workspace-id": "..."}

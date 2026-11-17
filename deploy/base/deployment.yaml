@@ -29,7 +29,7 @@ spec:
           env:
             - {name: HOME, value: /tmp}   # read-only root fs
             - {name: SQUERO_CONTRACTS_DIR, value: /contracts}
-            - {name: SQUERO_MODEL, value: "anthropic:claude-sonnet-5-5"}
+            - {name: SQUERO_MODEL, value: "anthropic:claude-opus-5-5"}
           envFrom:
             - secretRef: {name: squero-secrets}
           ports:

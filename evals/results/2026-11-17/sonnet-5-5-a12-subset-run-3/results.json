@@ -1,0 +1,536 @@
+[
+  {
+    "scenario": "aws-lambda-timeout-cut",
+    "passed": true,
+    "failures": [],
+    "category": "bad_config",
+    "tool_calls": 6,
+    "seconds": 13.9,
+    "calls": [
+      "aws_describe_alarms",
+      "aws_describe_log_groups",
+      "aws_lookup_events",
+      "aws_query_logs",
+      "aws_get_metric_data",
+      "aws_get_metric_data"
+    ],
+    "call_log": [
+      {
+        "name": "aws_describe_alarms",
+        "args": {
+          "state": "ALARM"
+        },
+        "error": false
+      },
+      {
+        "name": "aws_describe_log_groups",
+        "args": {
+          "prefix": "/aws/lambda/checkout"
+        },
+        "error": false
+      },
+      {
+        "name": "aws_lookup_events",
+        "args": {
+          "resource_name": "checkout"
+        },
+        "error": false
+      },
+      {
+        "name": "aws_query_logs",
+        "args": {
+          "log_groups": [
+            "/aws/lambda/checkout"
+          ],
+          "query": "fields @timestamp, @message | sort @timestamp desc | limit 30",
+          "minutes": 120
+        },
+        "error": false
+      },
+      {
+        "name": "aws_get_metric_data",
+        "args": {
+          "namespace": "AWS/Lambda",
+          "metric_name": "Duration",
+          "dimensions": {
+            "FunctionName": "checkout"
+          },
+          "stat": "Maximum",
+          "minutes": 60,
+          "period": 60
+        },
+        "error": false
+      },
+      {
+        "name": "aws_get_metric_data",
+        "args": {
+          "namespace": "AWS/Lambda",
+          "metric_name": "Errors",
+          "dimensions": {
+            "FunctionName": "checkout"
+          },
+          "minutes": 30,
+          "period": 300
+        },
+        "error": false
+      }
+    ],
+    "proposed": [],
+    "dropped_links": 0,
+    "report": "## The checkout Lambda is timing out on every invocation. A config update at 02:48:49Z cut the timeout from 10s to 1s, but the function normally runs for about 1.2s.\n\n**Root cause** (high confidence, `bad_config`): UpdateFunctionConfiguration by 'deployer' at 02:48:49Z set timeout=1s. The function was created at 02:43:31Z with timeout=10s. Before the change its max Duration was about 1202ms, which is more than 1s. Since the change, every invocation is killed at 1000ms with Status: timeout. Errors went from 0 to about 18 per minute. The same request also sent an empty environment ({}), but the create call had an empty environment too, so that isn't the cause.\n**Severity:** critical  \u00b7  **Affected:** lambda/function/checkout\n\n**Evidence**\n- `aws_lookup_events`: 02:48:49Z UpdateFunctionConfiguration20150331v2 by deployer with timeout=1. The CreateFunction at 02:43:31Z had timeout=10, memorySize=128.\n- `aws_query_logs`: Every recent invocation ends with 'REPORT ... Duration: 1000.00 ms ... Max Memory Used: 37 MB Status: timeout'. Memory is not the limit.\n- `aws_get_metric_data`: Duration max was about 1202ms from 02:43 to 02:48, then a flat 1000ms from 02:49. The function needs more than 1s, so a 1s timeout always kills it. The Errors metric went from 0 to 17-18 per minute from 02:49.\n\n**Recommendations**\n1. Restore the checkout timeout to the previous 10s with aws lambda update-function-configuration --timeout 10, or roll back the deployer change.\n2. Confirm that Errors drop to 0 and Duration returns to about 1.2s.\n3. Review the deployer pipeline or IaC that set timeout=1. Add validation so the timeout can't go below the function's observed p99 duration.\n4. Check for failed or retried checkout requests during the 02:48 to now window and reprocess them if needed."
+  },
+  {
+    "scenario": "gcp-who-deployed",
+    "passed": true,
+    "failures": [],
+    "category": null,
+    "tool_calls": 8,
+    "seconds": 25.8,
+    "calls": [
+      "gcp_list_log_entries",
+      "gcp_list_log_entries",
+      "gcp_list_log_entries",
+      "read_more",
+      "gcp_list_log_entries",
+      "read_more",
+      "gcp_list_log_entries",
+      "read_more"
+    ],
+    "call_log": [
+      {
+        "name": "gcp_list_log_entries",
+        "args": {
+          "resourceNames": [
+            "projects/shop-prod-4f2a"
+          ],
+          "filter": "logName=\"projects/shop-prod-4f2a/logs/cloudaudit.googleapis.com%2Factivity\" AND resource.type=\"cloud_run_revision\" OR (logName=\"projects/shop-prod-4f2a/logs/cloudaudit.googleapis.com%2Factivity\" AND protoPayload.resourceName:\"checkout\")",
+          "orderBy": "timestamp desc",
+          "pageSize": 20
+        },
+        "error": false
+      },
+      {
+        "name": "gcp_list_log_entries",
+        "args": {
+          "resourceNames": [
+            "projects/shop-prod-4f2a"
+          ],
+          "filter": "resource.type=\"cloud_run_revision\" AND httpRequest.status=503",
+          "orderBy": "timestamp desc",
+          "pageSize": 10
+        },
+        "error": false
+      },
+      {
+        "name": "gcp_list_log_entries",
+        "args": {
+          "resourceNames": [
+            "projects/shop-prod-4f2a"
+          ],
+          "filter": "logName=\"projects/shop-prod-4f2a/logs/cloudaudit.googleapis.com%2Factivity\" AND protoPayload.resourceName:\"checkout\"",
+          "orderBy": "timestamp desc",
+          "pageSize": 10
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "r7df791",
+          "grep": "methodName"
+        },
+        "error": false
+      },
+      {
+        "name": "gcp_list_log_entries",
+        "args": {
+          "resourceNames": [
+            "projects/shop-prod-4f2a"
+          ],
+          "filter": "protoPayload.serviceName=\"run.googleapis.com\" AND protoPayload.methodName:\"Services\"",
+          "orderBy": "timestamp desc",
+          "pageSize": 10
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "r7df791",
+          "grep": "principalEmail",
+          "fields": "[\"logName\",\"timestamp\",\"protoPayload.methodName\",\"protoPayload.resourceName\",\"protoPayload.authenticationInfo\"]"
+        },
+        "error": false
+      },
+      {
+        "name": "gcp_list_log_entries",
+        "args": {
+          "resourceNames": [
+            "projects/shop-prod-4f2a"
+          ],
+          "filter": "protoPayload.authenticationInfo.principalEmail:\"@\" AND timestamp>=\"2026-10-18T22:00:00Z\" AND timestamp<=\"2026-10-18T22:30:00Z\"",
+          "orderBy": "timestamp asc",
+          "pageSize": 10
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "r7df791",
+          "grep": "lastModifier",
+          "fields": "[\"timestamp\",\"protoPayload.resourceName\",\"protoPayload.response.metadata.annotations\"]"
+        },
+        "error": false
+      }
+    ],
+    "proposed": [],
+    "dropped_links": 0,
+    "report": null,
+    "answer": "**oncall@example.com** deployed it, using gcloud (client 589.0.0). The revision is `checkout-00002-nt5` in service `checkout`, us-central1.\n\n- **When:** the revision was created at **2026-10-18 22:22:38 UTC**. It became Ready at 22:24:18 UTC (\"Deploying revision succeeded in 1m40.46s\"). That is about 10 minutes before the 503s I saw at 22:34 UTC.\n- **Who:** `serving.knative.dev/creator` on the revision, and `creator` and `lastModifier` on the service (generation 2), are all oncall@example.com.\n- **Why it returns 503:** the deploy set `UPSTREAM_TIMEOUT_MS=1`. The app's default is 2000 ms. Every request to the inventory upstream times out after 1 ms (\"inventory lookup failed after 1 ms: URLError: <urlopen error timed out>\"), and the app answers 503 \"inventory unavailable\". All 503s I saw in the logs came from `checkout-00002-nt5`.\n- **Fix:** redeploy with a sane `UPSTREAM_TIMEOUT_MS` (for example 2000), or roll traffic back to the previous revision.\n\n**Caveat:** the log filters I used returned mostly unfiltered entries. I did not find an Admin Activity audit entry with `authenticationInfo.principalEmail`. The deployer identity comes from the creator and lastModifier annotations in the system_event audit records. I would treat it as reliable, but it is not confirmed against an Admin Activity entry.\n\n**Evidence**\n- `gcp_list_log_entries`: system_event audit record /Services.ReplaceService for revision checkout-00002-nt5: serving.knative.dev/creator=oncall@example.com, client-name gcloud 589.0.0, creationTimestamp 2026-10-18T22:22:38Z, Ready at 22:24:18Z; env UPSTREAM_TIMEOUT_MS=1. The record was read via read_more on the saved result of an audit-log query for resourceName containing 'checkout'.\n- `gcp_list_log_entries`: Service checkout audit record (generation 2): creator and lastModifier = oncall@example.com, same operation-id 9bcbd8df-0fc8-416f-a0cf-6e15aa5e74bd. The record was read via read_more on the same saved result.\n- `gcp_list_log_entries`: Query for httpRequest.status=503 on cloud_run_revision: 503 responses on revision checkout-00002-nt5 at 22:34:23\u201322:34:31Z, each paired with the stdout error 'inventory lookup failed after 1 ms: URLError: <urlopen error timed out>' (timeout_ms 1)."
+  },
+  {
+    "scenario": "question-checkout-rollout",
+    "passed": false,
+    "failures": [
+      "27 tool calls > 12"
+    ],
+    "category": null,
+    "tool_calls": 27,
+    "seconds": 52.4,
+    "calls": [
+      "kubernetes_describe_deployment",
+      "kubernetes_recent_changes",
+      "kubernetes_list_pods",
+      "kubernetes_pod_logs",
+      "kubernetes_pod_logs",
+      "kubernetes_pod_logs",
+      "kubernetes_pod_logs",
+      "kubernetes_describe_deployment",
+      "kubernetes_pod_logs",
+      "kubernetes_get_events",
+      "kubernetes_describe_pod",
+      "read_more",
+      "kubernetes_list_deployments",
+      "runbooks_search_runbooks",
+      "runbooks_read_runbook",
+      "incidents_search",
+      "kubernetes_get_events",
+      "kubernetes_recent_changes",
+      "kubernetes_list_pods",
+      "kubernetes_describe_deployment",
+      "runbooks_read_runbook",
+      "kubernetes_pod_logs",
+      "incidents_search",
+      "kubernetes_list_deployments",
+      "kubernetes_describe_deployment",
+      "kubernetes_recent_changes",
+      "read_more"
+    ],
+    "call_log": [
+      {
+        "name": "kubernetes_describe_deployment",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_recent_changes",
+        "args": {
+          "cluster": "kind"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_list_pods",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "label_selector": "app=checkout"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_pod_logs",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout-869fc5bcc6-db5ps",
+          "tail_lines": 20
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_pod_logs",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout-869fc5bcc6-db5ps",
+          "tail_lines": 1
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_pod_logs",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout-869fc5bcc6-db5ps",
+          "tail_lines": 5
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_pod_logs",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout-869fc5bcc6-db5ps",
+          "tail_lines": 10
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_describe_deployment",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "frontend"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_pod_logs",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout-869fc5bcc6-db5ps",
+          "previous": true
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_get_events",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_describe_pod",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout-869fc5bcc6-db5ps"
+        },
+        "error": false
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "none"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_list_deployments",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo"
+        },
+        "error": false
+      },
+      {
+        "name": "runbooks_search_runbooks",
+        "args": {
+          "keywords": "missing env var crashloop"
+        },
+        "error": false
+      },
+      {
+        "name": "runbooks_read_runbook",
+        "args": {
+          "name": "pod-crashlooping"
+        },
+        "error": false
+      },
+      {
+        "name": "incidents_search",
+        "args": {
+          "keywords": "checkout DATABASE_URL"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_get_events",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "warnings_only": false
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_recent_changes",
+        "args": {
+          "cluster": "kind",
+          "since_minutes": 10
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_list_pods",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_describe_deployment",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout"
+        },
+        "error": false
+      },
+      {
+        "name": "runbooks_read_runbook",
+        "args": {
+          "name": "deployment-unavailable"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_pod_logs",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout-869fc5bcc6-db5ps",
+          "container": "app"
+        },
+        "error": false
+      },
+      {
+        "name": "incidents_search",
+        "args": {
+          "keywords": "checkout crashloop env var missing"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_list_deployments",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_describe_deployment",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "reports"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_recent_changes",
+        "args": {
+          "cluster": "kind",
+          "since_minutes": 60
+        },
+        "error": true
+      },
+      {
+        "name": "read_more",
+        "args": {
+          "result_id": "x"
+        },
+        "error": true
+      }
+    ],
+    "proposed": [],
+    "dropped_links": 0,
+    "report": null,
+    "answer": "**The latest rollout of `checkout` (revision 2) removed the `DATABASE_URL` env var from the `app` container, and the deployment is now broken.**\n\n- **Revision 1** (`checkout-67d9799c78`) had `DATABASE_URL` set. It is now scaled to 0.\n- **Revision 2** (`checkout-869fc5bcc6`) has no env vars at all. It rolled out about 48s before I checked.\n- **Unchanged:** the image is `python:3.12-alpine` in both revisions. The memory request (32Mi) and limit (64Mi) are the same too.\n\n**Effect:** the new pod `checkout-869fc5bcc6-db5ps` is in CrashLoopBackOff. It has restarted 3 times and exits with code 1. Its log says `FATAL: required env var DATABASE_URL is not set`. The deployment shows 0/1 ready and `Available=False` (MinimumReplicasUnavailable).\n\n**Recommended fix:** roll back to revision 1, or restore `DATABASE_URL` in the deployment spec. The `pod-crashlooping` runbook says a restart won't help here. No past Report matches this.\n\n**Unrelated issues in the same namespace:**\n- `frontend` can't pull its image, `nginx:1.99.99-does-not-exist` (ErrImagePull).\n- `reports` is being OOMKilled against its 48Mi memory limit.\n\n**Evidence**\n- `kubernetes_recent_changes`: checkout revision 2 rollout about 48s ago, diff: env_removed {app: [DATABASE_URL]}. Revision 1 was just 'created'.\n- `kubernetes_describe_deployment`: Revision 2 (checkout-869fc5bcc6) has env [] and image python:3.12-alpine. Revision 1 (checkout-67d9799c78) had env [DATABASE_URL] and is at 0 replicas. The deployment is 0/1 ready and Available=False.\n- `kubernetes_pod_logs`: checkout-869fc5bcc6-db5ps: 'FATAL: required env var DATABASE_URL is not set' (checkout starting, version 1.4.0)\n- `kubernetes_list_pods`: checkout-869fc5bcc6-db5ps is 0/1 ready with 3 restarts and a last termination of Error, exit code 1. frontend shows ErrImagePull. reports was OOMKilled.\n- `kubernetes_get_events`: BackOff warning: back-off restarting failed container app in pod checkout-869fc5bcc6-db5ps.\n- `runbooks_read_runbook`: The pod-crashlooping runbook lists missing config such as an env var as the most common cause. It says the fix is a rollback or restoring the config, and that a restart does not fix a crash loop."
+  },
+  {
+    "scenario": "question-unhealthy-workloads",
+    "passed": true,
+    "failures": [],
+    "category": null,
+    "tool_calls": 6,
+    "seconds": 11.9,
+    "calls": [
+      "kubernetes_list_pods",
+      "kubernetes_list_deployments",
+      "kubernetes_pod_logs",
+      "kubernetes_describe_pod",
+      "kubernetes_recent_changes",
+      "kubernetes_get_events"
+    ],
+    "call_log": [
+      {
+        "name": "kubernetes_list_pods",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_list_deployments",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_pod_logs",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "checkout-869fc5bcc6-db5ps",
+          "tail_lines": 30
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_describe_pod",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo",
+          "name": "reports-55b4fffc66-hmq7f"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_recent_changes",
+        "args": {
+          "cluster": "kind"
+        },
+        "error": false
+      },
+      {
+        "name": "kubernetes_get_events",
+        "args": {
+          "cluster": "kind",
+          "namespace": "demo"
+        },
+        "error": false
+      }
+    ],
+    "proposed": [],
+    "dropped_links": 0,
+    "report": null,
+    "answer": "All three deployments in `demo` are unhealthy. Each shows 0/1 ready and `MinimumReplicasUnavailable`.\n\n1. **checkout** is crash-looping (exit code 1, 3 restarts).\n   - **Cause:** the container logs `FATAL: required env var DATABASE_URL is not set`.\n   - **Trigger:** revision 2 rolled out about 48s ago and removed the `DATABASE_URL` env var from the `app` container.\n   - **Fix:** restore `DATABASE_URL` on the deployment, or roll back to revision 1.\n\n2. **frontend** is stuck in `ErrImagePull` / `ImagePullBackOff`.\n   - **Cause:** it uses the image `nginx:1.99.99-does-not-exist`, and the registry returns \"not found\" for that tag.\n   - **Fix:** point it at a valid nginx tag.\n\n3. **reports** is crash-looping because it is `OOMKilled` (exit 137, 3 restarts).\n   - **Cause:** the memory limit is 48Mi (request 32Mi), which is too low for the container.\n   - **Fix:** raise the memory limit, or reduce the app's memory use.\n   - **Not checked:** I didn't look at the reports container's logs or its actual memory usage, so the right new limit is unknown.\n\nThe `FailedScheduling` events (untolerated node taint) were seen about 2 minutes ago. The pods have since been scheduled, so this is not the current cause.\n\n**Evidence**\n- `kubernetes_list_pods`: checkout: Error exit 1, 3 restarts. frontend: ErrImagePull for nginx:1.99.99-does-not-exist (not found). reports: OOMKilled exit 137, 3 restarts. All pods 0/1 ready.\n- `kubernetes_list_deployments`: checkout, frontend and reports are all 0/1 ready with Available=False (MinimumReplicasUnavailable).\n- `kubernetes_pod_logs`: checkout pod log: 'FATAL: required env var DATABASE_URL is not set'.\n- `kubernetes_recent_changes`: checkout revision 2 rolled out 48s ago with env_removed: app: [DATABASE_URL].\n- `kubernetes_describe_pod`: reports pod: memory limit 48Mi (request 32Mi), last state OOMKilled exit 137, BackOff restarts.\n- `kubernetes_get_events`: frontend: Failed to pull image nginx:1.99.99-does-not-exist (not found), ErrImagePull and ImagePullBackOff. BackOff events for checkout and reports. FailedScheduling due to a taint was seen only about 2m ago."
+  }
+]
