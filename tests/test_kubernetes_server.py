@@ -541,6 +541,86 @@ async def test_recent_changes_keeps_the_window_and_only_deployments(
     assert len(out) == kubernetes.MAX_CHANGES and out[0]["deployment"] == "d0"
 
 
+SPEC = k.V1DeploymentSpec(selector=k.V1LabelSelector(), template=k.V1PodTemplateSpec())
+
+
+def progressing(uid: str, message: str | None, minutes_ago: int | None) -> k.V1Deployment:
+    """A Deployment "web" whose Progressing condition says `message`, updated then."""
+    at = None if minutes_ago is None else NOW - timedelta(minutes=minutes_ago)
+    return k.V1Deployment(
+        metadata=k.V1ObjectMeta(name="web", uid=uid),
+        spec=SPEC,
+        status=k.V1DeploymentStatus(
+            conditions=[
+                k.V1DeploymentCondition(type="Available", status="True"),
+                k.V1DeploymentCondition(
+                    type="Progressing",
+                    status="True",
+                    reason="NewReplicaSetAvailable",
+                    message=message,
+                    last_update_time=at,
+                    last_transition_time=NOW - timedelta(days=3),
+                ),
+            ]
+        ),
+    )
+
+
+@pytest.mark.anyio
+async def test_a_rollout_undo_is_timed_from_its_deployments_progressing_condition(
+    settings: Settings, fake_cluster: Any
+) -> None:
+    """Audit A11b: an undo reuses an old ReplicaSet (bumped to a new revision, its old one
+    in revision-history), so its creation time is the first rollout's. The current one
+    takes its Deployment's Progressing update time while that names it, quoted."""
+    apps = fake_cluster[1]
+    undo = {"deployment.kubernetes.io/revision-history": "1"}
+    reused = replica_set("web", 3, 600, "a:1", annotations=undo)
+    apps.list_namespaced_replica_set.return_value = k.V1ReplicaSetList(
+        items=[reused, replica_set("web", 2, 500, "b:2")]
+    )
+    server = k8s(settings, fake_cluster)
+
+    def deployments(*items: k.V1Deployment) -> None:
+        apps.list_namespaced_deployment.return_value = k.V1DeploymentList(items=list(items))
+
+    deployments(progressing("uid-web", 'ReplicaSet "web-r3" has successfully progressed.', 5))
+    (out,) = await changes(server, since_minutes=60)
+    assert (out["deployment"], out["revision"], out["change"], out["when"]) == (
+        "web",
+        "3",
+        "rollout undo",
+        "5m",
+    )
+    assert out["diff"] == {"images": {"app": {"from": "b:2", "to": "a:1"}}}
+
+    # Not timed: another ReplicaSet named, one whose name only starts with it, another
+    # Deployment of the same name, no Deployment, a Deployment with no status.
+    for d in (
+        progressing("uid-web", 'ReplicaSet "web-r2" is progressing.', 5),
+        progressing("uid-web", 'ReplicaSet "web-r30" is progressing.', 5),
+        progressing("uid-other", 'ReplicaSet "web-r3" is progressing.', 5),
+        k.V1Deployment(metadata=k.V1ObjectMeta(name="web", uid="uid-web"), spec=SPEC),
+    ):
+        deployments(d)
+        assert await changes(server, since_minutes=60) == []
+    deployments()
+    assert await changes(server, since_minutes=60) == []
+
+    # An older undo, superseded since, keeps its creation time even while the condition
+    # still names it; one with no update time keeps it too, and is still an undo.
+    deployments(progressing("uid-web", 'ReplicaSet "web-r3" is progressing.', 5))
+    apps.list_namespaced_replica_set.return_value.items.append(replica_set("web", 4, 2, "c:3"))
+    assert [c["revision"] for c in await changes(server, since_minutes=60)] == ["4"]
+    apps.list_namespaced_replica_set.return_value.items[:] = [
+        replica_set("web", 3, 10, "a:1", annotations=undo),
+        replica_set("web", 2, 500, "b:2"),
+    ]
+    deployments(progressing("uid-web", 'ReplicaSet "web-r3" is progressing.', None))
+    (out,) = await changes(server, since_minutes=60)
+    assert (out["change"], out["when"]) == ("rollout undo", "10m")
+
+
 @pytest.mark.anyio
 async def test_recent_changes_never_queries_outside_the_allowlist(
     settings: Settings, fake_cluster: Any
@@ -549,16 +629,17 @@ async def test_recent_changes_never_queries_outside_the_allowlist(
     server = k8s(settings, fake_cluster, clusters={"test": ["shop", "pay"], "stg": ["shop-stg"]})
     await changes(server)
     apps = fake_cluster[1]
-    assert sorted(c.args[0] for c in apps.list_namespaced_replica_set.call_args_list) == [
-        "pay",
-        "shop",
-    ]
+    listed = (apps.list_namespaced_replica_set, apps.list_namespaced_deployment)
+    for each in listed:
+        assert sorted(c.args[0] for c in each.call_args_list) == ["pay", "shop"]
+        each.reset_mock()
     apps.list_replica_set_for_all_namespaces.assert_not_called()
-    apps.list_namespaced_replica_set.reset_mock()
+    apps.list_deployment_for_all_namespaces.assert_not_called()
     async with Client(server) as c:
         with pytest.raises(ToolError, match="not one of this Contract's clusters"):
             await c.call_tool("recent_changes", {"cluster": "bank-kind"})
-    apps.list_namespaced_replica_set.assert_not_called()
+    for each in listed:
+        each.assert_not_called()
 
 
 def test_the_changes_guide_comes_only_with_kubernetes(

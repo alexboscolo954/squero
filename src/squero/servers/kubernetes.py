@@ -39,6 +39,7 @@ Contract's namespaces, with what each changed. A rollout shortly before the aler
 is a strong lead, including one of a different workload the alerting one depends on.
 """
 REVISION = "deployment.kubernetes.io/revision"
+REVISION_HISTORY = "deployment.kubernetes.io/revision-history"
 # What recent_changes reads in a cluster's gitops_namespaces: (group, version, plural).
 # Older versions (Flux before 2.3's helm v2) answer 404 and are skipped like a
 # controller that isn't installed.
@@ -182,6 +183,18 @@ def _probe(p: Any) -> str | None:
 
 def _revision(rs: Any) -> int:
     return int((rs.metadata.annotations or {}).get(REVISION, 0))
+
+
+def _undone(d: Any, rs: Any) -> datetime | None:
+    """When a rollout undo onto `rs` last progressed: its Deployment's Progressing
+    condition's update time while that names `rs`. A reused ReplicaSet keeps its first
+    creation time, and the condition's transition time doesn't move while it stays True."""
+    conditions = (d.status.conditions if d is not None and d.status else None) or []
+    c = next((c for c in conditions if c.type == "Progressing"), None)
+    at: datetime | None = None
+    if c is not None and f'"{rs.metadata.name}"' in (c.message or ""):
+        at = c.last_update_time
+    return at
 
 
 def _rollout_diff(rs: Any, prev: Any) -> dict[str, Any]:
@@ -660,6 +673,9 @@ def build_server(
         changes: list[tuple[datetime, dict[str, Any]]] = []
         # One namespace at a time, only the allowed ones: never a cluster-wide list.
         for namespace in sorted(allowed):
+            deployments = {
+                d.metadata.uid: d for d in call(apps.list_namespaced_deployment, namespace).items
+            }
             by_owner: dict[str, list[Any]] = {}
             for rs in call(apps.list_namespaced_replica_set, namespace).items:
                 owner = next(
@@ -668,22 +684,27 @@ def build_server(
                 )
                 if owner is not None:
                     by_owner.setdefault(owner.uid, []).append((owner.name, rs))
-            for owned in by_owner.values():
+            for uid, owned in by_owner.items():
                 owned.sort(key=lambda o: _revision(o[1]))
                 for i, (deployment, rs) in enumerate(owned):
-                    # ponytail: a rollback reuses an old ReplicaSet, so its creation time
-                    # is the original rollout's; read the Deployment's conditions if that bites.
+                    annotations = rs.metadata.annotations or {}
+                    # A rollout undo reuses an old ReplicaSet, which the controller marks.
+                    # Only the current one can be timed; an older undo keeps its creation time.
+                    undo = REVISION_HISTORY in annotations
                     created = rs.metadata.creation_timestamp
+                    if undo and i == len(owned) - 1:
+                        created = _undone(deployments.get(uid), rs) or created
                     if created is None or created < since:
                         continue
                     prev = owned[i - 1][1] if i else None
-                    annotations = rs.metadata.annotations or {}
                     entry: dict[str, Any] = {
                         "when": _age(created),
                         "namespace": namespace,
                         "deployment": deployment,
                         "revision": annotations.get(REVISION),
-                        "change": "rollout"
+                        "change": "rollout undo"
+                        if undo
+                        else "rollout"
                         if prev is not None
                         else "created"
                         if _revision(rs) == 1

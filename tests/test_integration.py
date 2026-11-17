@@ -161,6 +161,43 @@ async def test_recent_changes_finds_the_dependency_rollout(live: contracts.Contr
     assert {ch["namespace"] for ch in changes} == {"demo", "orders"}
 
 
+async def test_recent_changes_times_a_real_rollout_undo(live: contracts.Contract) -> None:
+    """Audit A11b: `kubectl rollout undo` reuses a ReplicaSet over a minute old, so only the
+    Deployment's Progressing condition can put the undo inside a one-minute window."""
+    import subprocess
+    import time
+
+    def kubectl(*args: str, check: bool = True) -> str:
+        # Flags before args: after `--` they would be the container's command's.
+        cmd = ["kubectl", "--context", str(live.clusters[0].context), "-n", "demo", *args]
+        done = subprocess.run(cmd, capture_output=True, text=True)  # noqa: S603
+        assert done.returncode == 0 or not check, f"{' '.join(args)}: {done.stderr}"
+        return done.stdout
+
+    probe = "deploy/undo-probe"
+    try:
+        image = "--image=python:3.12-alpine"
+        kubectl("create", "deployment", "undo-probe", image, "--", "sleep", "3600")
+        kubectl("rollout", "status", probe, "--timeout=3m")
+        first = time.monotonic()
+        kubectl("set", "env", probe, "PROBE=2")
+        kubectl("rollout", "status", probe, "--timeout=3m")
+        await anyio.sleep(max(0.0, 70 - (time.monotonic() - first)))
+        kubectl("rollout", "undo", probe)
+        kubectl("rollout", "status", probe, "--timeout=3m")
+        async with Client(k8s(live)) as c:
+            changes = (await tool(c, "recent_changes", cluster="kind", since_minutes=1))["result"]
+        # what CI needs if it fails: the condition's times, the ReplicaSets' annotations
+        state = kubectl("get", "deployment,replicaset", "-l", "app=undo-probe", "-o", "yaml")
+        undo = [ch for ch in changes if ch.get("deployment") == "undo-probe"]
+        assert [(ch["change"], ch["revision"]) for ch in undo] == [("rollout undo", "3")], state
+        assert list(undo[0]["diff"]["env_removed"].values()) == [["PROBE"]], undo
+    finally:
+        kubectl("delete", probe, "--ignore-not-found")
+        # its pods gone too, so no later test or recording reads them
+        kubectl("wait", "--for=delete", "pod", "-l", "app=undo-probe", "--timeout=60s", check=False)
+
+
 async def test_recent_changes_reads_gitops_objects_of_its_own_namespaces(
     live: contracts.Contract,
 ) -> None:

@@ -226,7 +226,7 @@ _Avoid_: Executed action (that is a Proposed action the Operator approved)
 
 **Rollback**:
 The Actuator's own undo of a Sizing that made pods unhealthy within an hour of its resize (a container with its requests restarted or was OOM-killed, or a pod it resized stayed NotReady for 2 minutes; never a pod whose node is gone, which is NotReady or Failed through no Sizing, nor a container its node's own restart started again): every such pod back to its template's requests, in place and at once. Then no new Sizing of that container for 24 hours, doubling with each rollback within 7 days. Not while the Kill switch is on; the Operator hears of it in Slack at once.
-_Avoid_: Revert (that is the Operator's undo)
+_Avoid_: Revert (that is the Operator's undo); a Deployment put back on an earlier revision (`kubectl rollout undo`), which `recent_changes` calls a `rollout undo`
 
 **Revert**:
 The Operator's undo of what the Actuator holds for a container, asked from the console's Automation page or the Hub MCP server (`revert_sizing`): its pods go back to their template's requests, in place, and the Actuator stops holding it. Automation of that container stops until the Operator approves one of its Sizings. Refused while the Kill switch is on. It drops the container's Step-up and its Burst with it, and is offered for a container that has only one of those.
