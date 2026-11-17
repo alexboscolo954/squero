@@ -109,6 +109,7 @@ KEPT_REPORTS = 200  # of its unsent reports, the newest kept across a restart: t
 STATE = "state.json"  # beside it: the Kill switch as last heard, reports not yet taken
 RUN_AGE = 30 * 1440  # minutes: how old a CronJob run's scheduled time may be (slice 12.9b)
 MAX_REPORTS = 1000  # per POST, and kept unsent while the Hub is unreachable
+HOURLY_REPORTS = 1000  # audit A7: the Hub stores at most this many from a cluster an hour
 BLOCKERS_EVERY = 3600  # seconds between its reports of Blockers' facts (slice 15.1b)
 BLOCKERS_RETRY = 300  # after one that didn't reach the Hub: its reports go stale at two hours
 BLOCKERS_CHECK = 300  # audit A4: read this often, and reported when they changed

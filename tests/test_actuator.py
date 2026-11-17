@@ -290,6 +290,89 @@ def test_actuations_are_kept_90_days(database_url: str) -> None:
     ]
 
 
+def test_the_hub_stores_at_most_hourly_reports_from_a_cluster_an_hour(database_url: str) -> None:
+    """Audit A7: counted by when the Hub received them, never the Actuator's `at`; a report
+    sent again is no new one, and never refused; each cluster and Contract its own hour."""
+    t = 10_000.0
+    five = [report(at=float(i)) for i in range(5)]  # dated long before: still counted
+
+    async def go() -> list[Any]:
+        async with connect(database_url) as pool:
+            store = Store(pool)
+            await store.migrate()
+            out: list[Any] = []
+
+            async def put(cid: str, cluster: str, rows: list[Any], at: float) -> None:
+                new, refused = await store.record_actuations(cid, cluster, rows, at, hourly=3)
+                out.append(([r["at"] for r in new], [r["at"] for r in refused]))
+
+            await put("acme", "test", five, t)
+            await put("acme", "test", five, t + 1)  # sent again: the 3 kept aren't refused
+            await put("acme", "test", five[:3], t + 1)
+            await put("acme", "edge", five, t)
+            await put("bank", "test", five, t)
+            await put("acme", "test", five, t + 3599)  # the hour not over
+            await put("acme", "test", five, t + 3600)  # over: the first 3 count no more
+            new, refused = await store.record_actuations("acme", "test", [report(at=9.0)], t)
+            out.append((len(new), refused))  # no `hourly`: none refused
+            return out
+
+    assert asyncio.run(go()) == [
+        ([0.0, 1.0, 2.0], [3.0, 4.0]),
+        ([], [3.0, 4.0]),
+        ([], []),
+        ([0.0, 1.0, 2.0], [3.0, 4.0]),
+        ([0.0, 1.0, 2.0], [3.0, 4.0]),
+        ([], [3.0, 4.0]),
+        ([3.0, 4.0], []),
+        (1, []),
+    ]
+
+
+def test_reports_over_the_hour_are_stored_up_to_it_and_the_rest_refused_with_429(
+    settings: Settings, database_url: str, monkeypatch: pytest.MonkeyPatch, caplog: Any
+) -> None:
+    monkeypatch.setattr(actuator, "HOURLY_REPORTS", 2)
+    caplog.set_level("INFO", logger="squero.api")
+    app = hub(settings, database_url, actuated("acme", A_TOKEN))
+    three = [report(at=float(i)) for i in range(3)]
+    with TestClient(app) as c:
+        job = c.post("/actuator/reports", json=[report(kind="Job")], headers=as_actuator(A_TOKEN))
+        over = c.post("/actuator/reports", json=three, headers=as_actuator(A_TOKEN))
+        again = c.post("/actuator/reports", json=three[:2], headers=as_actuator(A_TOKEN))
+    assert job.status_code == 422 and "['Job']" in job.json()["detail"]
+    assert over.status_code == 429
+    assert over.json()["detail"] == "at most 2 reports an hour from a cluster"
+    assert again.status_code == 204  # the two it kept, sent again: taken
+    assert sql(database_url, ("select at from actuations order by at", ())) == [(0.0,), (1.0,)]
+    assert "actuator acme/test: 1 reports refused, its 2 an hour reached" in caplog.text
+    assert caplog.text.count("actuation acme/test applied") == 4  # each stored, twice
+
+
+def test_reports_refused_for_the_hour_are_sent_again_and_stored_once(
+    settings: Settings, database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(actuator, "HOURLY_REPORTS", 2)
+    app = hub(settings, database_url, actuated("acme", A_TOKEN))
+    with TestClient(app) as c:
+
+        def forward(r: httpx.Request) -> httpx.Response:  # the Actuator's httpx, the Hub's app
+            got = c.request(r.method, r.url.path, content=r.content, headers=dict(r.headers))
+            return httpx.Response(got.status_code, content=got.content)
+
+        to_hub = httpx.MockTransport(forward)
+        http = httpx.Client(base_url="https://hub", transport=to_hub, headers=as_actuator(A_TOKEN))
+        a = make(http, MagicMock(), MagicMock())
+        a.unsent = [actuation(i) for i in (1, 2, 3)]
+        a.report()  # 429: 2 stored, all 3 kept to send again
+        kept = [x.run_id for x in a.unsent]
+        monkeypatch.setattr(actuator, "HOURLY_REPORTS", 3)  # as when the hour has passed
+        a.report()
+    assert kept == [1, 2, 3] and a.unsent == []
+    rows = sql(database_url, ("select run_id from actuations order by run_id", ()))
+    assert rows == [(1,), (2,), (3,)]
+
+
 def test_an_actuator_token_is_no_other_token(settings: Settings, database_url: str) -> None:
     def refused(*cs: contracts.Contract, approver: str = "approver-token") -> str:
         with pytest.raises(RuntimeError) as e:
@@ -755,6 +838,8 @@ def hub_of(answers: list[Any], seen: list[httpx.Request]) -> httpx.Client:
         if request.url.path == "/actuator/desired":
             got = next(pulls)
             return got if isinstance(got, httpx.Response) else httpx.Response(200, json=got)
+        # audit A7: the Hub refuses a report of a kind it doesn't resize, whole
+        assert {a["kind"] for a in json.loads(request.content)} <= set(actuator.KINDS)
         return reports.pop(0) if reports else httpx.Response(204)
 
     reports: list[httpx.Response] = []
@@ -3890,7 +3975,7 @@ def test_a_late_rollback_says_when_and_a_week_old_one_is_given_up(
     app, slack = slacked(settings, database_url, bank_channel=False)
     now = time.time()
     with TestClient(app) as c:
-        down, when = httpx.Response(500), datetime.fromtimestamp(now, UTC)
+        down = httpx.Response(500)
 
         def late(by: float, i: int) -> None:
             """A Rollback Slack doesn't take as it arrives, told again `by` seconds on."""
@@ -3905,6 +3990,11 @@ def test_a_late_rollback_says_when_and_a_week_old_one_is_given_up(
         assert len(posts(slack)) == 2 and not posts(slack)[-1][1].endswith("UTC)")
         late(api.LATE + 30, 1)
         assert len(posts(slack)) == 4
+        # said by when the Hub received it: `now` may be a minute before, at a minute's end
+        ((got,),) = sql(
+            database_url, ("select received_at from actuations where at = %s", (now + 1,))
+        )
+        when = datetime.fromtimestamp(got, UTC)
         assert posts(slack)[-1][1].endswith(f": r (reported {when:%Y-%m-%d %H:%M} UTC)")
         late(api.TELL_FOR - 3600, 2)  # not yet a week: still tried, and taken
         assert len(posts(slack)) == 6

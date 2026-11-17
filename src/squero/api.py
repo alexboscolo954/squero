@@ -2044,23 +2044,29 @@ def create_app(
         creds: HTTPAuthorizationCredentials = Depends(bearer),  # noqa: B008
     ) -> None:
         """An Actuator's Actuations, stored as its Contract's cluster's, by its token only;
-        one naming a namespace outside the cluster's is refused whole, as is one with a
-        number that isn't one (slice 12.9c). Its Rollbacks are told after it is answered."""
+        one naming a namespace outside the cluster's or a kind it doesn't resize (audit A7)
+        is refused whole, as is one with a number that isn't one (slice 12.9c). Its
+        Rollbacks are told after it is answered. Audit A7: at most `HOURLY_REPORTS` stored
+        from the cluster an hour, the rest refused with 429, for the Actuator to send again."""
         cid, cluster = actuator_of(creds)
         if len(reports) > actuator.MAX_REPORTS:
             raise HTTPException(413, f"at most {actuator.MAX_REPORTS} reports at once")
         outside = sorted({r.namespace for r in reports} - set(cluster.namespaces))
         if outside:
             raise HTTPException(422, f"namespaces not in cluster {cluster.name!r}: {outside}")
+        strange = sorted({r.kind for r in reports} - set(actuator.KINDS))
+        if strange:
+            raise HTTPException(422, f"kinds an Actuator doesn't resize: {strange}")
         unreal = sorted({f for f in map(actuator.unreal, reports) if f})
         if unreal:  # said without the value: a NaN can't be said in JSON
             raise HTTPException(422, f"not a number an Actuator sends: {unreal}")
-        new = await store().record_actuations(
-            cid, cluster.name, [r.model_dump() for r in reports], time.time(), told
+        rows = [r.model_dump() for r in reports]
+        new, refused = await store().record_actuations(
+            cid, cluster.name, rows, time.time(), told, actuator.HOURLY_REPORTS
         )
         if any(told(n) for n in new):
             spawn(tell(cid))  # not in its request: Slack may be slow, or down
-        for r in reports:
+        for r in (r for r, d in zip(reports, rows, strict=True) if d not in refused):
             log.info(
                 "actuation %s/%s %s %s/%s/%s/%s: %s",
                 cid,
@@ -2071,6 +2077,17 @@ def create_app(
                 r.name,
                 r.container,
                 redact(r.reason),
+            )
+        if refused:
+            log.warning(
+                "actuator %s/%s: %d reports refused, its %d an hour reached",
+                cid,
+                cluster.name,
+                len(refused),
+                actuator.HOURLY_REPORTS,
+            )
+            raise HTTPException(
+                429, f"at most {actuator.HOURLY_REPORTS} reports an hour from a cluster"
             )
 
     @app.get("/healthz")

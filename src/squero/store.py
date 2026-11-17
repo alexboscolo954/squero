@@ -976,26 +976,43 @@ class Store:
         rows: list[dict[str, Any]],
         at: float,
         tell: Callable[[dict[str, Any]], bool] = lambda r: r["outcome"] == "rolled_back",
-    ) -> list[dict[str, Any]]:
+        hourly: int | None = None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Store what an Actuator reported (slice 12.1); a row it sends again is kept once.
         The rows new to the Hub: what it tells the Operator about (slice 12.4), those
-        `tell` says (a Rollback; a Step-up too, slice 13.1c) kept as still to tell."""
-        new = []
+        `tell` says (a Rollback; a Step-up too, slice 13.1c) kept as still to tell. And
+        those refused, neither stored nor stored before: the cluster's `hourly` received
+        in the hour up to `at` (audit A7)."""
+        new, refused = [], []
         for r in rows:
             stored = await self._one(
-                "insert into actuations values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-                "%s, %s, %s, %s) on conflict do nothing returning run_id",
+                "insert into actuations select %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                "%s, %s, %s, %s where %s::int is null or (select count(*) from actuations "
+                "where contract_id = %s and cluster = %s and received_at > %s) < %s "
+                "on conflict do nothing returning run_id",
                 (
                     contract_id,
                     cluster,
                     *(r[k] for k in ACTUATION_FIELDS),
                     at,
                     not tell(r),  # told: one to tell the Operator of is still to tell
+                    hourly,
+                    contract_id,
+                    cluster,
+                    at - 3600,
+                    hourly,
                 ),
             )
             if stored:
                 new.append(r)
-        return new
+            elif not await self._one(
+                "select 1 as kept from actuations where contract_id = %s and cluster = %s "
+                "and namespace = %s and kind = %s and name = %s and container = %s "
+                "and run_id = %s and at = %s",
+                (contract_id, cluster, *(r[k] for k in ACTUATION_FIELDS[:5]), r["at"]),
+            ):
+                refused.append(r)
+        return new, refused
 
     async def actuations(self, contract_id: str, since: float) -> list[dict[str, Any]]:
         """The Contract's Actuations since `since`, newest first."""
