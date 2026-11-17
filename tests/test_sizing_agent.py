@@ -55,6 +55,42 @@ def test_an_oom_kill_without_a_limit_suggests_a_request_above_the_peak() -> None
     assert "without a memory limit" in s["why"]
 
 
+def test_a_suggestion_is_capped_at_the_policys_memory_max() -> None:
+    (row,) = rows_of(oom())  # killed at its 64Mi limit: 77Mi uncapped
+    s = tool.suggested(row, 0.2, 70 * MI)
+    assert s is not None and s["memory_request"] == s["memory_limit"] == "70Mi"
+    assert s["why"].endswith("so 20% above it, capped at its policy's 70Mi memory max")
+    assert tool.suggested(row, 0.2, 77 * MI) == tool.suggested(row, 0.2)  # at the max: not cut
+    (none,) = rows_of(oom(limit=None, peak=200 * MI))
+    s = tool.suggested(none, 0.2, 220 * MI)
+    assert s is not None and s["memory_request"] == "220Mi" and "capped" in s["why"]
+
+
+def test_the_tool_caps_its_suggestion_at_the_rows_policys_memory_max() -> None:
+    (row,) = rows_of(oom())
+    data = prometheus_contract().model_dump()
+    data["sizing"]["policies"] = {"tight": {"base": row["policy"], "memory": {"max": "70Mi"}}}
+    out = tool.container(row | {"policy": "tight"}, contracts.build(data))
+    assert out["suggested"]["memory_request"] == "70Mi"
+
+
+def test_a_max_at_or_below_what_it_was_killed_at_suggests_no_number() -> None:
+    (row,) = rows_of(oom())
+    for cap in (64 * MI, 32 * MI):
+        assert tool.suggested(row, 0.2, cap) == {
+            "why": f"OOM-killed at its 64Mi limit, and its policy's memory max "
+            f"({cap // MI}Mi) is at or below it, so no raise fits within it: "
+            "raise the max, or look for a leak"
+        }
+    (none,) = rows_of(oom(limit=None, peak=200 * MI))
+    s = tool.suggested(none, 0.2, 200 * MI)
+    assert s == {
+        "why": "OOM-killed at its 200Mi peak, and its policy's memory max (200Mi) is at "
+        "or below it, so no raise fits within it: raise the max, or look for a leak"
+    }
+    assert tool.suggested(none, 0.2, 201 * MI) is not None
+
+
 def test_no_suggestion_without_an_oom_kill_or_for_a_row_without_limits() -> None:
     (row,) = rows_of(container(pods=1))
     assert tool.suggested(row, 0.2) is None

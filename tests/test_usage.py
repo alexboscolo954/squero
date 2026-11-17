@@ -608,7 +608,8 @@ def test_mid_rollout_the_larger_request_counts() -> None:
 def test_after_a_rollout_the_live_pods_request_counts() -> None:
     """The old pod asked 1 core and is gone an hour; the new one asks 115m: Realized
     Savings sees the drop the next run, not when the old pod leaves the window
-    (slice 10.3b). With no live pod, the window's request stands (a CronJob)."""
+    (slice 10.3b). With no live pod, the window's request stands (a Deployment scaled
+    to 0; a CronJob's is its newest run's, below)."""
     fake = FakePrometheus()
     a, b = deployment(fake)
     for p, req, ago in ((a, 1.0, 3600), (b, 0.115, 0)):
@@ -642,6 +643,91 @@ def test_after_a_rollout_the_live_pods_request_counts() -> None:
     rows, _ = run(gone)
     assert rows[("checkout", "app")].requests == {"cpu": 0.5}
     assert not rows[("checkout", "app")].live
+
+
+def between_runs(
+    fake: FakePrometheus, owned: str, runs: list[tuple[str, float | None, float]], **extra: str
+) -> None:
+    """Runs of a Job (of `owned`: a CronJob, or none) gone before the last 5 minutes:
+    (pod, kube_pod_created or None, its CPU request and twice that as memory limit)."""
+    for i, (p, created, req) in enumerate(runs):
+        job = p.rsplit("-", 1)[0]
+        kind, name = ("CronJob", owned) if owned else ("<none>", "<none>")
+        fake.add(
+            "kube_job_owner",
+            1,
+            namespace="shop",
+            job_name=job,
+            owner_kind=kind,
+            owner_name=name,
+            **extra,
+        )
+        owner(fake, p, "Job", job, owner_is_controller="true", **extra)
+        cpu(fake, p, FLAT, **extra)
+        if created is not None:
+            fake.add(
+                "kube_pod_created", created, ago=3600 * (i + 1), namespace="shop", pod=p, **extra
+            )
+        for metric, res, value in (("requests", "cpu", req), ("limits", "memory", req * 2)):
+            fake.add(
+                f"kube_pod_container_resource_{metric}",
+                value,
+                ago=3600 * (i + 1),
+                namespace="shop",
+                pod=p,
+                container="app",
+                resource=res,
+                **extra,
+            )
+
+
+def test_a_cronjob_between_runs_asks_what_its_newest_run_asked() -> None:
+    """Its newest run by kube_pod_created, not the window's largest, so a lowered
+    request realizes before the old runs leave the window (audit A11)."""
+    fake = FakePrometheus()
+    between_runs(
+        fake,
+        "nightly",
+        [("nightly-200-b", 2000, 0.25), ("nightly-100-a", 1000, 1.0), ("nightly-300-c", 500, 2.0)],
+    )
+    rows, _ = run(fake)
+    r = rows[("nightly", "app")]
+    assert r.requests == {"cpu": 0.25} and r.limits == {"memory": 0.5} and r.live
+    other = FakePrometheus()  # a newer pod of the same name elsewhere changes nothing
+    runs: list[tuple[str, float | None, float]] = [
+        ("nightly-200-b", 2000, 0.25),
+        ("nightly-100-a", 1000, 1.0),
+    ]
+    between_runs(other, "nightly", runs, cluster="kind")
+    for ns, cl in (("bank", "kind"), ("shop", "other")):
+        other.add("kube_pod_created", 9000, namespace=ns, pod="nightly-100-a", cluster=cl)
+    rows, _ = run(other, Target("kind", "http://p", None, {"cluster": "kind"}, ["shop"]))
+    assert rows[("nightly", "app")].requests == {"cpu": 0.25}
+    unknown = FakePrometheus()  # no kube_pod_created: the last name
+    between_runs(unknown, "nightly", [("nightly-1-a", None, 0.25), ("nightly-2-b", None, 0.5)])
+    rows, _ = run(unknown)
+    assert rows[("nightly", "app")].requests == {"cpu": 0.5}
+
+
+def test_only_a_cronjob_reads_its_newest_pod_between_runs() -> None:
+    fake = FakePrometheus()
+    between_runs(fake, "", [("once-b", 2000, 0.25), ("once-a", 1000, 1.0)])  # a retry
+    a, b = deployment(fake, "web")
+    for p, created, req in ((a, 1000, 1.0), (b, 2000, 0.25)):
+        cpu(fake, p, FLAT)
+        fake.add("kube_pod_created", created, ago=3600, namespace="shop", pod=p)
+        fake.add(
+            "kube_pod_container_resource_requests",
+            req,
+            ago=3600,
+            namespace="shop",
+            pod=p,
+            container="app",
+            resource="cpu",
+        )
+    rows, _ = run(fake)
+    for name in ("once", "web"):  # a lone Job, a Deployment scaled to 0: the window's
+        assert rows[(name, "app")].requests == {"cpu": 1.0} and not rows[(name, "app")].live
 
 
 def test_api_owners_prefer_the_controller_reference() -> None:

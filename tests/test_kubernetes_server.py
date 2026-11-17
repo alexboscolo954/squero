@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ from pydantic import SecretStr
 from squero import agent, contracts, evals
 from squero.config import Settings
 from squero.servers import kubernetes
-from tests.conftest import EXEC_USER, NOW, kubeconfig, make_contract
+from tests.conftest import EXEC_USER, NOW, crashlooping_pod, kubeconfig, make_contract
 
 
 def k8s(settings: Settings, fake_cluster: Any, actions: bool = False, **contract: Any) -> FastMCP:
@@ -113,6 +114,54 @@ async def test_list_pods_surfaces_crash_and_oom(settings: Settings, fake_cluster
     assert pod["containers"]["app"]["waiting"] == "CrashLoopBackOff"
     assert pod["last_terminated"]["app"]["terminated"] == "OOMKilled"
     assert pod["last_terminated"]["app"]["exit_code"] == 137
+
+
+@pytest.mark.anyio
+async def test_list_pods_names_each_pods_workload_from_its_owners(
+    settings: Settings, fake_cluster: Any
+) -> None:
+    def owned(name: str, labels: dict[str, str], *owners: tuple[str, str, bool]) -> Any:
+        p = crashlooping_pod()
+        p.metadata.name, p.metadata.labels = name, labels
+        p.metadata.owner_references = [
+            k.V1OwnerReference(api_version="v1", kind=kd, name=n, uid=n, controller=ctl)
+            for kd, n, ctl in owners
+        ] or None
+        return p
+
+    hashed = {"pod-template-hash": "7d9f"}
+    fake_cluster[0].list_namespaced_pod.return_value = k.V1PodList(
+        items=[
+            owned("web-api-7d9f-abc", hashed, ("ReplicaSet", "web-api-7d9f", True)),
+            owned("db-0", {}, ("StatefulSet", "db", True)),
+            owned("agent-x7", {}, ("DaemonSet", "agent", True)),
+            owned(
+                "canary-6b-x",
+                {"rollouts-pod-template-hash": "6b"},
+                ("ReplicaSet", "canary-6b", True),
+            ),
+            owned("lone-rs-q", {}, ("ReplicaSet", "lone-rs", True)),
+            owned("migrate-q", {}, ("Job", "migrate", True)),
+            owned("nightly-x", {}, ("Job", f"nightly-{int(time.time() // 60)}", True)),
+            owned("bare", {}),
+            owned("adopted", {}, ("Thing", "x", False)),
+        ]
+    )
+    async with Client(k8s(settings, fake_cluster)) as c:
+        pods = (
+            await c.call_tool("list_pods", {"cluster": "test", "namespace": "shop"})
+        ).structured_content
+    assert [p["workload"] for p in pods["result"]] == [
+        "Deployment/web-api",
+        "StatefulSet/db",
+        "DaemonSet/agent",
+        "Rollout/canary",
+        "ReplicaSet/lone-rs",  # no template hash: its controller
+        "Job/migrate",
+        "CronJob/nightly",  # its Job named for the minute it was scheduled
+        "Pod/bare",
+        "Pod/adopted",  # an owner that isn't its controller
+    ]
 
 
 @pytest.mark.anyio

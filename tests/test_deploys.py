@@ -435,8 +435,33 @@ def test_unhealthy_workloads_from_list_pods() -> None:
         {"name": "migrate-7f9c8-x2", "phase": "Succeeded", "ready": "0/1"},
         {"name": "search-5d4c-q9", "phase": "Pending", "ready": "0/1"},
     ]
-    assert deploys.unhealthy(pods) == {"orders-api", "search"}
-    assert deploys.workload("web") == "web"
+    assert deploys.unhealthy(pods) == {"orders-api", "search"}  # from a Relay before A11
+    assert deploys.workload({"name": "web"}) == "web"
+
+
+def test_unhealthy_workloads_by_their_owners_not_their_names() -> None:
+    pods = [
+        {
+            "name": "orders-db-0",
+            "phase": "Running",
+            "ready": "0/1",
+            "workload": "StatefulSet/orders-db",
+        },
+        {
+            "name": "log-agent-x7k2p",
+            "phase": "Pending",
+            "ready": "0/1",
+            "workload": "DaemonSet/log-agent",
+        },
+        {
+            "name": "web-api-5d4c-q9",
+            "phase": "Running",
+            "ready": "1/1",
+            "workload": "Deployment/web-api",
+        },
+        {"name": "lone-pod", "phase": "Failed", "ready": "0/1", "workload": "Pod/lone-pod"},
+    ]  # each name read as a Deployment's would be orders, log or lone
+    assert deploys.unhealthy(pods) == {"orders-db", "log-agent", "lone-pod"}
 
 
 def test_the_prompt_says_what_was_already_failing() -> None:

@@ -69,10 +69,13 @@ def summary(entry: dict[str, Any]) -> dict[str, str]:
     return {"namespace": namespace, "object": f"{kind} {name}", "revision": revision}
 
 
-def workload(pod: str) -> str:
-    """A pod's workload from its name. ponytail: Deployment pods (name-<rs hash>-<id>)
-    only; a StatefulSet's or Job's pod keeps one suffix more. Owner refs if that bites."""
-    parts = pod.split("-")
+def workload(pod: dict[str, Any]) -> str:
+    """A list_pods entry's workload name: its `workload` (kind/name, from its owners,
+    audit A11), or, from a Relay older than that, guessed from the pod's name as a
+    Deployment's (name-<rs hash>-<id>)."""
+    if of := pod.get("workload"):
+        return str(of).partition("/")[2]
+    parts = str(pod["name"]).split("-")
     return "-".join(parts[:-2]) if len(parts) > 2 else parts[0]
 
 
@@ -83,7 +86,7 @@ def unhealthy(pods: list[dict[str, Any]]) -> set[str]:
         ready, _, total = str(p.get("ready", "0/0")).partition("/")
         done = p.get("phase") == "Succeeded"
         if not done and (p.get("phase") != "Running" or ready != total):
-            out.add(workload(str(p["name"])))
+            out.add(workload(p))
     return out
 
 

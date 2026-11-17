@@ -1845,8 +1845,7 @@ async def realize(
     whose request was removed. Fewer pods change nothing here: they count when shown.
     Only rows read from live pods start, raise or end a drop: a container with none
     (kube-state-metrics down, scaled to 0) reads its window's largest request, the
-    old one. ponytail: a CronJob whose pods are cleaned up between runs rarely has
-    two live runs in a row, so it rarely realizes; read the newest pod's to fix.
+    old one; a CronJob between runs reads its newest run's, counted as live (audit A11).
     A DaemonSet's container applied per instance type (slice 15.3c, its row `by_type`)
     realizes per type instead, each type's pods' request against that type's Sizing. A
     container's drop in place when it comes to be applied by type becomes one per type,

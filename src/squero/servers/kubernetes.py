@@ -22,6 +22,7 @@ from kubernetes.client.exceptions import ApiException
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from squero.actuator import workload_of
 from squero.contracts import (
     Cluster,
     Contract,
@@ -105,6 +106,17 @@ def api_client(cluster: Cluster, contract: Contract) -> client.ApiClient:
 def _now() -> datetime:
     """The one clock for ages and windows (tests pin it)."""
     return datetime.now(UTC)
+
+
+def _workload(p: Any) -> str:
+    """A pod's Workload as kind/name, from its owners and labels (no read): a
+    ReplicaSet's pod is its Deployment's or Rollout's, a CronJob's run its CronJob's
+    (audit A11). Otherwise its controller, or the pod itself without one."""
+    owners = {o.kind: o.name for o in p.metadata.owner_references or []}
+    if of := workload_of(owners, p.metadata.labels or {}):
+        return "/".join(of)
+    by = next((o for o in p.metadata.owner_references or [] if o.controller), None)
+    return f"{by.kind}/{by.name}" if by else f"Pod/{p.metadata.name}"
 
 
 def _age(ts: datetime | None) -> str | None:
@@ -462,6 +474,7 @@ def build_server(
                     },
                     "node": p.spec.node_name,
                     "age": _age(p.metadata.creation_timestamp),
+                    "workload": _workload(p),
                 }
             )
         return out

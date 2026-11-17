@@ -377,7 +377,9 @@ class ContainerUsage:
     throttled_recent: float | None = None
     running: list[float] = field(default_factory=list)  # a time per Running pod per step
     labels: dict[str, str] = field(default_factory=dict)  # the allocation's, newest pod's
-    live: bool = False  # requests or limits read from pods seen in the last 5 minutes
+    # requests or limits read from pods seen in the last 5 minutes, or a CronJob's newest
+    # run between runs (audit A11)
+    live: bool = False
     # slice 15.3a, a DaemonSet's on a cluster that runs an Actuator: the same container
     # by its pods' nodes' instance type ("" for nodes without the label), each with its
     # own pods' samples and requests; empty with fewer than two types
@@ -459,31 +461,52 @@ def usage(
                 for one in (r, g):
                     if one is not None:
                         one.nodes.setdefault(label(m, "pod"), []).extend(values)
+    created: dict[tuple[str, str], float] | None = None  # read for a CronJob between runs
     for metric, into in (
         ("kube_pod_container_resource_requests", "requests"),
         ("kube_pod_container_resource_limits", "limits"),
     ):
         # The live pods' (seen in the last 5 minutes), so a lowered request shows the
         # next run (slice 10.3b); a container with none live keeps the window's (a
-        # CronJob between runs, a Workload scaled to 0).
+        # Workload scaled to 0), but a CronJob between runs its newest run's (by
+        # kube_pod_created, then name), what it asks now, so it realizes too (audit A11).
         live: set[tuple[int, str]] = set()
+        latest: dict[tuple[int, str], tuple[tuple[float, str], float, ContainerUsage]] = {}
         for span in ("300s", window):
             for s in at_end(f"last_over_time({selector(metric, t)}[{span}])"):
                 m = s["metric"]
                 res = m.get("resource")
                 if res not in ("cpu", "memory") or not (hit := _known(rows, owners, m)):
                     continue
-                kind = (types or {}).get((label(m, "namespace"), label(m, "pod")))
+                pod = (label(m, "namespace"), label(m, "pod"))
+                kind = (types or {}).get(pod)
                 for one in (hit, hit.groups.get(kind) if kind is not None else None):
                     if one is None or (span == window and (id(one), res) in live):
                         continue  # a group's requests are its own pods', as the row's are
                     if span != window:
                         live.add((id(one), res))
                         one.live = True
+                    elif one.workload.kind == "CronJob":
+                        if created is None:
+                            created = {
+                                (label(c["metric"], "namespace"), label(c["metric"], "pod")): float(
+                                    c["value"][1]
+                                )
+                                for c in at_end(
+                                    f"last_over_time({selector('kube_pod_created', t)}[{window}])"
+                                )
+                            }
+                        order = (created.get(pod, 0.0), pod[1])
+                        if (id(one), res) not in latest or order > latest[id(one), res][0]:
+                            latest[id(one), res] = (order, float(s["value"][1]), one)
+                        continue
                     # ponytail: the largest across those pods; mid-rollout that is the
                     # old or the new value, whichever is bigger, until the old pods are gone
                     current = getattr(one, into)
                     current[res] = max(current.get(res, 0.0), float(s["value"][1]))
+        for (_, res), (_, value, one) in latest.items():
+            getattr(one, into)[res] = value
+            one.live = True
     oom = selector("kube_pod_container_status_last_terminated_reason", t, 'reason="OOMKilled"')
     for s in at_end(f"max_over_time({oom}[{window}])"):
         if float(s["value"][1]) > 0 and (hit := _known(rows, owners, s["metric"])):

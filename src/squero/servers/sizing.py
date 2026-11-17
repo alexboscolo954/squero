@@ -45,31 +45,43 @@ def _q(resource: str, value: float | None) -> str | None:
     return None if value is None else show(resource, value)
 
 
-def suggested(row: dict[str, Any], headroom: float) -> dict[str, str] | None:
+def suggested(
+    row: dict[str, Any], headroom: float, cap: float | None = None
+) -> dict[str, str] | None:
     """For an OOM-killed container, memory `headroom` above what it was killed at:
-    its limit, or its peak when it has none (the node's OOM killer did it). None when
-    it wasn't OOM-killed, or its row predates stored limits."""
+    its limit, or its peak when it has none (the node's OOM killer did it), never past
+    `cap` (its policy's memory max). A cap at or below what it was killed at gives no
+    number, only why: a suggestion that raises nothing after an OOM kill is wrong.
+    None when it wasn't OOM-killed, or its row predates stored limits."""
     memory = row.get("memory")
     if not memory or "limit" not in memory:
         return None
     if not any(r["kind"] == "oom_killed" for r in row.get("risks", [])):
         return None
-    # ponytail: one step of the policy's memory headroom, not capped by its memory max,
-    # until Reflex 13.1 picks the step-up (and how often to repeat it)
     limit = memory["limit"]
+    at = limit if limit is not None else memory["basis"]
+    killed = f"its {show('memory', at)} {'limit' if limit is not None else 'peak'}"
+    if cap is not None and cap <= at:
+        return {
+            "why": f"OOM-killed at {killed}, and its policy's memory max "
+            f"({show('memory', cap)}) is at or below it, so no raise fits within it: "
+            "raise the max, or look for a leak"
+        }
+    to = _round_up("memory", at * (1 + headroom))
+    capped = ""
+    if cap is not None and to > cap:
+        to, capped = cap, f", capped at its policy's {show('memory', cap)} memory max"
     if limit is not None:
-        to = _round_up("memory", limit * (1 + headroom))
         return {
             "memory_request": show("memory", to),
             "memory_limit": show("memory", to),
-            "why": f"OOM-killed at its {show('memory', limit)} limit: its peak is the "
-            f"limit, not its demand, so {headroom:.0%} above it",
+            "why": f"OOM-killed at {killed}: its peak is the limit, not its demand, so "
+            f"{headroom:.0%} above it{capped}",
         }
-    to = _round_up("memory", memory["basis"] * (1 + headroom))
     return {
         "memory_request": show("memory", to),
         "why": "OOM-killed without a memory limit (the node ran out of memory): "
-        f"{headroom:.0%} above its {show('memory', memory['basis'])} peak",
+        f"{headroom:.0%} above {killed}{capped}",
     }
 
 
@@ -103,7 +115,7 @@ def container(row: dict[str, Any], contract: Contract) -> dict[str, Any]:
     if row.get("risks"):
         out["risks"] = [r["text"] for r in row["risks"]]
     policy = contract.sizing.policy(row["policy"])
-    if policy and (s := suggested(row, policy.memory.headroom)):
+    if policy and (s := suggested(row, policy.memory.headroom, policy.memory.max)):
         out["suggested"] = s
     return out
 
