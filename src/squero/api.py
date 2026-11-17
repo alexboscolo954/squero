@@ -18,6 +18,7 @@ atomic) but share no limit.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -257,6 +258,10 @@ def create_app(
     failing: dict[tuple[str, str, str], set[str] | None] = {}
     db: dict[str, Any] = {}  # store and checkpointer, opened in the lifespan
     slots = asyncio.Semaphore(settings.max_concurrent_triages)
+    # audit A10: with two Contracts or more, each takes at most half the slots (at least
+    # one), waiting in its own queue, so one's alert storm can't hold them all
+    share = max(1, settings.max_concurrent_triages // 2) if len(by_id) > 1 else None
+    shares = {cid: asyncio.Semaphore(share) for cid in by_id} if share else {}
     tasks: set[asyncio.Task[None]] = set()
 
     def store() -> Store:
@@ -668,7 +673,7 @@ def create_app(
         with its Report as context, never alongside it."""
         if t.kind != "check" or t.slack_ts:  # a Check speaks only once it has a verdict
             await to_slack(t, note)  # "investigating", in a new or the existing thread
-        async with slots:
+        async with shares.get(t.contract_id) or contextlib.nullcontext(), slots:
             try:
                 # Always the Investigation's own Contract, on start and on every resume.
                 toolbox = mcp_factory(by_id[t.contract_id])

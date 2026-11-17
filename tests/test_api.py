@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import time
 from typing import Any
@@ -353,3 +354,61 @@ def test_tool_calls_are_stored_per_investigation_and_contract(
         (tid, "acme", "kubernetes_list_pods", {"cluster": "test", "namespace": "shop"}, False)
     ]
     assert "CrashLoopBackOff" in rows[0][5]
+
+
+# --- audit A10: a Contract's share of the Triage slots -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("slots", "contracts", "running"),
+    [
+        (4, 2, {"acme": 2, "bank": 1}),  # half of 4: acme's third waits, a slot free
+        (3, 2, {"acme": 1, "bank": 1}),  # half of 3, rounded down
+        (2, 2, {"acme": 1, "bank": 1}),  # acme's waiting ones hold no slot: bank's is free
+        (1, 2, {"acme": 1, "bank": 0}),  # at least one: the one slot, acme first
+        (3, 1, {"acme": 3}),  # one Contract: every slot, no one to keep them for
+    ],
+)
+def test_a_contract_takes_at_most_half_the_triage_slots_with_another_to_keep_them_for(
+    settings: Settings,
+    fake_cluster: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    slots: int,
+    contracts: int,
+    running: dict[str, int],
+) -> None:
+    settings.max_concurrent_triages = slots
+    entered: list[str] = []
+    gate = threading.Event()  # opened from the test's thread, not the app's loop
+
+    async def start(a: Any, group: Any, thread_id: str) -> Any:
+        entered.append(group.commonLabels["who"])
+        await asyncio.to_thread(gate.wait)
+        raise RuntimeError("released")  # ends the Run: failed, its slot given back
+
+    monkeypatch.setattr(agent, "start", start)
+    bank = make_contract(contract_id="bank", webhook_token="bank-token")
+    more = {"bank": (bank, fake_cluster)} if contracts > 1 else None
+
+    def alert(who: str, i: int) -> dict[str, Any]:
+        labels = {**ALERT["commonLabels"], "alertname": f"A{i}", "who": who}
+        return {**ALERT, "groupKey": f"{who}-{i}", "commonLabels": labels}
+
+    with client(settings, fake_cluster, more=more) as c:
+        for i in range(3):
+            c.post(URL, json=alert("acme", i), headers=HOOK)
+        if more:
+            bank_hook = {"Authorization": "Bearer bank-token"}
+            c.post("/contracts/bank/alertmanager", json=alert("bank", 9), headers=bank_hook)
+        want = sum(running.values())
+        deadline = time.monotonic() + 15
+        while len(entered) < want and time.monotonic() < deadline:
+            time.sleep(0.02)
+        time.sleep(0.3)  # time enough for one more to start, were it let in
+        got = {who: entered.count(who) for who in running}
+        gate.set()
+        deadline = time.monotonic() + 15
+        while len(entered) < 3 + (1 if more else 0) and time.monotonic() < deadline:
+            time.sleep(0.02)
+    assert got == running
+    assert len(entered) == 3 + (1 if more else 0)  # the others ran once slots came free
