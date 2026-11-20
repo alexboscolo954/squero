@@ -76,6 +76,7 @@ HOUR = 3600
 # them (shared), and MIG profiles (one instance each); not a sharing scheduler's memory or
 # core quantities (HAMi's nvidia.com/gpumem, gpucores), which aren't GPUs.
 GPU_REQUEST = re.compile(r"nvidia_com_(gpu|gpu_shared|mig_.+)")
+GPU_PRODUCT = "nvidia.com/gpu.product"  # GPU Feature Discovery's node label (slice 17.5a)
 
 
 @dataclass(frozen=True)
@@ -924,6 +925,10 @@ def rooms(
     `pinned` (slice 15.2a): the cluster's Placement label, `key=value`; each node says
     whether it carries it, as kube-state-metrics shows it (a label it doesn't allowlist
     is on no node); `spot` (slice 16.1a) the same of the cluster's spot label.
+    `gpus` (slice 17.5a): on a node with `nvidia.com/gpu`, its allocatable, capacity,
+    requests (a sum over every pod, as `requests`) and GPU product (GPU Feature
+    Discovery's label); on a pod of the Contract's, its GPUs, or `gpus_unread` for one
+    asking a time-sliced GPU or a MIG profile; never inside the cpu and memory dicts.
     `problem` when no node is read; the caller refuses a store shared with another
     Contract that has no cluster labels (`SHARED_STORE`), as for list prices."""
     scoped = [f"{k}={_string(v)}" for k, v in sorted(t.labels.items())]
@@ -957,6 +962,12 @@ def rooms(
     daemonsets = per_node(
         prom.instant(f"sum {by} ({of(POD_REQUESTS, both)} {of_daemons} {live})", at)
     )
+    # slice 17.5a: GPUs apart from cpu and memory, which every reader of those iterates
+    gpu = 'resource="nvidia_com_gpu"'
+    gpu_alloc = per_node(prom.instant(of("kube_node_status_allocatable", gpu), at))
+    gpu_cap = per_node(prom.instant(of("kube_node_status_capacity", gpu), at))
+    gpu_asked = per_node(prom.instant(f"sum {by} ({of(POD_REQUESTS, gpu)} {live})", at))
+    product = ksm_label(GPU_PRODUCT)
     pods = {
         label(s["metric"], "node"): int(float(s["value"][1]))
         for s in prom.instant(f"count by (node, exported_node) ({of('kube_pod_info')} {live})", at)
@@ -979,6 +990,16 @@ def rooms(
         pod[m.get("resource", "")] = pod.get(m.get("resource", ""), 0.0) + float(s["value"][1])
         one = each.setdefault(who, {}).setdefault(label(m, "container"), {})
         one[m.get("resource", "")] = float(s["value"][1])
+    # each of its pods' GPUs (slice 17.5a); a shared or MIG one can't be placed by count
+    gpus: dict[tuple[str, str], float] = {}
+    unread: set[tuple[str, str]] = set()
+    for s in prom.instant(selector(POD_REQUESTS, t, 'resource=~"nvidia_com_.+"'), at):
+        m = s["metric"]
+        who = (label(m, "namespace"), label(m, "pod"))
+        if m.get("resource") == "nvidia_com_gpu":
+            gpus[who] = gpus.get(who, 0.0) + float(s["value"][1])
+        elif GPU_REQUEST.fullmatch(m.get("resource", "")):
+            unread.add(who)
     pod_owners = prom.instant(selector("kube_pod_owner", t), at)
     claims = {
         (label(s["metric"], "namespace"), label(s["metric"], "pod"))
@@ -1014,6 +1035,10 @@ def rooms(
         ]
         w = owned.get(who)
         mine["workload"] = {"kind": w.kind, "name": w.name} if w else None
+        if who in gpus:
+            mine["gpus"] = gpus[who]
+        if who in unread:
+            mine["gpus_unread"] = True
         own.setdefault(label(m, "node"), []).append({"namespace": who[0], "pod": who[1], **mine})
     taints: dict[str, list[str]] = {}
     for s in prom.instant(of("kube_node_spec_taint"), at):
@@ -1048,6 +1073,18 @@ def rooms(
                 "pods": pods.get(name, 0),
                 "bound": bound.get(name, 0),
                 "own": sorted(own.get(name, []), key=lambda p: (p["namespace"], p["pod"])),
+                **(
+                    {
+                        "gpus": {
+                            "allocatable": gpu_alloc.get(name, {}).get("nvidia_com_gpu", 0.0),
+                            "capacity": gpu_cap.get(name, {}).get("nvidia_com_gpu", 0.0),
+                            "requests": gpu_asked.get(name, {}).get("nvidia_com_gpu", 0.0),
+                            "product": have.get(product) or None,
+                        }
+                    }
+                    if name in gpu_alloc or name in gpu_cap
+                    else {}
+                ),
             }
         )
     tight = selector("kube_poddisruptionbudget_status_pod_disruptions_allowed", t) + " == 0"

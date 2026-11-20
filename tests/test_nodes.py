@@ -159,8 +159,9 @@ def test_a_pod_outside_the_contracts_namespaces_only_reaches_the_hub_in_a_sum() 
             assert q.startswith(("sum by (node, exported_node", "count by (node, exported_node")), q
     # its own by name: its pods, their requests, its budgets at 0 (slice 15.1c), and
     # the three owner series that give each pod its Workload (slice 15.4), and their
-    # persistent volumes (slice 16.1c), and its CronJobs (slice 16.3a)
-    assert sum('namespace=~"shop"' in q for q in fake.queries) == 8
+    # persistent volumes (slice 16.1c), and its CronJobs (slice 16.3a), and its pods'
+    # GPUs (slice 17.5a)
+    assert sum('namespace=~"shop"' in q for q in fake.queries) == 9
 
 
 def test_only_running_and_pending_pods_hold_requests() -> None:

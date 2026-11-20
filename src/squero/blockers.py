@@ -1016,7 +1016,9 @@ def could_go(
     receives is no longer free for the next;
     a node that received pods and then goes itself must find room for those too. A pod
     lands only where `fits` lets it (audit A3: what it needs of a node); none goes where
-    that can't be told (`fits` says why).
+    that can't be told (`fits` says why). A pod's GPUs (slice 17.5a) need as many free on
+    the node it lands on, of the same GPU product where both nodes say theirs; one asking
+    a shared GPU or a MIG profile lands nowhere, so its node stays.
 
     An upper bound: spread and tolerations can't be seen. A node without its
     allocatable or its pod slots neither goes nor receives. None for a read from before
@@ -1033,16 +1035,31 @@ def could_go(
     def moving(n: dict[str, Any]) -> list[dict[str, Any]]:
         return [p for p in n["own"] if not p.get("bound")]
 
+    def gpus(n: dict[str, Any]) -> dict[str, Any]:  # slice 17.5a; none in a read before it
+        return n.get("gpus") or {}
+
     free = {
         n["node"]: [
             n["allocatable"]["cpu"] - n["requests"]["cpu"],
             n["allocatable"]["memory"] - n["requests"]["memory"],
             n["slots"] - n["pods"],
+            gpus(n).get("allocatable", 0.0) - gpus(n).get("requests", 0.0),
         ]
         for n in nodes
         if whole(n) and not _closed(n) and verdict[n["node"]]["state"] != "pinned"
     }
     group = {n["node"]: _group(n) for n in nodes}
+    product = {n["node"]: gpus(n).get("product") for n in nodes}
+
+    def same_gpu(p: dict[str, Any], src: str, dst: str) -> bool:
+        """A GPU pod lands only on the same GPU product, where both nodes say theirs
+        (GPU Feature Discovery's label); a shared or MIG one, never (it can't be counted)."""
+        if p.get("gpus_unread"):
+            return False
+        if not p.get("gpus"):
+            return True
+        return not (product[src] and product[dst] and product[src] != product[dst])
+
     candidates = [
         n
         for n in nodes
@@ -1077,6 +1094,8 @@ def could_go(
                     if left[0] >= p["cpu"] - 1e-9
                     and left[1] >= p["memory"] - 1e-9
                     and left[2] >= 1
+                    and left[3] >= p.get("gpus", 0.0) - 1e-9
+                    and same_gpu(p, p.get("_from", name), other)
                     and fits(p, other)
                 ),
                 None,
@@ -1085,12 +1104,13 @@ def could_go(
                 break
             left = room[fit]
             left[0], left[1], left[2] = left[0] - p["cpu"], left[1] - p["memory"], left[2] - 1
+            left[3] -= p.get("gpus", 0.0)
             placed.append((fit, p))
         else:
             free.pop(name, None)  # it goes: nothing more lands on it
             free.update(room)
             landed.pop(name, None)
-            for other, p in placed:
-                landed.setdefault(other, []).append(p)
+            for other, p in placed:  # with the node it first left, for its GPU product
+                landed.setdefault(other, []).append({**p, "_from": p.get("_from", name)})
             gone.append(name)
     return gone

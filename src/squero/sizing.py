@@ -365,7 +365,18 @@ def _worth(
 
     total = {res: sum(held(n)[res] for n in names) for res in ("cpu", "memory")}
     cost = sum(monthly(p, **held(n)) * rate.get(n, 1.0) for n in names) if p else None
-    return {"nodes": names, **total, "cost": cost}
+    # slice 17.5a: a GPU node's GPUs at the cluster's GPU price, one rate spot or not as the
+    # Bill check prices them; without one no cost, never its CPU and memory's alone
+    gpus = sum(_gpus(by[n]) for n in names)
+    if gpus and cost is not None:
+        cost = cost + gpus * p.gpu * MONTH if p and p.gpu is not None else None
+    return {"nodes": names, **total, **({"gpus": gpus} if gpus else {}), "cost": cost}
+
+
+def _gpus(n: dict[str, Any]) -> float:
+    """A node's GPUs, what it is priced by: its capacity, else its allocatable."""
+    g = n.get("gpus") or {}
+    return float(g.get("capacity") or g.get("allocatable") or 0.0)
 
 
 def rates(read: dict[str, Any], c: Contract, cluster: str) -> dict[str, float]:
@@ -795,6 +806,26 @@ def nodes_report(
                 "after": _worth(later, read, price, rate),
                 "note": fits if isinstance(fits, str) else None,
             }
+            # slice 17.5a: a GPU pod moved by count alone where a GPU node lacks its product
+            bare = [n for n in read["nodes"] if _gpus(n) and not n["gpus"].get("product")]
+            moved = {*first, *later}
+            if bare and any(
+                p.get("gpus") for n in read["nodes"] if n["node"] in moved for p in n["own"]
+            ):
+                went["gpu_note"] = (
+                    f"GPU model not checked: {len(bare)} GPU nodes don't carry "
+                    f"{usage.GPU_PRODUCT} (GPU Feature Discovery's label; allowlist it in "
+                    "kube-state-metrics), so their GPU pods were placed by count alone"
+                )
+        unrequested = None  # slice 17.5a: GPUs on its nodes no pod asks for, priced
+        if gpu_nodes := [n for n in read["nodes"] if _gpus(n)]:
+            each = [max(0.0, n["gpus"]["allocatable"] - n["gpus"]["requests"]) for n in gpu_nodes]
+            gpu_price = (c.price(cl.name) or ClusterPrices(cpu=0, memory=0)).gpu
+            unrequested = {
+                "gpus": sum(each),
+                "nodes": sum(1 for v in each if v),
+                "cost": sum(each) * gpu_price * MONTH if gpu_price is not None else None,
+            }
         blocking = blocking_of(read, report, cl, now)  # slice 16.1c
         # slice 16.3a: the CronJobs its Actuator reported it doesn't steer, and why, only
         # ever looked up by the read's own CronJobs: another namespace's key shows nowhere
@@ -854,6 +885,7 @@ def nodes_report(
                 **{"settings": blockers.SETTINGS[cl.autoscaler]},  # slice 15.6
                 **{"reported": report["received"] if report else None},
                 **{"could_go": went, "judged": judged, "placement": placement, "spot": spot},
+                **({"unrequested_gpus": unrequested} if unrequested else {}),
                 **{"candidates": candidates(read, c, cl.name, rows or [], blocking, skipped)},
                 **{
                     "spot_workloads": spot_workloads(
@@ -1392,6 +1424,18 @@ def nodes_line(clusters: list[dict[str, Any]], currency: str | None) -> str | No
     unknown = sum(c["judged"]["unknown"] for c in clusters)
     judged = f"; {unknown} not judged" if unknown else ""
     return f"Nodes that could go: {', '.join(parts)}{judged}. An upper bound, not Savings."
+
+
+def unrequested_line(clusters: list[dict[str, Any]], currency: str | None) -> str | None:
+    """The digest's line on Unrequested GPUs (slice 17.5a), or None when none is."""
+    found = [u for c in clusters if (u := c.get("unrequested_gpus")) and u["gpus"]]
+    if not found:
+        return None
+    gpus, on = sum(u["gpus"] for u in found), sum(u["nodes"] for u in found)
+    said = f"Unrequested GPUs: {gpus:g} on {on} nodes"
+    if currency and all(u["cost"] is not None for u in found):
+        return f"{said}, {money(sum(u['cost'] for u in found), currency)}."
+    return f"{said} (no GPU price: set `gpu` in its prices)." if currency else f"{said}."
 
 
 GIB = 2**30
@@ -2255,6 +2299,8 @@ def digest_text(
         if floors and (line := floors_line(floors, currency)):
             lines.append(line)
         if nodes and (line := nodes_line(nodes, currency)):  # slice 15.4
+            lines.append(line)
+        if nodes and (line := unrequested_line(nodes, currency)):  # slice 17.5a
             lines.append(line)
         if acted and (line := actuations_line(acted)):
             lines.append(line)
