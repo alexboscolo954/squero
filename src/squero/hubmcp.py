@@ -220,7 +220,7 @@ def _workload(w: webapp.Workload, approved: dict[str, Any]) -> dict[str, Any]:
             | _by_type(c)
             for c in w.containers
         ],
-    }
+    } | ({"idle_gpus": w.gpus.text} if w.gpus else {})  # slice 17.2b
 
 
 def build(
@@ -306,8 +306,10 @@ def build(
         replicas its stored Needs support, against the HPA's minimum today, and its
         Weekly profile (blocks of hours that need more, KEDA cron triggers) with its
         Backtest: how far off it was last week, or that the load isn't weekly enough
-        for one. risky: only Workloads with a risk (an OOM kill, throttling,
-        restarts)."""
+        for one. idle_gpus: GPUs whose busiest hour stays under 5% busy, each counted
+        by the share of the window it was held, with their monthly cost beside the
+        waste (never in it) and the GPUs not judged (shared, unread, learning).
+        risky: only Workloads with a risk (an OOM kill, throttling, restarts)."""
         c = resolve(contract)
 
         async def work() -> dict[str, Any]:
@@ -349,7 +351,7 @@ def build(
                 ],
                 "learning": len(w.learning),
                 "excluded": len(w.excluded),
-            }
+            } | ({"idle_gpus": w.gpus.text} if w.gpus else {})  # slice 17.2b
 
         result: dict[str, Any] = await answer(c, work())
         return result
@@ -495,7 +497,8 @@ def build(
         label:<key> (`groupings` lists what this Contract allows): each group's requests
         and the waste in them (the available Savings), ranked by what the requests cost,
         with each group's change since `compare_days` ago when given. cpu in cores,
-        memory in bytes, money a month in `currency`."""
+        memory in bytes, money a month in `currency`. gpus: the Contract's idle GPUs
+        and what they cost, beside the Savings (never in them)."""
         c = resolve(contract)
 
         async def work() -> dict[str, Any]:

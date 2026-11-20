@@ -118,6 +118,35 @@ class TypeSizing(BaseModel):
     memory: TypeResource | None = None
 
 
+class GpuUse(BaseModel):
+    """One GPU a container's pods were given in the window, with its verdict (17.2a)."""
+
+    id: str  # DCGM's UUID, else node/index; a MIG instance's with its id
+    node: str
+    pod: str  # the pod last seen on it
+    busiest: float | None = None  # the busiest hour's busy share, 0 to 1
+    by: str | None = None  # engine or util
+    hours: int
+    memory: float | None = None  # peak framebuffer used, bytes
+    held: float  # the share of the window it was held, at most 1
+    verdict: Literal["idle", "busy", "learning", "shared", "unread"]
+
+
+class ContainerGpus(BaseModel):
+    asked: float  # GPUs a pod requests
+    gpus: list[GpuUse]
+
+
+class IdleGpus(BaseModel):
+    """Idle GPUs (slice 17.2a), each GPU counted by the share of the window it was held."""
+
+    idle: float
+    of: float  # the GPUs judged, idle or busy
+    cost: float | None = None  # the idle ones a month; None: no GPU price
+    not_judged: dict[str, float] = {}  # shared, unread, learning
+    text: str  # as `sizing waste` says it
+
+
 class Container(BaseModel):
     workload: str
     cluster: str
@@ -138,6 +167,7 @@ class Container(BaseModel):
     # slice 15.3c: its Actuator applies the groups, so its Waste and cost are theirs and
     # the pooled Sizing above is not applied
     by_type: bool = False
+    gpus: ContainerGpus | None = None  # slice 17.2b: a container that requests GPUs
 
 
 class Workload(BaseModel):
@@ -151,6 +181,7 @@ class Workload(BaseModel):
     cost: Cost | None = None  # None: the Contract has no prices
     risks: list[Risk]
     containers: list[Container]
+    gpus: IdleGpus | None = None  # slice 17.2b: beside its Waste, never in it
 
 
 class Change(BaseModel):
@@ -272,6 +303,7 @@ class Allocation(BaseModel):
     groupings: list[str]  # what this Contract can be grouped by
     warnings: list[str]  # clusters where no pod has a label the grouping reads
     prices: list[PriceNote] = []  # where each cluster's price comes from (list_prices)
+    gpus: IdleGpus | None = None  # slice 17.2b: the Contract's Idle GPUs, beside its Savings
 
 
 class ClusterStatus(BaseModel):
@@ -364,6 +396,7 @@ class Workloads(BaseModel):
     prices: list[PriceNote] = []
     floors: list[Floor] = []
     floors_total: FloorsTotal | None = None
+    gpus: IdleGpus | None = None  # slice 17.2b: the Contract's Idle GPUs
 
 
 class NodePod(BaseModel):

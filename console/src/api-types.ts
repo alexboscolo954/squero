@@ -498,6 +498,7 @@ export interface components {
             contract: string;
             /** Currency */
             currency?: string | null;
+            gpus?: components["schemas"]["IdleGpus"] | null;
             /** Groupings */
             groupings: string[];
             /** Groups */
@@ -852,6 +853,7 @@ export interface components {
             /** Container */
             container: string;
             cpu?: components["schemas"]["Resource"] | null;
+            gpus?: components["schemas"]["ContainerGpus"] | null;
             /**
              * Groups
              * @default []
@@ -885,6 +887,13 @@ export interface components {
             waste?: components["schemas"]["Waste"] | null;
             /** Workload */
             workload: string;
+        };
+        /** ContainerGpus */
+        ContainerGpus: {
+            /** Asked */
+            asked: number;
+            /** Gpus */
+            gpus: components["schemas"]["GpuUse"][];
         };
         /**
          * ContractOverview
@@ -1121,6 +1130,33 @@ export interface components {
             /** Workloads */
             workloads: number;
         };
+        /**
+         * GpuUse
+         * @description One GPU a container's pods were given in the window, with its verdict (17.2a).
+         */
+        GpuUse: {
+            /** Busiest */
+            busiest?: number | null;
+            /** By */
+            by?: string | null;
+            /** Held */
+            held: number;
+            /** Hours */
+            hours: number;
+            /** Id */
+            id: string;
+            /** Memory */
+            memory?: number | null;
+            /** Node */
+            node: string;
+            /** Pod */
+            pod: string;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "idle" | "busy" | "learning" | "shared" | "unread";
+        };
         /** Group */
         Group: {
             change?: components["schemas"]["Change"] | null;
@@ -1226,6 +1262,27 @@ export interface components {
         History: {
             /** Points */
             points: components["schemas"]["Point"][];
+        };
+        /**
+         * IdleGpus
+         * @description Idle GPUs (slice 17.2a), each GPU counted by the share of the window it was held.
+         */
+        IdleGpus: {
+            /** Cost */
+            cost?: number | null;
+            /** Idle */
+            idle: number;
+            /**
+             * Not Judged
+             * @default {}
+             */
+            not_judged: {
+                [key: string]: number;
+            };
+            /** Of */
+            of: number;
+            /** Text */
+            text: string;
         };
         /**
          * InvestigationPage
@@ -1920,6 +1977,7 @@ export interface components {
             /** Containers */
             containers: components["schemas"]["Container"][];
             cost?: components["schemas"]["Cost"] | null;
+            gpus?: components["schemas"]["IdleGpus"] | null;
             /** Kind */
             kind: string;
             /** Name */
@@ -1953,6 +2011,7 @@ export interface components {
              */
             floors: components["schemas"]["Floor"][];
             floors_total?: components["schemas"]["FloorsTotal"] | null;
+            gpus?: components["schemas"]["IdleGpus"] | null;
             /** Learning */
             learning: components["schemas"]["Container"][];
             /**

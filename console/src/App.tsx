@@ -17,7 +17,7 @@ import { AutomationPage } from "./Automation";
 import { ChecksPage, HealthPage } from "./Checks";
 import { ContractsPage } from "./Contracts";
 import { NodesPage } from "./Nodes";
-import { amount, change, cores, cpu, gib, memory, money, rank, when } from "./format";
+import { amount, change, cores, cpu, gib, memory, money, pct, rank, when } from "./format";
 
 /** Where each cluster's price comes from, for a Contract priced from cloud list prices. */
 function PriceNotes({ notes }: { notes?: { cluster: string; source: string; note: string }[] }) {
@@ -405,6 +405,12 @@ function Page({ contract, data }: { contract: string; data: Workloads }) {
           <span className="hint">(requests above the Sizings; a core ranks like 4 GiB)</span>
         </p>
       )}
+      {data.gpus && (
+        <p className="total">
+          Idle GPUs: <strong>{data.gpus.text}</strong>{" "}
+          <span className="hint">(busiest hour under 5% busy, each GPU by the share of the window it was held; beside the waste, never in it)</span>
+        </p>
+      )}
       <div className="filters">
         <label>
           Cluster{" "}
@@ -430,6 +436,7 @@ function Page({ contract, data }: { contract: string; data: Workloads }) {
             <th>Memory waste</th>
             {data.currency && <th>Waste cost</th>}
             {data.currency && <th>Requests cost</th>}
+            {data.gpus && <th>Idle GPUs</th>}
             <th>Risks</th>
           </tr>
         </thead>
@@ -449,6 +456,7 @@ function Page({ contract, data }: { contract: string; data: Workloads }) {
               <td>{gib(w.waste.memory ?? 0)}</td>
               {data.currency && <td>{w.cost ? money(w.cost.waste, data.currency) : "-"}</td>}
               {data.currency && <td>{w.cost ? money(w.cost.requests, data.currency) : "-"}</td>}
+              {data.gpus && <td>{w.gpus ? w.gpus.text : "-"}</td>}
               <td>
                 {[...new Set(w.risks.map((r) => r.kind))].sort().map((k) => (
                   <span key={k} className="chip">{k}</span>
@@ -540,6 +548,11 @@ function CostPage({
         <strong>{shown(data.total, "waste")}</strong>
         {cmp && ` (${change(cmp.change, "requests", currency)}, ${change(cmp.change, "waste", currency)})`}
       </p>
+      {data.gpus && (
+        <p className="total">
+          Idle GPUs: <strong>{data.gpus.text}</strong> <span className="hint">(beside the Savings, never in them)</span>
+        </p>
+      )}
       <Realized data={data.realized} />
       {data.groups.length === 0 && <p>No Sizings stored yet: the Hub stores them hourly.</p>}
       <table>
@@ -630,6 +643,22 @@ function ContainerDetail({ contract, c }: { contract: string; c: Container }) {
         CPU {c.cpu?.action ?? "-"} {cpu(c.cpu?.current)} → {cpu(c.cpu?.target)}; memory{" "}
         {c.memory?.action ?? "-"} {memory(c.memory?.current)} → {memory(c.memory?.target)}
       </p>
+      {c.gpus && (
+        <details className="types">
+          <summary>
+            GPUs ({c.gpus.gpus.length}), {c.gpus.asked} a pod
+          </summary>
+          <ul>
+            {c.gpus.gpus.map((g) => (
+              <li key={g.id}>
+                {g.id} on {g.node} ({g.pod}): {g.verdict}
+                {g.busiest != null && `, busiest hour ${pct(g.busiest)} by ${g.by}`} over {g.hours} h, held{" "}
+                {pct(g.held)} of the window{g.memory != null && `, memory peak ${memory(g.memory)}`}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       {(c.groups ?? []).length > 0 && (
         <details className="types" open={c.by_type}>
           <summary>

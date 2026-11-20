@@ -7,6 +7,7 @@ export const cpu = (v: number | null | undefined) =>
   v == null ? "unset" : `${Math.round(v * 1000)}m`;
 export const memory = (v: number | null | undefined) =>
   v == null ? "unset" : `${Math.round(v / MI)}Mi`;
+export const pct = (v: number) => `${Math.round(v * 100)}%`;
 
 export function when(at: number | null | undefined): string {
   if (at == null) return "never";

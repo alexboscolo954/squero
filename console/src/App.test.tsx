@@ -1262,3 +1262,63 @@ test("a refused Revert shows the Hub's words, and the Kill switch says Reverts a
     AUTOMATION.kill_switch = false;
   }
 });
+
+test("idle GPUs show beside the waste, per Workload and per GPU, as text (slice 17.2b)", async () => {
+  const gpu = workload("trainer", 0, 0, []);
+  const idle = { idle: 1, of: 2, cost: 365, not_judged: { shared: 1 }, text: "1 of 2 GPUs idle, 365.00 EUR/month; 1 not judged (1 shared)" };
+  Object.assign(gpu, { gpus: idle });
+  Object.assign(gpu.containers[0], {
+    gpus: {
+      asked: 1,
+      gpus: [
+        { id: "GPU-<b>a</b>", node: "n1", pod: "trainer-0", busiest: 0.01, by: "engine", hours: 168, memory: 2 ** 30, held: 1, verdict: "idle" },
+        { id: "GPU-b", node: "n1", pod: "trainer-1", busiest: null, by: null, hours: 0, memory: null, held: 1, verdict: "unread" },
+      ],
+    },
+  });
+  answer({
+    "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]],
+    "/api/v1/contracts/demo-shop/workloads": [200, { ...DATA, currency: "EUR", cost: { waste: 1, requests: 2 }, workloads: [gpu, workload("plain", 0.5, 0, [])], gpus: idle }],
+    "/api/v1/contracts/demo-shop/history": [200, { points: [] }],
+  });
+  const { container: page } = render(<App />);
+  fireEvent.click(await screen.findByText("Deployment/trainer"));
+  const total = [...page.querySelectorAll("p.total")].find((p) => p.textContent?.startsWith("Idle GPUs"));
+  expect(total?.querySelector("strong")?.textContent).toBe(idle.text);
+  expect(screen.getByText("Idle GPUs", { selector: "th" })).toBeTruthy();
+  const cells = [...page.querySelectorAll("tbody tr")].map((tr) => tr.children[6]?.textContent);
+  expect(cells).toEqual(["-", idle.text]); // ranked by waste: plain first
+  const listed = [...page.querySelectorAll(".container details li")].map((li) => li.textContent);
+  expect(listed).toEqual([
+    "GPU-<b>a</b> on n1 (trainer-0): idle, busiest hour 1% by engine over 168 h, held 100% of the window, memory peak 1024Mi",
+    "GPU-b on n1 (trainer-1): unread over 0 h, held 100% of the window",
+  ]);
+  expect(page.querySelector(".container details b")).toBeNull();
+});
+
+test("a Contract without GPUs has no Idle GPUs line or column", async () => {
+  answer({
+    "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]],
+    "/api/v1/contracts/demo-shop/workloads": [200, DATA],
+  });
+  render(<App />);
+  await screen.findByText("Deployment/memory-heavy");
+  expect(screen.queryByText(/Idle GPUs/)).toBeNull();
+});
+
+test("the Cost page says the idle GPUs beside the Savings (slice 17.2b)", async () => {
+  history.replaceState(null, "", "/app/?view=cost");
+  const zero = { cpu: 0, memory: 0 };
+  const total = { requests: zero, waste: zero, cost: null };
+  const realized = { currency: null, rate: zero, accrued: zero, week: zero, cost: null, drops: [] };
+  const gpus = { idle: 0.5, of: 1, cost: null, not_judged: {}, text: "0.5 of 1 GPUs idle" };
+  answer({
+    "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]],
+    "/api/v1/contracts/demo-shop/cost": [
+      200,
+      { contract: "demo-shop", by: "namespace", currency: null, groups: [], groupings: ["namespace"], warnings: [], total, realized, prices: [], gpus },
+    ],
+  });
+  render(<App />);
+  expect((await screen.findByText("0.5 of 1 GPUs idle")).tagName).toBe("STRONG");
+});

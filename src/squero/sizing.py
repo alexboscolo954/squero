@@ -1460,16 +1460,20 @@ def gpus_said(g: dict[str, Any] | None) -> bool:
 def gpus_text(g: dict[str, Any], currency: str | None) -> str:
     """`1 of 4 GPUs idle, 730.00 USD/month; 2 not judged (1 shared, 1 unread)`: a
     report's `gpus`, a Workload's or the total."""
-    text = f"{g['idle']:.1f} of {g['of']:.1f} GPUs idle"  # 1.0 shown as 1, below
+
+    def n(v: float) -> str:  # 1, 0.25, 2.14: the share its money is worked out from
+        return f"{v:.2f}".rstrip("0").rstrip(".")
+
+    text = f"{n(g['idle'])} of {n(g['of'])} GPUs idle"
     if g["idle"] and currency:
         if g.get("cost") is not None:
             text += f", {money(g['cost'], currency)}"
         else:
             text += " (no GPU price: set `gpu` in its prices)"
     if left := g.get("not_judged"):
-        each = ", ".join(f"{held:.1f} {verdict}" for verdict, held in sorted(left.items()))
-        text += f"; {sum(left.values()):.1f} not judged ({each})"
-    return text.replace(".0 ", " ")
+        each = ", ".join(f"{n(held)} {verdict}" for verdict, held in sorted(left.items()))
+        text += f"; {n(sum(left.values()))} not judged ({each})"
+    return text
 
 
 def quantities(waste: dict[str, float]) -> str:
@@ -1585,6 +1589,9 @@ def report(
         }
     if contract is not None and contract._price_notes:  # list prices, or spot (16.1a)
         out["prices"] = contract._price_notes
+    currency = contract.prices.currency if contract and contract.prices else None
+    for g in [*gpus, *([out["gpus"]] if gpus else [])]:  # slice 17.2b: said once, here
+        g["text"] = gpus_text(g, currency)
     return out
 
 
@@ -1792,6 +1799,8 @@ async def cost(
     }
     if c._price_notes:  # list prices, or spot (slice 16.1a)
         out["prices"] = c._price_notes
+    if gpus := report(rows, status, c).get("gpus"):  # slice 17.2b: beside the Savings
+        out["gpus"] = gpus
     if back is None:
         return out
     then, before = await store.latest_sizings(c.id, clusters, before=now - back)

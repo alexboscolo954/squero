@@ -53,6 +53,16 @@
             ],
             "title": "Currency"
           },
+          "gpus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdleGpus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "groupings": {
             "items": {
               "type": "string"
@@ -1193,6 +1203,16 @@
               }
             ]
           },
+          "gpus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContainerGpus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "groups": {
             "default": [],
             "items": {
@@ -1303,6 +1323,27 @@
           "state"
         ],
         "title": "Container",
+        "type": "object"
+      },
+      "ContainerGpus": {
+        "properties": {
+          "asked": {
+            "title": "Asked",
+            "type": "number"
+          },
+          "gpus": {
+            "items": {
+              "$ref": "#/components/schemas/GpuUse"
+            },
+            "title": "Gpus",
+            "type": "array"
+          }
+        },
+        "required": [
+          "asked",
+          "gpus"
+        ],
+        "title": "ContainerGpus",
         "type": "object"
       },
       "ContractOverview": {
@@ -1985,6 +2026,85 @@
         "title": "FloorsTotal",
         "type": "object"
       },
+      "GpuUse": {
+        "description": "One GPU a container's pods were given in the window, with its verdict (17.2a).",
+        "properties": {
+          "busiest": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Busiest"
+          },
+          "by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "By"
+          },
+          "held": {
+            "title": "Held",
+            "type": "number"
+          },
+          "hours": {
+            "title": "Hours",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "memory": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          },
+          "pod": {
+            "title": "Pod",
+            "type": "string"
+          },
+          "verdict": {
+            "enum": [
+              "idle",
+              "busy",
+              "learning",
+              "shared",
+              "unread"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "node",
+          "pod",
+          "hours",
+          "held",
+          "verdict"
+        ],
+        "title": "GpuUse",
+        "type": "object"
+      },
       "Group": {
         "properties": {
           "change": {
@@ -2312,6 +2432,49 @@
           "points"
         ],
         "title": "History",
+        "type": "object"
+      },
+      "IdleGpus": {
+        "description": "Idle GPUs (slice 17.2a), each GPU counted by the share of the window it was held.",
+        "properties": {
+          "cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost"
+          },
+          "idle": {
+            "title": "Idle",
+            "type": "number"
+          },
+          "not_judged": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "default": {},
+            "title": "Not Judged",
+            "type": "object"
+          },
+          "of": {
+            "title": "Of",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idle",
+          "of",
+          "text"
+        ],
+        "title": "IdleGpus",
         "type": "object"
       },
       "InvestigationPage": {
@@ -4312,6 +4475,16 @@
               }
             ]
           },
+          "gpus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdleGpus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "kind": {
             "title": "Kind",
             "type": "string"
@@ -4410,6 +4583,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/FloorsTotal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gpus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdleGpus"
               },
               {
                 "type": "null"

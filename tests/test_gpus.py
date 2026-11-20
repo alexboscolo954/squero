@@ -85,7 +85,7 @@ def test_each_gpu_gets_its_verdict_and_the_share_of_the_window_it_was_held() -> 
         {"learning": 23 / 168, "shared": 1.0, "unread": 1.0}
     )
     assert sizing.gpus_text(judged, "USD").endswith(
-        "; 2.1 not judged (0.1 learning, 1 shared, 1 unread)"
+        "; 2.14 not judged (0.14 learning, 1 shared, 1 unread)"
     )
     one = next(g for g in r["gpus"]["gpus"] if g["id"] == "idle")
     assert {k: one[k] for k in ("node", "pod", "busiest", "by", "hours")} == {
@@ -129,6 +129,7 @@ def test_a_pod_that_moved_across_three_gpus_counts_one_gpu_held_in_count_and_mon
         "of": pytest.approx(2.0),
         "cost": pytest.approx(365.0),
         "not_judged": {},
+        "text": "1 of 2 GPUs idle, 365.00 USD/month",
     }
     assert sizing.gpus_text(out["gpus"], "USD") == "1 of 2 GPUs idle, 365.00 USD/month"
 
@@ -146,7 +147,13 @@ def test_idle_gpus_leave_waste_its_cost_and_the_ranking_alone() -> None:
 def test_without_a_gpu_price_idle_gpus_are_counted_not_priced() -> None:
     rows = rows_of(gpus_of(("a", gpu(0.0))))
     out = sizing.report(rows, {"test": {}}, priced(None))
-    assert out["gpus"] == {"idle": 1.0, "of": 1.0, "cost": None, "not_judged": {}}
+    assert out["gpus"] == {
+        "idle": 1.0,
+        "of": 1.0,
+        "cost": None,
+        "not_judged": {},
+        "text": "1 of 1 GPUs idle (no GPU price: set `gpu` in its prices)",
+    }
     assert sizing.gpus_text(out["gpus"], "USD") == (
         "1 of 1 GPUs idle (no GPU price: set `gpu` in its prices)"
     )
@@ -260,6 +267,7 @@ def test_from_dcgm_to_sizing_waste(
         "of": pytest.approx(held),
         "cost": pytest.approx(held * 0.5 * 730),
         "not_judged": {},
+        "text": "0.25 of 0.25 GPUs idle, 91.25 USD/month",
     }
     (gpu_row,) = api["containers"][0]["gpus"]["gpus"]
     assert (gpu_row["id"], gpu_row["verdict"], gpu_row["busiest"]) == ("GPU-aaa", "idle", 0.01)
@@ -296,3 +304,32 @@ def test_the_window_is_the_policys() -> None:
     (r,) = rows_of(gpus_of(("a", gpu(0.0, hours=72))), c=contracts.build(data), window=3 * 86400)
     assert r["gpus"]["gpus"][0]["held"] == 1.0
     assert WEEK == 7 * 86400
+
+
+# --- the API, the console's pages and the Hub MCP server (slice 17.2b) ----------------
+
+
+def test_the_hub_mcp_server_and_the_api_say_idle_gpus_for_their_own_contract_only(
+    settings: Any, fake_cluster: Any, database_url: str
+) -> None:
+    """Isolation: acme's idle GPU reaches acme's `sizings`, `cost` and pages, never bank's."""
+    from tests.test_console import VIEW
+    from tests.test_hubmcp import call, hub, seed_run
+
+    one = {"id": "GPU-a", "node": "n1", "pod": "api-0", "busiest": 0.01, "by": "engine",
+           "hours": 168, "memory": 1e9, "held": 1.0, "verdict": "idle"}  # fmt: skip
+    seed_run(database_url, "acme", row(gpus={"asked": 1.0, "gpus": [one]}))
+    seed_run(database_url, "bank", row())
+    with hub(settings, fake_cluster, database_url) as c:
+        acme = call(c, "list_contracts")[0]["id"]
+        sizings = {cid: call(c, "sizings", contract=cid) for cid in (acme, "bank")}
+        cost = {cid: call(c, "cost", contract=cid) for cid in (acme, "bank")}
+        page = c.get("/api/v1/contracts/acme/workloads", headers=VIEW).json()
+    assert sizings[acme]["idle_gpus"] == "1 of 1 GPUs idle"
+    assert sizings[acme]["workloads"][0]["idle_gpus"] == "1 of 1 GPUs idle"
+    assert cost[acme]["gpus"]["text"] == "1 of 1 GPUs idle"
+    assert "idle_gpus" not in sizings["bank"] and "idle_gpus" not in sizings["bank"]["workloads"][0]
+    assert cost["bank"]["gpus"] is None
+    (container,) = page["workloads"][0]["containers"]
+    assert container["gpus"] == {"asked": 1.0, "gpus": [one]}
+    assert page["gpus"]["text"] == page["workloads"][0]["gpus"]["text"] == "1 of 1 GPUs idle"
