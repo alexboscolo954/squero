@@ -1246,6 +1246,53 @@ def needs(prom: Prom, t: Target, start: float, end: float) -> dict[Workload, dic
     return out
 
 
+KV_TARGET = 0.8  # a vLLM replica's KV cache this full is as busy as it should be (17.4)
+WAITING = "vllm:num_requests_waiting"
+
+
+def vllm_needs(
+    prom: Prom, t: Target, start: float, end: float
+) -> dict[Workload, dict[float, float]]:
+    """Each vLLM Workload's Need (slice 17.4a) from `start` to `end`, per UTC hour (by
+    its start): the replicas that reported a KV cache that hour times its busiest
+    replica's peak over KV_TARGET, rounded up, and at least one replica more in an hour
+    when requests waited. Its own metrics, in the Contract's namespaces, with or without
+    an HPA. ponytail: the replicas are the pods that reported in the hour, so an hour a
+    rollout replaces pods in counts both; KSM's replica counts if that skews Floors."""
+    window = f"{max(HOUR, int(end - start))}s"
+
+    def at_end(metric: str) -> list[dict[str, Any]]:
+        return prom.instant(f"last_over_time({selector(metric, t)}[{window}])", end)
+
+    owners = resolve(at_end("kube_pod_owner"), at_end("kube_replicaset_owner"),
+                     at_end("kube_job_owner"))  # fmt: skip
+
+    def hourly(metric: str) -> dict[tuple[Workload, float], dict[str, float]]:
+        """Per Workload and hour, each pod's peak."""
+        out: dict[tuple[Workload, float], dict[str, float]] = {}
+        query = f"max_over_time({selector(metric, t)}[{HOUR}s])"
+        for s in prom.range(query, start, end, HOUR):
+            m = s["metric"]
+            w = owners.get((m.get("namespace", ""), m.get("pod", "")))
+            if w is None:
+                continue
+            for at, v in s["values"]:
+                hour = float(at) - HOUR  # the hour a peak ending at `at` covers
+                hour -= hour % HOUR
+                pods = out.setdefault((w, hour), {})
+                pods[m.get("pod", "")] = max(float(v), pods.get(m.get("pod", ""), 0.0))
+        return out
+
+    kv, waited = hourly(KV_CACHE), hourly(WAITING)
+    found: dict[Workload, dict[float, float]] = {}
+    for (w, hour), pods in kv.items():
+        need = math.ceil(len(pods) * max(pods.values()) / KV_TARGET - 1e-9)
+        if any(v > 0 for v in waited.get((w, hour), {}).values()):
+            need = max(need, len(pods) + 1)
+        found.setdefault(w, {})[hour] = float(need)
+    return found
+
+
 @dataclass(frozen=True, order=True)
 class Divides:
     """An HPA target that divides by a request (slice 14.3): a `Utilization` of cpu or
@@ -1407,6 +1454,12 @@ def collect(
                 out.needs[t.cluster] = needs(prom, t, start, end)
             except UsageError as e:
                 log.warning("%s/%s: its Needs not read: %s", c.id, t.cluster, e)
+            if any(r.gpus for r in by_window[windows[-1]].rows):  # slice 17.4a
+                try:  # a vLLM Workload's own, in place of its HPA's
+                    served = vllm_needs(prom, t, start, end)
+                    out.needs[t.cluster] = {**out.needs.get(t.cluster, {}), **served}
+                except UsageError as e:
+                    log.warning("%s/%s: its vLLM Needs not read: %s", c.id, t.cluster, e)
         try:
             out.scaled[t.cluster] = scaled(prom, t, end)
         except UsageError as e:
