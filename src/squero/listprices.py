@@ -438,7 +438,8 @@ def _typed(
         return typed, "typed prices" + said, unpriced
     sizes = [(n["vcpu"], n["gib"], bool(n.get("spot"))) for n in facts["nodes"]]
     share, _ = spot_paid(sizes, weight, cluster.spot.discount)
-    blended = ClusterPrices(cpu=typed.cpu * share, memory=typed.memory * share)
+    # ponytail: a typed GPU price is kept as typed, not blended by the spot share (17.2c)
+    blended = ClusterPrices(cpu=typed.cpu * share, memory=typed.memory * share, gpu=typed.gpu)
     return blended, f"typed prices{said}: x{share:.3f} of them", (share, cluster.spot.discount)
 
 

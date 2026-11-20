@@ -525,13 +525,17 @@ async def sizing_waste(contract_id: str, as_json: bool) -> int:
         )
     else:
         print(f"{c.id}: waste {sizing.quantities(total)}")
+    if sizing.gpus_said(out.get("gpus")):  # slice 17.2a
+        print(f"{c.id}: {sizing.gpus_text(out['gpus'], currency)}")
     quiet = 0
     for w in ranked:
         kinds = sorted({r["kind"] for r in w["risks"]})
-        if not kinds and sizing.rank(w) == 0:
+        said = sizing.gpus_said(w.get("gpus"))
+        if not kinds and sizing.rank(w) == 0 and not said:
             quiet += 1
             continue
         risk = f" | risk: {', '.join(kinds)}" if kinds else ""
+        risk += f" | {sizing.gpus_text(w['gpus'], currency)}" if said else ""
         cost = (
             f"{sizing.money(w['cost']['waste'], currency)} of "
             f"{sizing.money(w['cost']['requests'], currency)}, "

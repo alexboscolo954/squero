@@ -976,6 +976,8 @@ def rows(
             if s.state == "ready":
                 row["waste"] = waste
             row["risks"] = [r._asdict() for r in risks]
+            if u.gpus:  # slice 17.2a
+                row["gpus"] = gpu_row(u, policy.history, window)
             if u.groups:  # slice 15.3a: a DaemonSet's, per instance type
                 row["groups"] = [
                     _sized_type(kind, g, now, policy, covered[cluster], steps[cluster], window, u)
@@ -1413,6 +1415,63 @@ def money(value: float, currency: str) -> str:
     return f"{value:,.2f} {currency}/month"
 
 
+IDLE = 0.05  # an Idle GPU's busiest hour stays under this busy share (Phase 17's grill)
+
+
+def gpu_row(u: ContainerUsage, needs_s: float, window_s: int) -> dict[str, Any]:
+    """A GPU-requesting container's GPUs as stored (slice 17.2a), each with its verdict:
+    `shared` (a MIG instance, a virtual or time-sliced GPU: not judged), `unread` (no use
+    from DCGM), `learning` (fewer hours read than its policy's history), else `idle`
+    (its busiest hour under 5% busy) or `busy`. `held`: the share of the window it had
+    use read, at most 1, so a pod that moved across three GPUs counts one GPU, not
+    three, in "N of M" and in money alike."""
+    found = []
+    for key, g in sorted(u.gpu.items()):
+        hours = len(g.hours)
+        if g.shared:
+            verdict = "shared"
+        elif g.busiest is None:
+            verdict = "unread"
+        elif hours * 3600 < needs_s:
+            verdict = "learning"
+        else:
+            verdict = "idle" if g.busiest < IDLE else "busy"
+        found.append(
+            {
+                "id": key,
+                "node": g.node,
+                "pod": g.pod,
+                "busiest": g.busiest,
+                "by": g.by,
+                "hours": hours,
+                "memory": g.memory,
+                "held": min(1.0, hours * 3600 / window_s),
+                "verdict": verdict,
+            }
+        )
+    return {"asked": u.gpus, "gpus": found}
+
+
+def gpus_said(g: dict[str, Any] | None) -> bool:
+    """Whether a `gpus` has something to say: GPUs idle, or some not judged."""
+    return bool(g and (g["idle"] or g.get("not_judged")))
+
+
+def gpus_text(g: dict[str, Any], currency: str | None) -> str:
+    """`1 of 4 GPUs idle, 730.00 USD/month; 2 not judged (1 shared, 1 unread)`: a
+    report's `gpus`, a Workload's or the total."""
+    text = f"{g['idle']:.1f} of {g['of']:.1f} GPUs idle"  # 1.0 shown as 1, below
+    if g["idle"] and currency:
+        if g.get("cost") is not None:
+            text += f", {money(g['cost'], currency)}"
+        else:
+            text += " (no GPU price: set `gpu` in its prices)"
+    if left := g.get("not_judged"):
+        each = ", ".join(f"{held:.1f} {verdict}" for verdict, held in sorted(left.items()))
+        text += f"; {sum(left.values()):.1f} not judged ({each})"
+    return text.replace(".0 ", " ")
+
+
 def quantities(waste: dict[str, float]) -> str:
     return f"{waste['cpu']:.2f} cores, {waste['memory'] / GIB:.2f} GiB"
 
@@ -1479,12 +1538,23 @@ def report(
             w["waste"][res] += r["waste"].get(res, 0.0)
         w["risks"] += [{**risk, "container": r["container"]} for risk in r["risks"]]
         w["containers"].append(r)
+        if r.get("gpus"):  # slice 17.2a: the GPUs judged, held over the window
+            g = w.setdefault("gpus", {"idle": 0.0, "of": 0.0, "cost": None, "not_judged": {}})
+            for one in r["gpus"]["gpus"]:
+                if one["verdict"] in ("idle", "busy"):
+                    g["of"] += one["held"]
+                    g["idle"] += one["held"] if one["verdict"] == "idle" else 0.0
+                else:  # shared, unread, learning: said, so none idle isn't read as all busy
+                    aside = g["not_judged"]
+                    aside[one["verdict"]] = aside.get(one["verdict"], 0.0) + one["held"]
     if priced:
         assert contract is not None
         for key, w in workloads.items():
             p = contract.price(w["cluster"])
             assert p is not None
             w["cost"] = {"waste": monthly(p, **w["waste"]), "requests": asked[key]}
+            if "gpus" in w and p.gpu is not None:  # beside Waste, never in it
+                w["gpus"]["cost"] = w["gpus"]["idle"] * p.gpu * MONTH
     ranked = sorted(workloads.values(), key=lambda w: (-rank(w), w["workload"]))
     out = {
         "clusters": clusters,
@@ -1493,6 +1563,19 @@ def report(
         "learning": learning,
         "excluded": excluded,
     }
+    if gpus := [w["gpus"] for w in ranked if "gpus" in w]:
+        costs = [g["cost"] for g in gpus if g["idle"]]
+        left: dict[str, float] = {}
+        for g in gpus:
+            for verdict, held in g["not_judged"].items():
+                left[verdict] = left.get(verdict, 0.0) + held
+        out["gpus"] = {
+            "idle": sum(g["idle"] for g in gpus),
+            "of": sum(g["of"] for g in gpus),
+            # every idle GPU priced, else none: a part of them would read as all
+            "cost": sum(costs) if None not in costs else None,
+            "not_judged": left,
+        }
     if priced:
         assert contract is not None and contract.prices is not None
         out["currency"] = contract.prices.currency
@@ -2166,6 +2249,8 @@ def digest_text(
             lines.append(line)
         if acted and (line := actuations_line(acted)):
             lines.append(line)
+        if gpus_said(now.get("gpus")):  # slice 17.2a
+            lines.append(f"Idle GPUs: {gpus_text(now['gpus'], currency)}.")
         top = [w for w in now["workloads"] if rank(w) > 0][:TOP]
         if top:
             lines.append("*Top Workloads by waste*")

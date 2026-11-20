@@ -213,7 +213,7 @@ The requests above a Workload's Sizings, times its average pods: what the Sizing
 _Avoid_: Savings (that is waste priced, Phase 10), over-provisioning (for the number)
 
 **Idle GPU**:
-A GPU a container requests whose busiest hour in its Sizing policy's window stays under 5% busy (DCGM's graphics engine activity where the exporter has it, its GPU utilization otherwise); memory used is shown, never counted. Counted per GPU and grouped by Workload, with its cost; a GPU shared by time-slicing or a MIG instance is not judged. Reported only, never actuated. Not Waste: a GPU has no Sizing, so its cost is a line of its own beside Waste.
+A GPU a container requests whose busiest hour in its Sizing policy's window stays under 5% busy (DCGM's graphics engine activity where the exporter has it, its GPU utilization otherwise); memory used is shown, never counted. Counted per GPU and grouped by Workload by the share of the window each was held, so a pod that moved across GPUs counts as one, with its cost; a GPU still learning (fewer hours read than its policy's history), shared by time-slicing, or a MIG instance is not judged. Reported only, never actuated. Not Waste: a GPU has no Sizing, so its cost is a line of its own beside Waste.
 _Avoid_: GPU waste, unused GPU (a GPU no container requests is a node's, Phase 17.5)
 
 **Automation**:

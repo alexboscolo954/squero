@@ -63,6 +63,7 @@ class ClusterPrices(Strict):
 
     cpu: float = Field(ge=0)  # per vCPU-hour
     memory: float = Field(ge=0)  # per GiB-hour
+    gpu: float | None = Field(None, ge=0)  # per GPU-hour (slice 17.2a); none: GPUs unpriced
 
 
 class Prices(ClusterPrices):
@@ -1040,8 +1041,11 @@ class Contract(Strict):
         return self.sizing.spot(cluster, namespace, kind, name)
 
     def price(self, cluster: str) -> ClusterPrices | None:
-        """A cluster's unit prices: its own, else the Contract's; None when unpriced."""
+        """A cluster's unit prices: its own, else the Contract's; None when unpriced. A
+        cluster's own without `gpu` takes the Contract's (slice 17.2a)."""
         own = next((c.prices for c in self.clusters if c.name == cluster), None)
+        if own and own.gpu is None and self.prices and self.prices.gpu is not None:
+            return own.model_copy(update={"gpu": self.prices.gpu})
         return own or self.prices
 
     @property
