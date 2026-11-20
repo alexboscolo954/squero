@@ -326,6 +326,8 @@ def test_stored_floors_are_priced_and_totalled() -> None:
         "workloads": 1,
         "replicas": 2.0,
         "saving": saver["saving"],
+        "gpus": 0.0,  # slice 17.4b: none of their replicas holds a GPU
+        "fixed": 0,  # and each has an HPA
         "cost": pytest.approx(cost),
     }
     plain = sizing.floors_report([saver, at_it, below], prometheus_contract())

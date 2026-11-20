@@ -1313,6 +1313,8 @@ class Bounds:
     minimum: float | None
     maximum: float | None
     zero: bool = False
+    # slice 17.4b: no HPA, its replica count as both (a GPU Workload with vLLM Needs)
+    fixed: bool = False
 
 
 def _hpas(prom: Prom, t: Target, at: float) -> dict[tuple[str, str], Workload]:
@@ -1352,6 +1354,38 @@ def bounds(prom: Prom, t: Target, at: float, back: int) -> dict[Workload, list[B
         has = found.get(hpa, {})
         zero = has.get("least") == 0
         out.setdefault(w, []).append(Bounds(hpa[1], has.get("min"), has.get("max"), zero))
+    return out
+
+
+FIXED = {  # slice 17.4b: a replica count kube-state-metrics gives, by kind
+    "Deployment": ("kube_deployment_spec_replicas", "deployment"),
+    "StatefulSet": ("kube_statefulset_replicas", "statefulset"),
+}
+
+
+def fixed(
+    prom: Prom, t: Target, at: float, back: int, workloads: set[Workload]
+) -> dict[Workload, list[Bounds]]:
+    """Workloads with no HPA (slice 17.4b), each with its replica count as both its
+    minimum and maximum, and whether that count was 0 in the `back` seconds before; another
+    kind's, or one kube-state-metrics doesn't give, not known."""
+    out = {w: [Bounds("", None, None, fixed=True)] for w in workloads}
+    for kind, (metric, key) in FIXED.items():
+        if not any(w.kind == kind for w in workloads):
+            continue
+
+        def read(promql: str, key: str = key) -> dict[tuple[str, str], float]:
+            return {
+                (label(s["metric"], "namespace"), s["metric"].get(key, "")): float(s["value"][1])
+                for s in prom.instant(promql, at)
+            }
+
+        now = read(selector(metric, t))
+        least = read(f"min_over_time({selector(metric, t)}[{back}s])")
+        for w in workloads:
+            if w.kind == kind and (n := now.get((w.namespace, w.name))) is not None:
+                zero = least.get((w.namespace, w.name)) == 0
+                out[w] = [Bounds("", n, n, zero, fixed=True)]
     return out
 
 
@@ -1465,7 +1499,13 @@ def collect(
         except UsageError as e:
             log.warning("%s/%s: its HPAs' targets not read: %s", c.id, t.cluster, e)
         try:
-            out.bounds[t.cluster] = bounds(prom, t, end, min(max(windows), NEEDS_FOR))
+            back = min(max(windows), NEEDS_FOR)
+            out.bounds[t.cluster] = bounds(prom, t, end, back)
+            # slice 17.4b: a GPU Workload without an HPA, by its replica count; its Floor
+            # comes only with stored Needs (a vLLM one's)
+            gpu = {u.workload for u in by_window[windows[-1]].rows if u.gpus}
+            if alone := gpu - set(out.bounds[t.cluster]):
+                out.bounds[t.cluster] |= fixed(prom, t, end, back, alone)
         except UsageError as e:
             log.warning("%s/%s: its HPAs' bounds not read: %s", c.id, t.cluster, e)
         if crossing:

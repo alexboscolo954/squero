@@ -1100,11 +1100,16 @@ def floors(
             if not policies:
                 continue  # `off`, or no container of it read: nothing to go by
             q, name, policy = max(policies, key=lambda x: x[0])
+            own = needs.get(cluster, {}).get(key, {})
+            alone = hpas[0].fixed  # slice 17.4b: no HPA, its replica count
+            if alone and not own:
+                continue  # a GPU Workload with no vLLM Needs: nothing to go by
             f: dict[str, Any] = {
                 "workload": f"{cluster}/{w.namespace}/{w.kind}/{w.name}",
                 **{"cluster": cluster, "namespace": w.namespace, "kind": w.kind, "name": w.name},
                 **{"hpa": hpas[0].hpa, "policy": name, "percentile": q},
                 **{"minimum": hpas[0].minimum, "maximum": hpas[0].maximum, "risks": []},
+                **({"fixed": True} if alone else {}),
             }
             out[cluster].append(f)
             window = min(policy.window, NEEDS_FOR)
@@ -1117,7 +1122,10 @@ def floors(
             if len(hpas) > 1:
                 f |= {"state": "none", "why": f"{len(hpas)} HPAs scale it"}
             elif minimum is None:
-                f |= {"state": "none", "why": "its HPA's minimum is not known"}
+                why = (
+                    "its replica count is not known" if alone else "its HPA's minimum is not known"
+                )
+                f |= {"state": "none", "why": why}
             elif minimum == 0 or hpas[0].zero:
                 f |= {"state": "none", "why": "it scales to zero: left alone"}
             else:
@@ -1135,7 +1143,8 @@ def floors(
                         sized = r.get(res) if r["state"] == "ready" else None
                         asks = (r.get("requests") or {}).get(res) or 0.0
                         pod[res] += sized["target"] if sized else asks
-                own = needs.get(cluster, {}).get(key, {})
+                # slice 17.4b: and its GPUs, apart (priced by the GPU price, never in Waste)
+                gpus = sum((r.get("gpus") or {}).get("asked", 0.0) for r in containers)
                 weekly = profile(own, floor, c.sizing.timezone, c.sizing.lead_time, now)
                 if weekly["state"] == "ready":
                     test = backtest(own, floor, c.sizing.timezone, now)
@@ -1145,6 +1154,8 @@ def floors(
                         weekly |= scheduled(f, weekly)
                     if "replicas" in test:
                         test["excess"] = {res: test["replicas"] * v for res, v in pod.items()}
+                        if gpus:
+                            test["excess_gpus"] = test["replicas"] * gpus
                     weekly["backtest"] = test
                 f["profile"] = weekly
                 up = [math.ceil(n - 1e-9) for n in values]
@@ -1152,19 +1163,21 @@ def floors(
                     held = sum(max(0.0, minimum - max(floor, n)) for n in up) / len(up)
                     f["replicas"] = round(held, 2)
                     f["saving"] = {res: held * v for res, v in pod.items()}
+                    if gpus:
+                        f["gpu_saving"] = held * gpus
                 elif floor > minimum:
                     often = _share(sum(1 for n in up if n >= floor), len(up))
-                    text = (
-                        f"its minimum of {minimum:g} is below the {floor} replicas it "
-                        f"needed in {often} of hours"
+                    runs = (
+                        f"its {minimum:g} replicas are"
+                        if alone
+                        else f"its minimum of {minimum:g} is"
                     )
+                    text = f"{runs} below the {floor} replicas it needed in {often} of hours"
                     f["risks"].append({"kind": "minimum_below_floor", "text": text})
                 over = sum(1 for n in values if maximum is not None and n > maximum + 1e-9)
                 if over:
-                    text = (
-                        f"needed more than its maximum of {maximum:g} in "
-                        f"{_share(over, len(values))} of hours"
-                    )
+                    most = f"its {maximum:g} replicas" if alone else f"its maximum of {maximum:g}"
+                    text = f"needed more than {most} in {_share(over, len(values))} of hours"
                     f["risks"].append({"kind": "needed_above_maximum", "text": text})
     return out
 
@@ -1287,10 +1300,11 @@ def scheduled(f: dict[str, Any], p: dict[str, Any]) -> dict[str, Any]:
     """How a ready Weekly profile gets applied: for KEDA's HPA (`keda-hpa-<name>`), a
     `cron` trigger per block for its ScaledObject, as text to paste; else a note, an HPA
     having no schedule of its own."""
-    if not f["hpa"].startswith("keda-hpa-"):
+    alone = bool(f.get("fixed"))  # slice 17.4b: no HPA, so no ScaledObject yet either
+    if not alone and not f["hpa"].startswith("keda-hpa-"):
         note = "an HPA has no schedule of its own: something else has to hold these replicas"
         return {"note": f"{note} (KEDA's cron trigger does)"}
-    name = f["hpa"].removeprefix("keda-hpa-")
+    name = f["name"] if alone else f["hpa"].removeprefix("keda-hpa-")
     lines = [
         f"# ScaledObject {f['namespace']}/{name} (KEDA): cron triggers, beside its others.",
         "# Each holds at least that many replicas in its window; the most asked for wins.",
@@ -1299,6 +1313,12 @@ def scheduled(f: dict[str, Any], p: dict[str, Any]) -> dict[str, Any]:
         lines += ["- type: cron", "  metadata:", f"    timezone: {p['timezone']}"]
         lines += [f"    start: {b['start']}", f"    end: {b['end']}"]
         lines += [f'    desiredReplicas: "{b["replicas"]}"']
+    if alone:
+        note = (
+            f"needs a KEDA ScaledObject for {f['kind']} {f['name']}; until then its replica "
+            "count is the Floor's or the busiest block's"
+        )
+        return {"triggers": "\n".join(lines), "note": note}
     return {"triggers": "\n".join(lines)}
 
 
@@ -1343,23 +1363,35 @@ def floors_report(found: list[dict[str, Any]], contract: Contract) -> dict[str, 
     (nothing holds them until the profile is applied)."""
     priced = contract.prices is not None
     total: dict[str, Any] = {"workloads": 0, "replicas": 0.0, "saving": {"cpu": 0.0, "memory": 0.0}}
+    total |= {"gpus": 0.0, "fixed": 0}  # slice 17.4b
     if priced:
         total["cost"] = 0.0
+
+    def worth(p: ClusterPrices, held: dict[str, float], gpus: float) -> float | None:
+        """Replicas at their Sizings and their GPUs (slice 17.4b): no cost without a GPU
+        price for them, never their CPU and memory's alone."""
+        if gpus and p.gpu is None:
+            return None
+        return monthly(p, **held) + gpus * (p.gpu or 0.0) * MONTH
+
     out = []
     for f in found:
         f = dict(f)
         p = contract.price(f["cluster"]) if priced else None
         if saving := f.get("saving"):
             total["workloads"] += 1
+            total["fixed"] += 1 if f.get("fixed") else 0
             total["replicas"] += f["replicas"]
+            total["gpus"] += f.get("gpu_saving") or 0.0
             for res in ("cpu", "memory"):
                 total["saving"][res] += saving[res]
             if p:
-                f["cost"] = monthly(p, **saving)
-                total["cost"] += f["cost"]
+                f["cost"] = worth(p, saving, f.get("gpu_saving") or 0.0)
+                cost = total["cost"]
+                total["cost"] = None if cost is None or f["cost"] is None else cost + f["cost"]
         test = (f.get("profile") or {}).get("backtest") or {}
         if p and test.get("excess"):
-            priced_test = {**test, "cost": monthly(p, **test["excess"])}
+            priced_test = {**test, "cost": worth(p, test["excess"], test.get("excess_gpus") or 0.0)}
             f["profile"] = {**f["profile"], "backtest": priced_test}
         out.append(f)
     return {"floors": out, "floors_total": total}
@@ -1373,15 +1405,24 @@ def floor_text(f: dict[str, Any], currency: str | None = None) -> str:
     if f["state"] == "learning":
         return f"{head}Floor learning ({f['history_h']:g} h of {f['needs_h']:g} h of Needs)"
     top = "" if f.get("maximum") is None else f", maximum {f['maximum']:g}"
+    held = (
+        f"no HPA: {f['minimum']:g} replicas"  # slice 17.4b
+        if f.get("fixed")
+        else f"HPA {f['hpa']}: minimum {f['minimum']:g}{top}"
+    )
     text = (
-        f"{head}Floor {f['floor']} (HPA {f['hpa']}: minimum {f['minimum']:g}{top}; "
+        f"{head}Floor {f['floor']} ({held}; "
         f"{f['policy']}: {f['percentile']:.0%} of {f['history_h']:g} h of Needs)"
     )
     if f.get("saving"):
         priced = currency and f.get("cost") is not None
         worth = money(f["cost"], currency) if priced and currency else quantities(f["saving"])
+        if f.get("gpu_saving") and not priced:
+            worth += f", {f['gpu_saving']:.2f} GPUs"
         one = "replica" if f["replicas"] == 1 else "replicas"
         text += f" | {f['replicas']:g} {one} fewer on average: {worth}"
+        if f.get("fixed"):
+            text += " (with an autoscaler holding the Floor, such as KEDA)"
     if f["risks"]:
         text += " | risk: " + "; ".join(r["text"] for r in f["risks"])
     return text
@@ -1395,9 +1436,22 @@ def floors_line(found: dict[str, Any], currency: str | None) -> str | None:
     )
     parts = []
     if total["workloads"]:
-        worth = money(total["cost"], currency) if currency else quantities(total["saving"])
+        priced = currency and total.get("cost") is not None
+        worth = (
+            money(total["cost"], currency) if priced and currency else quantities(total["saving"])
+        )
+        if total.get("gpus") and not priced:
+            worth += f", {total['gpus']:.2f} GPUs"
+        fixed = total.get("fixed") or 0  # slice 17.4b: no HPA, a replica count
+        what = (
+            "can lower their HPA minimum"
+            if not fixed
+            else "can run fewer replicas"
+            if fixed == total["workloads"]
+            else "can lower their HPA minimum or run fewer replicas"
+        )
         parts.append(
-            f"{total['workloads']} can lower their HPA minimum "
+            f"{total['workloads']} {what} "
             f"({total['replicas']:.1f} replicas fewer on average, {worth})"
         )
     if below:
@@ -1932,7 +1986,8 @@ async def realize_floors(
     lone: dict[tuple[str, str, str, str], Bounds] = {}  # the Workloads one HPA scales
     for cluster, found in bounds.items():
         for w, hpas in found.items():
-            if len(hpas) == 1:
+            # slice 17.4b: a replica count lowered by hand is fewer pods, never Savings
+            if len(hpas) == 1 and not hpas[0].fixed:
                 lone[cluster, w.namespace, w.kind, w.name] = hpas[0]
     raised: dict[int, float] = {}
     ended: set[int] = set()

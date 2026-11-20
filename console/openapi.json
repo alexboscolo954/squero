@@ -195,6 +195,17 @@
             ],
             "title": "Excess"
           },
+          "excess_gpus": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excess Gpus"
+          },
           "few": {
             "anyOf": [
               {
@@ -1801,6 +1812,11 @@
             ],
             "title": "Cost"
           },
+          "fixed": {
+            "default": false,
+            "title": "Fixed",
+            "type": "boolean"
+          },
           "floor": {
             "anyOf": [
               {
@@ -1811,6 +1827,17 @@
               }
             ],
             "title": "Floor"
+          },
+          "gpu_saving": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Saving"
           },
           "history_h": {
             "anyOf": [
@@ -2026,6 +2053,16 @@
               }
             ],
             "title": "Cost"
+          },
+          "fixed": {
+            "default": 0,
+            "title": "Fixed",
+            "type": "integer"
+          },
+          "gpus": {
+            "default": 0.0,
+            "title": "Gpus",
+            "type": "number"
           },
           "replicas": {
             "title": "Replicas",

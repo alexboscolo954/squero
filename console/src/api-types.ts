@@ -547,6 +547,8 @@ export interface components {
             excess?: {
                 [key: string]: number;
             } | null;
+            /** Excess Gpus */
+            excess_gpus?: number | null;
             /** Few */
             few?: number | null;
             /** Hours */
@@ -1062,8 +1064,15 @@ export interface components {
             cluster: string;
             /** Cost */
             cost?: number | null;
+            /**
+             * Fixed
+             * @default false
+             */
+            fixed: boolean;
             /** Floor */
             floor?: number | null;
+            /** Gpu Saving */
+            gpu_saving?: number | null;
             /** History H */
             history_h?: number | null;
             /** Hpa */
@@ -1127,6 +1136,16 @@ export interface components {
         FloorsTotal: {
             /** Cost */
             cost?: number | null;
+            /**
+             * Fixed
+             * @default 0
+             */
+            fixed: number;
+            /**
+             * Gpus
+             * @default 0
+             */
+            gpus: number;
             /** Replicas */
             replicas: number;
             saving: components["schemas"]["Waste"];

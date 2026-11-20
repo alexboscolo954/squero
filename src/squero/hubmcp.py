@@ -303,8 +303,10 @@ def build(
         request its HPA divides by, which the Actuator leaves alone, with the manifest
         change that frees it. by_instance_type: a DaemonSet's container sized for its
         pods on nodes of each instance type, beside its one Sizing for all of them,
-        which is the one applied. floors: for each Workload with an HPA, the minimum
-        replicas its stored Needs support, against the HPA's minimum today, and its
+        which is the one applied. floors: for each Workload with an HPA (or a vLLM
+        Workload without one, against its replica count: its saving needs an autoscaler
+        holding the Floor), the minimum replicas its stored Needs support, against the
+        HPA's minimum today, their GPUs priced with them, and its
         Weekly profile (blocks of hours that need more, KEDA cron triggers) with its
         Backtest: how far off it was last week, or that the load isn't weekly enough
         for one. idle_gpus: GPUs whose busiest hour stays under 5% busy, each counted

@@ -252,11 +252,12 @@ def test_the_workloads_route_gives_each_profiles_backtest(
     with hub(settings, fake_cluster, database_url) as c:
         body = c.get("/api/v1/contracts/acme/workloads", headers=VIEW).json()
     api, web, young = (f["profile"] for f in body["floors"])
-    assert api["backtest"] == {**late["profile"]["backtest"], "cost": None}
+    no_gpus = {"excess_gpus": None}  # slice 17.4b: its replicas hold no GPU
+    assert api["backtest"] == {**late["profile"]["backtest"], "cost": None, **no_gpus}
     assert (web["state"], web["blocks"], web["triggers"]) == ("irregular", [], None)
     assert web["backtest"]["state"] == "over" and web["backtest"]["hours"] == 168
     waiting = {"state": "waiting", "error": None, "few": None, "many": None, "hours": None}
-    assert young["backtest"] == waiting | {"replicas": None, "excess": None, "cost": None}
+    assert young["backtest"] == waiting | {"replicas": None, "excess": None, "cost": None} | no_gpus
     old = {**late, "profile": {k: v for k, v in late["profile"].items() if k != "backtest"}}
     assert webapp.Floor.model_validate({**old, "at": NOW}).profile.backtest is None  # of 14.2
 

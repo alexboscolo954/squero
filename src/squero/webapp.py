@@ -333,7 +333,8 @@ class Backtest(BaseModel):
     hours: int | None = None  # of the newest week replayed
     replicas: float | None = None  # the too many, on average
     excess: dict[str, float] | None = None  # those replicas at their Sizings
-    cost: float | None = None  # a month of them, with a priced Contract
+    excess_gpus: float | None = None  # and their GPUs (slice 17.4b)
+    cost: float | None = None  # a month of them, with a priced Contract (and a GPU price)
 
 
 class Profile(BaseModel):
@@ -347,7 +348,7 @@ class Profile(BaseModel):
     needs_h: float
     blocks: list[Block] = []
     triggers: str | None = None  # KEDA: cron triggers to paste into its ScaledObject
-    note: str | None = None  # a plain HPA: why there is none
+    note: str | None = None  # a plain HPA: why there are none; no HPA: what they need
     backtest: Backtest | None = None
 
 
@@ -371,17 +372,21 @@ class Floor(BaseModel):
     floor: int | None = None
     replicas: float | None = None  # fewer on average at the Floor, when it is below the minimum
     saving: Waste | None = None  # those replicas at their Sizings
-    cost: float | None = None  # monthly, with prices
+    gpu_saving: float | None = None  # and their GPUs (slice 17.4b)
+    cost: float | None = None  # monthly, with prices (and a GPU price for its GPUs)
     risks: list[Risk] = []
     profile: Profile | None = None
+    fixed: bool = False  # no HPA: `minimum` and `maximum` are its replica count (17.4b)
     at: float  # the run that computed it
 
 
 class FloorsTotal(BaseModel):
-    workloads: int  # that can lower their HPA's minimum
+    workloads: int  # that can lower their HPA's minimum, or run fewer replicas without one
     replicas: float
     saving: Waste
-    cost: float | None = None
+    gpus: float = 0.0  # their GPUs (slice 17.4b)
+    fixed: int = 0  # of the Workloads, those without an HPA
+    cost: float | None = None  # None: unpriced, or a GPU without a price
 
 
 class Workloads(BaseModel):

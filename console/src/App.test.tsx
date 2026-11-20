@@ -1355,3 +1355,25 @@ test("Nodes shows GPU nodes, their GPUs in what could go and the Unrequested GPU
   const chips = [...page.querySelectorAll("tbody tr")].map((tr) => [...tr.querySelectorAll(".chip")].map((c) => c.textContent));
   expect(chips).toEqual([["1 of 4 GPUs asked, Tesla-T4"], []]);
 });
+
+test("a vLLM Workload without an HPA shows its Floor against its replica count (slice 17.4b)", async () => {
+  const where = { cluster: "kind", namespace: "lab", kind: "Deployment", policy: "production", percentile: 0.1, risks: [], at: 1_700_000_000 };
+  const floors = [
+    { ...where, workload: "kind/lab/Deployment/llm", name: "llm", hpa: "", fixed: true, minimum: 4, maximum: 4, state: "ready",
+      history_h: 168, needs_h: 24, floor: 2, replicas: 1.75, saving: { cpu: 0.2, memory: GI }, gpu_saving: 3.5, cost: null },
+  ];
+  const floors_total = { workloads: 1, replicas: 1.75, saving: { cpu: 0.2, memory: GI }, gpus: 3.5, fixed: 1, cost: null };
+  answer({
+    "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]],
+    "/api/v1/contracts/demo-shop/workloads": [200, { ...DATA, currency: "USD", cost: { waste: 1, requests: 2 }, floors, floors_total }],
+  });
+  const { container: page } = render(<App />);
+  await screen.findByText("Autoscaled Workloads");
+  const line = page.querySelector(".floors > ul > li")?.textContent ?? "";
+  expect(line).toContain("Floor 2; no HPA scales it: it runs 4 replicas");
+  expect(line).toContain("1.75 replicas fewer on average, 0.20 cores, 1.00 GiB, 3.50 GPUs (with an autoscaler holding the Floor, such as KEDA)");
+  expect(line).not.toContain("its HPA");
+  expect(page.querySelector(".floors .total")?.textContent).toContain(
+    "Floors: 1 can run fewer replicas, 1.8 replicas fewer on average: 0.20 cores, 1.00 GiB, 3.50 GPUs",
+  );
+});

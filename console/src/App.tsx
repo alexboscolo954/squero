@@ -267,12 +267,18 @@ function Floors({ data, cluster, namespace }: { data: Workloads; cluster: string
       <h3>Autoscaled Workloads</h3>
       {total && total.workloads > 0 && (
         <p className="total">
-          Floors: {total.workloads} can lower their HPA minimum, {total.replicas.toFixed(1)} replicas fewer on average
+          Floors: {total.workloads}{" "}
+          {!total.fixed
+            ? "can lower their HPA minimum"
+            : total.fixed === total.workloads
+              ? "can run fewer replicas"
+              : "can lower their HPA minimum or run fewer replicas"}
+          , {total.replicas.toFixed(1)} replicas fewer on average
           {": "}
           <strong>
             {data.currency && total.cost != null
               ? money(total.cost, data.currency)
-              : `${cores(total.saving.cpu ?? 0)}, ${gib(total.saving.memory ?? 0)}`}
+              : `${cores(total.saving.cpu ?? 0)}, ${gib(total.saving.memory ?? 0)}${total.gpus ? `, ${total.gpus.toFixed(2)} GPUs` : ""}`}
           </strong>{" "}
           <span className="hint">(at their Sizings, on top of the waste)</span>
         </p>
@@ -291,14 +297,21 @@ function Floors({ data, cluster, namespace }: { data: Workloads; cluster: string
             {f.state === "learning" && `Floor learning (${f.history_h ?? 0} h of ${f.needs_h ?? 0} h of Needs)`}
             {f.state === "ready" && (
               <>
-                Floor <strong>{f.floor}</strong>; its HPA {f.hpa} has a minimum of {f.minimum}
-                {f.maximum != null && ` and a maximum of ${f.maximum}`}
+                Floor <strong>{f.floor}</strong>;{" "}
+                {f.fixed ? (
+                  `no HPA scales it: it runs ${f.minimum} replicas`
+                ) : (
+                  <>
+                    its HPA {f.hpa} has a minimum of {f.minimum}
+                    {f.maximum != null && ` and a maximum of ${f.maximum}`}
+                  </>
+                )}
                 {f.saving &&
                   `. At the Floor: ${f.replicas} ${f.replicas === 1 ? "replica" : "replicas"} fewer on average, ${
                     data.currency && f.cost != null
                       ? money(f.cost, data.currency)
-                      : `${cores(f.saving.cpu ?? 0)}, ${gib(f.saving.memory ?? 0)}`
-                  }`}{" "}
+                      : `${cores(f.saving.cpu ?? 0)}, ${gib(f.saving.memory ?? 0)}${f.gpu_saving ? `, ${f.gpu_saving.toFixed(2)} GPUs` : ""}`
+                  }${f.fixed ? " (with an autoscaler holding the Floor, such as KEDA)" : ""}`}{" "}
                 <span className="hint">
                   ({f.policy}: the lowest {Math.round(f.percentile * 100)}% of {f.history_h} h of Needs)
                 </span>
