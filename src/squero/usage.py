@@ -55,6 +55,27 @@ OPTIONAL = {
     "kube_pod_status_phase": "pods running, for waste (else counted from CPU samples)",
 }
 KSM = {m for m in (*REQUIRED, *OPTIONAL) if m.startswith("kube_")}
+# slice 17.1: what a GPU did, from NVIDIA's DCGM exporter, read only where a container
+# requests one. Each kind by its current name, then its older one, with what turns a
+# value into a share (0 to 1) or bytes.
+GPU_ENGINE = (("DCGM_FI_PROF_GR_ENGINE_UTIL_RATIO", 1.0), ("DCGM_FI_PROF_GR_ENGINE_ACTIVE", 1.0))
+GPU_UTIL = (("DCGM_FI_DEV_GPU_UTIL_RATIO", 1.0), ("DCGM_FI_DEV_GPU_UTIL", 0.01))  # a percent
+GPU_MEMORY = (("DCGM_FI_DEV_FB_USED_BYTES", 1.0), ("DCGM_FI_DEV_FB_USED", 2.0**20))  # MiB
+# Where a DCGM series has its pod's namespace, name and container: scraped without
+# honor_labels (the exporter chart's default) Prometheus renames them exported_*; the
+# exporter's old names; scraped with honor_labels. The last only when neither of the
+# others is there: `namespace` is then otherwise the exporter's own, and a Contract owning
+# its namespace would get every pod's GPUs.
+DCGM_PODS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
+    ("exported_namespace", "exported_pod", "exported_container", ()),
+    ("pod_namespace", "pod_name", "container_name", ()),
+    ("namespace", "pod", "container", ('exported_namespace=""', 'pod_namespace=""')),
+)
+HOUR = 3600
+# The requests that count GPUs: whole GPUs, time-sliced ones as the device plugin renames
+# them (shared), and MIG profiles (one instance each); not a sharing scheduler's memory or
+# core quantities (HAMi's nvidia.com/gpumem, gpucores), which aren't GPUs.
+GPU_REQUEST = re.compile(r"nvidia_com_(gpu|gpu_shared|mig_.+)")
 
 
 @dataclass(frozen=True)
@@ -107,10 +128,11 @@ def _any_of(values: list[str]) -> str:
     return _string("|".join(re.escape(v) for v in values))
 
 
-def selector(metric: str, t: Target, *extra: str) -> str:
+def selector(metric: str, t: Target, *extra: str, ns: str | None = None) -> str:
     """`metric{...}` limited to the Target's namespaces and labels: no other Contract's
-    or cluster's series can match."""
-    ns = t.ksm_namespace if metric.startswith("kube_") else "namespace"
+    or cluster's series can match. `ns`: the label that holds a pod's namespace, when
+    it isn't the usual one (DCGM's, slice 17.1)."""
+    ns = ns or (t.ksm_namespace if metric.startswith("kube_") else "namespace")
     matchers = [f"{ns}=~{_any_of(t.namespaces)}"]
     matchers += [f"{k}={_string(v)}" for k, v in sorted(t.labels.items())]
     return f"{metric}{{{','.join([*matchers, *extra])}}}"
@@ -361,6 +383,19 @@ def owners_from_api(
 
 
 @dataclass
+class Gpu:
+    """One GPU, or MIG instance, a container's pods were given in the window (slice 17.1)."""
+
+    node: str  # DCGM's Hostname
+    pod: str  # the pod last seen on it
+    busiest: float | None = None  # the busiest hour's mean busy share, 0 to 1
+    by: str | None = None  # "engine" (graphics engine active) where DCGM has it, else "util"
+    hours: set[float] = field(default_factory=set)  # the hours with a sample of `by`
+    memory: float | None = None  # peak framebuffer used, bytes; shown, never judged
+    shared: bool = False  # a MIG instance or a virtual GPU: not this container's alone
+
+
+@dataclass
 class ContainerUsage:
     """One container of one Workload over the window, its pods' samples pooled."""
 
@@ -387,6 +422,12 @@ class ContainerUsage:
     # audit A9, a DaemonSet's: its CPU samples by node (a pod whose node isn't known by its
     # own name), so its CPU target is the busiest node's percentile
     nodes: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
+    # slice 17.1: GPUs a pod requests (the largest in the window, GPU_REQUEST's, so a MIG
+    # profile counts as one), whether as time-sliced ones, and each GPU its pods were given,
+    # by DCGM's id
+    gpus: float = 0.0
+    gpus_shared: bool = False
+    gpu: dict[str, Gpu] = field(default_factory=dict)
 
 
 @dataclass
@@ -394,6 +435,7 @@ class Usage:
     rows: list[ContainerUsage]
     unknown: list[str]  # namespace/pod with usage but no Workload
     fallback_error: str | None = None  # why the Kubernetes API couldn't fill the gaps
+    gpu_note: str | None = None  # slice 17.1: GPU use not read, or missing for some
 
 
 def usage(
@@ -476,6 +518,11 @@ def usage(
             for s in at_end(f"last_over_time({selector(metric, t)}[{span}])"):
                 m = s["metric"]
                 res = m.get("resource")
+                if into == "requests" and GPU_REQUEST.fullmatch(res or ""):  # slice 17.1
+                    if gpu_hit := _known(rows, owners, m):
+                        gpu_hit.gpus = max(gpu_hit.gpus, float(s["value"][1]))
+                        gpu_hit.gpus_shared |= res == "nvidia_com_gpu_shared"
+                    continue
                 if res not in ("cpu", "memory") or not (hit := _known(rows, owners, m)):
                     continue
                 pod = (label(m, "namespace"), label(m, "pod"))
@@ -560,7 +607,61 @@ def usage(
         for (w, _), r in rows.items():
             r.labels = newest.get(w, {})
     unknown = sorted(f"{n}/{p}" for n, p in pods - owners.keys())
-    return Usage(list(rows.values()), unknown, error)
+    return Usage(list(rows.values()), unknown, error, gpus(prom, t, start, end, rows, owners))
+
+
+def gpus(
+    prom: Prom,
+    t: Target,
+    start: float,
+    end: float,
+    rows: dict[tuple[Workload, str], ContainerUsage],
+    owners: dict[tuple[str, str], Workload],
+) -> str | None:
+    """Each GPU-requesting container's GPUs (slice 17.1), from DCGM's hourly means:
+    the busiest hour's busy share, by the graphics engine where DCGM has it, else by GPU
+    utilization, and the peak memory used. Nothing is asked of a cluster where no
+    container requests a GPU. A series counts only for a pod of the Contract's that
+    requests one. Returns why GPU use wasn't read, or for how many it is missing; a
+    failed read costs only that, never the Sizings."""
+    if not any(r.gpus for r in rows.values()):
+        return None
+    try:
+        for kind, names in (("engine", GPU_ENGINE), ("util", GPU_UTIL), ("memory", GPU_MEMORY)):
+            how = "max" if kind == "memory" else "avg"
+            for (metric, scale), (ns, pod, container, extra) in itertools.product(names, DCGM_PODS):
+                sel = selector(metric, t, *extra, ns=ns)
+                for s in prom.range(f"{how}_over_time({sel}[{HOUR}s])", start, end, HOUR):
+                    m = s["metric"]
+                    w = owners.get((m.get(ns, ""), m.get(pod, "")))
+                    r = rows.get((w, m.get(container, ""))) if w else None
+                    values = [(float(at), float(v) * scale) for at, v in s["values"]]
+                    if r is None or not r.gpus or not values:
+                        continue
+                    mig = m.get("GPU_I_ID", "")
+                    key = (m.get("UUID") or f"{m.get('Hostname', '')}/{m.get('gpu', '')}") + (
+                        f"/{mig}" if mig else ""
+                    )
+                    g = r.gpu.setdefault(key, Gpu(m.get("Hostname", ""), m.get(pod, "")))
+                    g.shared = g.shared or r.gpus_shared or bool(mig or m.get("vgpu"))
+                    if kind == "memory":
+                        g.memory = max(g.memory or 0.0, max(v for _, v in values))
+                        continue
+                    if g.by == "engine" and kind == "util":  # the engine's is the finer
+                        continue
+                    if max(g.hours, default=0.0) <= values[-1][0]:
+                        g.pod = m.get(pod, "")
+                    g.by = kind
+                    g.busiest = max(g.busiest or 0.0, max(v for _, v in values))
+                    g.hours.update(at for at, _ in values)
+    except UsageError as e:
+        for r in rows.values():
+            r.gpu = {}
+        return f"GPU use not read: {e}"
+    blind = sum(1 for r in rows.values() if r.gpus and not any(g.by for g in r.gpu.values()))
+    if blind:
+        return f"no GPU use from DCGM for {blind} containers that request GPUs"
+    return None
 
 
 def _newest_labels(
@@ -1246,6 +1347,8 @@ def collect(
             out.notes.append(f"{c.id}/{t.cluster}: {level}: {metric} ({what})")
         if found.fallback_error:
             out.notes.append(f"{c.id}/{t.cluster}: Kubernetes API: {found.fallback_error}")
+        if found.gpu_note:
+            out.notes.append(f"{c.id}/{t.cluster}: {found.gpu_note}")
         if found.unknown:
             out.notes.append(f"{c.id}/{t.cluster}: no Workload for {len(found.unknown)} pods")
     return out

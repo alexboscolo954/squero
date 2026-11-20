@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from kubernetes import client as k
 from pydantic import SecretStr, ValidationError
@@ -801,6 +802,58 @@ def test_sizing_usage_command(
     assert "missing: kube_pod_container_resource_requests" in err
 
 
+@pytest.mark.parametrize("as_json", [True, False])
+def test_sizing_usage_shows_a_containers_gpus(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], as_json: bool
+) -> None:
+    """Slice 17.1: GPUs a pod, and each GPU's busiest hour, memory and pod."""
+    from squero import cli
+
+    fake = FakePrometheus()
+    (p,) = deployment(fake, pods=1)
+    gpu_pod(fake, p)
+    dcgm(fake, "DCGM_FI_PROF_GR_ENGINE_UTIL_RATIO", [0.01, 0.03], p)
+    dcgm(fake, "DCGM_FI_DEV_FB_USED_BYTES", [2**30], p, GPU_I_ID="2")
+    data = make_contract().model_dump()
+    data["integrations"].append({"name": "prometheus", "url": "http://prometheus"})
+    monkeypatch.setattr(cli, "contract", lambda settings, cid: contracts.build(data))
+    monkeypatch.setattr(usage, "Prom", lambda t: _prom(fake, t))
+    args = ["sizing", "usage", "--contract", "acme", "--window", "1d"]
+    cli.main(args + (["--json"] if as_json else []))
+    out = capsys.readouterr().out
+    if as_json:
+        (row,) = __import__("json").loads(out)
+        assert row["gpus"] == 1
+        assert row["gpu"] == [
+            {
+                "id": "GPU-aaa",
+                "node": "gpu-node-1",
+                "pod": p,
+                "busiest": 0.03,
+                "by": "engine",
+                "hours": 2,
+                "memory_mib": None,
+                "shared": False,
+            },
+            {
+                "id": "GPU-aaa/2",
+                "node": "gpu-node-1",
+                "pod": p,
+                "busiest": None,
+                "by": None,
+                "hours": 0,
+                "memory_mib": 1024.0,
+                "shared": True,
+            },
+        ]
+    else:
+        assert "\n  1 GPUs a pod\n" in out
+        assert f"  GPU-aaa on gpu-node-1 ({p}): busiest hour 3% by engine over 2 h\n" in out
+        assert (
+            f"  GPU-aaa/2 on gpu-node-1 ({p}): no use read, memory peak 1024.0 MiB, shared" in out
+        )
+
+
 def test_sizing_usage_without_any_prometheus_says_so(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1016,3 +1069,264 @@ def test_sizing_show_command(
         "1024Mi -> 96Mi" in out
     )
     assert "test/shop/Deployment/fresh/app (production): learning (0.3 h of 24 h)" in out
+
+
+# --- GPUs (slice 17.1) -------------------------------------------------------------
+
+
+def gpu_pod(fake: FakePrometheus, pod: str, container: str = "app", ns: str = "shop") -> None:
+    """A pod's container that requests one GPU, with CPU samples so it has a row."""
+    cpu(fake, pod, [0.1, 0.1], container, ns)
+    fake.add(
+        "kube_pod_container_resource_requests",
+        1,
+        namespace=ns,
+        pod=pod,
+        container=container,
+        resource="nvidia_com_gpu",
+    )
+
+
+def dcgm(
+    fake: FakePrometheus, metric: str, values: list[float | None], pod: str, **labels: str
+) -> None:
+    """A DCGM series as the exporter chart's default scrape (no honor_labels) has it:
+    the pod's own labels renamed exported_*, `namespace` and `pod` the exporter's."""
+    where = {
+        "exported_namespace": "shop",
+        "exported_pod": pod,
+        "exported_container": "app",
+        "namespace": "gpu-operator",
+        "pod": "dcgm-exporter-x1",
+        "container": "exporter",
+        "UUID": "GPU-aaa",
+        "gpu": "0",
+        "Hostname": "gpu-node-1",
+    }
+    fake.add(metric, values, **{**where, **labels})
+
+
+def test_a_gpu_is_its_busiest_hour_by_the_engine_with_its_memory_peak() -> None:
+    fake = FakePrometheus()
+    (a,) = deployment(fake, pods=1)
+    gpu_pod(fake, a)
+    cpu(fake, a, [0.1], container="sidecar")
+    dcgm(fake, "DCGM_FI_PROF_GR_ENGINE_UTIL_RATIO", [0.01, 0.03, 0.02], a)
+    dcgm(fake, "DCGM_FI_DEV_GPU_UTIL_RATIO", [0.9, 0.9, 0.9], a)  # the engine's wins
+    dcgm(fake, "DCGM_FI_DEV_FB_USED_BYTES", [1e9, 3e9, 2e9], a)
+    dcgm(fake, "DCGM_FI_PROF_GR_ENGINE_UTIL_RATIO", [0.5], a, exported_container="sidecar")
+    found = usage.usage(prom(fake), SHOP, DAY, end=DAY)
+    rows = {r.container: r for r in found.rows}
+    assert rows["app"].gpus == 1
+    g = rows["app"].gpu["GPU-aaa"]
+    assert (g.busiest, g.by, len(g.hours), g.memory) == (0.03, "engine", 3, 3e9)
+    assert (g.node, g.pod, g.shared) == ("gpu-node-1", a, False)
+    assert rows["sidecar"].gpus == 0 and rows["sidecar"].gpu == {}  # it requests none
+    assert found.gpu_note is None
+    q = next(q for q in fake.queries if "GR_ENGINE_UTIL_RATIO" in q and "exported_namespace=~" in q)
+    assert q.startswith("avg_over_time(") and q.endswith("[3600s])")
+
+
+def test_the_deprecated_percent_and_mib_with_the_exporters_old_label_names() -> None:
+    fake = FakePrometheus()
+    (a,) = deployment(fake, pods=1)
+    gpu_pod(fake, a)
+    old = {"pod_namespace": "shop", "pod_name": a, "container_name": "app"}
+    for metric, values in (
+        ("DCGM_FI_DEV_GPU_UTIL", [4.0, 50.0]),
+        ("DCGM_FI_DEV_FB_USED", [1024.0]),
+    ):
+        fake.add(metric, values, namespace="gpu-operator", pod="dcgm-x", UUID="GPU-b", **old)
+    g = usage.usage(prom(fake), SHOP, DAY, end=DAY).rows[0].gpu["GPU-b"]
+    assert (g.busiest, g.by, g.memory) == (0.5, "util", 2.0**30)
+
+
+def test_a_scrape_with_honor_labels_is_read_by_the_pods_own_labels() -> None:
+    fake = FakePrometheus()
+    (a,) = deployment(fake, pods=1)
+    gpu_pod(fake, a)
+    fake.add(
+        "DCGM_FI_DEV_GPU_UTIL_RATIO",
+        [0.2],
+        namespace="shop",
+        pod=a,
+        container="app",
+        Hostname="n1",
+        gpu="1",
+    )
+    g = usage.usage(prom(fake), SHOP, DAY, end=DAY).rows[0].gpu
+    assert g["n1/1"].busiest == 0.2  # no UUID: the node and DCGM's index
+
+
+def test_a_gpu_two_pods_had_in_turn_is_one_gpu_last_seen_on_the_later() -> None:
+    fake = FakePrometheus()
+    a, b = deployment(fake)
+    for p in (a, b):
+        gpu_pod(fake, p)
+    dcgm(fake, "DCGM_FI_DEV_GPU_UTIL_RATIO", [0.1, 0.2, None, None], b)
+    dcgm(fake, "DCGM_FI_DEV_GPU_UTIL_RATIO", [None, None, 0.3, 0.1], a)
+    (row,) = usage.usage(prom(fake), SHOP, DAY, end=DAY).rows
+    g = row.gpu["GPU-aaa"]
+    assert (g.busiest, len(g.hours), g.pod, g.shared) == (0.3, 4, a, False)
+
+
+@pytest.mark.parametrize("labels", [{"GPU_I_ID": "13", "GPU_I_PROFILE": "1g.5gb"}, {"vgpu": "1"}])
+def test_a_mig_instance_or_a_virtual_gpu_is_shared(labels: dict[str, str]) -> None:
+    fake = FakePrometheus()
+    (a,) = deployment(fake, pods=1)
+    gpu_pod(fake, a)
+    dcgm(fake, "DCGM_FI_DEV_GPU_UTIL_RATIO", [0.0], a, **labels)
+    (g,) = usage.usage(prom(fake), SHOP, DAY, end=DAY).rows[0].gpu.values()
+    assert g.shared
+
+
+@pytest.mark.parametrize(
+    ("resource", "gpus", "shared"),
+    [
+        ("nvidia_com_gpu", 1, False),
+        ("nvidia_com_gpu_shared", 1, True),  # time-sliced, renamed by the device plugin
+        ("nvidia_com_gpumem", 0, False),  # a sharing scheduler's memory: not a GPU
+        ("nvidia_com_gpucores", 0, False),
+    ],
+)
+def test_which_requests_count_gpus(resource: str, gpus: float, shared: bool) -> None:
+    fake = FakePrometheus()
+    (a,) = deployment(fake, pods=1)
+    cpu(fake, a, [0.1])
+    who = {"namespace": "shop", "pod": a, "container": "app"}
+    fake.add("kube_pod_container_resource_requests", 1, resource=resource, **who)
+    dcgm(fake, "DCGM_FI_DEV_GPU_UTIL_RATIO", [0.0], a)
+    (row,) = usage.usage(prom(fake), SHOP, DAY, end=DAY).rows
+    assert row.gpus == gpus and row.requests == {}
+    assert [g.shared for g in row.gpu.values()] == ([shared] if gpus else [])
+
+
+def test_the_engines_older_name_is_read() -> None:
+    fake = FakePrometheus()
+    (a,) = deployment(fake, pods=1)
+    gpu_pod(fake, a)
+    dcgm(fake, "DCGM_FI_PROF_GR_ENGINE_ACTIVE", [0.04], a)
+    dcgm(fake, "DCGM_FI_DEV_GPU_UTIL_RATIO", [0.9], a)
+    g = usage.usage(prom(fake), SHOP, DAY, end=DAY).rows[0].gpu["GPU-aaa"]
+    assert (g.busiest, g.by) == (0.04, "engine")
+
+
+def test_a_mig_instance_is_a_gpu_of_its_own() -> None:
+    fake = FakePrometheus()
+    (a,) = deployment(fake, pods=1)
+    gpu_pod(fake, a)
+    for mig in ("7", "8"):
+        dcgm(fake, "DCGM_FI_DEV_GPU_UTIL_RATIO", [0.0], a, GPU_I_ID=mig)
+    assert set(usage.usage(prom(fake), SHOP, DAY, end=DAY).rows[0].gpu) == {
+        "GPU-aaa/7",
+        "GPU-aaa/8",
+    }
+
+
+def test_no_dcgm_query_where_no_container_requests_a_gpu() -> None:
+    fake = FakePrometheus()
+    (a,) = deployment(fake, pods=1)
+    cpu(fake, a, [0.1])
+    dcgm(fake, "DCGM_FI_DEV_GPU_UTIL_RATIO", [0.5], a)
+    found = usage.usage(prom(fake), SHOP, DAY, end=DAY)
+    assert found.rows[0].gpu == {} and found.gpu_note is None
+    assert not any("DCGM" in q for q in fake.queries)
+
+
+def test_gpus_without_dcgm_are_said_missing() -> None:
+    fake = FakePrometheus()
+    a, b = deployment(fake)
+    for p in (a, b):
+        gpu_pod(fake, p)
+    dcgm(fake, "DCGM_FI_DEV_FB_USED_BYTES", [1e9], a)  # memory alone isn't use
+    found = usage.usage(prom(fake), SHOP, DAY, end=DAY)
+    assert found.gpu_note == "no GPU use from DCGM for 1 containers that request GPUs"
+
+
+def test_a_failed_dcgm_read_costs_only_the_gpus() -> None:
+    fake = FakePrometheus()
+    (a,) = deployment(fake, pods=1)
+    gpu_pod(fake, a)
+    dcgm(fake, "DCGM_FI_PROF_GR_ENGINE_UTIL_RATIO", [0.5], a)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "DCGM_FI_DEV" in request.url.params["query"]:
+            return httpx.Response(503, json={"status": "error", "error": "boom"})
+        return fake.handler(request)
+
+    http = httpx.Client(base_url="http://prometheus", transport=httpx.MockTransport(handler))
+    found = usage.usage(usage.Prom(SHOP, http), SHOP, DAY, end=DAY)
+    (row,) = found.rows
+    assert row.cpu and row.gpus == 1 and row.gpu == {}  # the engine's read, then dropped
+    assert found.gpu_note == "GPU use not read: Prometheus error 503: boom"
+
+
+@pytest.mark.parametrize("old_names", [False, True])
+def test_a_contract_owning_the_exporters_namespace_gets_no_other_pods_gpus(
+    old_names: bool,
+) -> None:
+    """Isolation: A's GPU series sit in the exporter's namespace (`namespace`), which B
+    owns; none of B's queries may return them, and B's own GPU pod gets only its own.
+    Both ways a scrape without honor_labels keeps the pod's own labels: exported_*, and
+    the exporter's old names."""
+    fake = FakePrometheus()
+    (a,) = deployment(fake, pods=1)
+    gpu_pod(fake, a)
+    if old_names:
+        old = {"pod_namespace": "shop", "pod_name": a, "container_name": "app"}
+        fake.add(
+            "DCGM_FI_DEV_GPU_UTIL_RATIO",
+            [0.9],
+            namespace="gpu-operator",
+            pod="dcgm-exporter-x1",
+            container="exporter",
+            UUID="GPU-aaa",
+            **old,
+        )
+    else:
+        dcgm(fake, "DCGM_FI_DEV_GPU_UTIL_RATIO", [0.9], a)
+    owner(fake, "dcgm-exporter-x1", "<none>", "", ns="gpu-operator")
+    gpu_pod(fake, "dcgm-exporter-x1", container="exporter", ns="gpu-operator")
+    b_target = Target("kind", "http://prometheus", None, {}, ["gpu-operator"])
+    fake.queries.clear()
+    found = usage.usage(usage.Prom(b_target, fake.client()), b_target, DAY, end=DAY)
+    assert all(r.gpu == {} for r in found.rows)
+    for q in (q for q in fake.queries if "DCGM" in q):
+        leaked = [
+            s
+            for s in fake.select(q)
+            if "shop" in (s.get("exported_namespace"), s.get("pod_namespace"))
+        ]
+        assert not leaked, q
+
+
+def test_a_mig_profiles_request_counts_as_gpus_and_memory_is_a_peak() -> None:
+    fake = FakePrometheus()
+    (a,) = deployment(fake, pods=1)
+    cpu(fake, a, [0.1])
+    fake.add(
+        "kube_pod_container_resource_requests",
+        2,
+        namespace="shop",
+        pod=a,
+        container="app",
+        resource="nvidia_com_mig_1g_5gb",
+    )
+    dcgm(fake, "DCGM_FI_DEV_FB_USED_BYTES", [1e9], a, GPU_I_ID="3")
+    (row,) = usage.usage(prom(fake), SHOP, DAY, end=DAY).rows
+    assert row.gpus == 2 and row.gpu["GPU-aaa/3"].memory == 1e9
+    assert any(q.startswith("max_over_time(DCGM_FI_DEV_FB_USED_BYTES{") for q in fake.queries)
+
+
+def test_the_cluster_is_read_and_its_gpu_note_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = make_contract(contract_id="acme").model_dump()
+    data["integrations"].append({"name": "prometheus", "url": "http://prometheus"})
+    c = contracts.build(data)
+    ns, cluster = c.clusters[0].namespaces[0], c.clusters[0].name
+    fake = FakePrometheus()
+    (a,) = deployment(fake, pods=1, ns=ns)
+    gpu_pod(fake, a, ns=ns)
+    monkeypatch.setattr(usage, "Prom", lambda t: _prom(fake, t))
+    found = usage.collect(c, [DAY], DAY)
+    assert found.clusters == {cluster: None}
+    assert f"acme/{cluster}: no GPU use from DCGM for 1 containers that request GPUs" in found.notes

@@ -136,13 +136,29 @@ def _name(cluster: str, r: usage.ContainerUsage) -> str:
     return f"{cluster}/{w.namespace}/{w.kind}/{w.name}/{r.container}"
 
 
+def _gpus(r: usage.ContainerUsage) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": key,
+            "node": g.node,
+            "pod": g.pod,
+            "busiest": None if g.busiest is None else round(g.busiest, 4),
+            "by": g.by,
+            "hours": len(g.hours),
+            "memory_mib": None if g.memory is None else round(g.memory / 2**20, 1),
+            "shared": g.shared,
+        }
+        for key, g in sorted(r.gpu.items())
+    ]
+
+
 def sizing_usage(contract_id: str, window: str, as_json: bool) -> int:
     """Every Workload container's usage over the window, per cluster, read-only: what
     Sizings are computed from (slice 9.1). Missing metrics are named, never guessed."""
     seconds = window_seconds(window)
     collected, status = collect_usage(contract(Settings(), contract_id), [seconds])
     found = collected.by_window[seconds]
-    out = [
+    out: list[dict[str, Any]] = [
         {
             "workload": _name(cluster, r),
             "pods": len(r.pods),
@@ -153,6 +169,7 @@ def sizing_usage(contract_id: str, window: str, as_json: bool) -> int:
             "limits": r.limits,
             "oom_killed_pods": r.oom_killed_pods,
             "throttled": None if r.throttled is None else round(r.throttled, 3),
+            **({"gpus": r.gpus, "gpu": _gpus(r)} if r.gpus else {}),  # slice 17.1
         }
         for cluster, r in found
     ]
@@ -165,6 +182,16 @@ def sizing_usage(contract_id: str, window: str, as_json: bool) -> int:
             f"{row['requests']}, OOM-killed pods {row['oom_killed_pods']}, throttled "
             f"{row['throttled']}"
         )
+        if "gpus" in row:
+            print(f"  {row['gpus']:g} GPUs a pod")
+        for g in row.get("gpu", []):
+            busy = "no use read" if g["busiest"] is None else f"busiest hour {g['busiest']:.0%}"
+            print(
+                f"  {g['id']} on {g['node']} ({g['pod']}): {busy}"
+                + (f" by {g['by']} over {g['hours']} h" if g["by"] else "")
+                + ("" if g["memory_mib"] is None else f", memory peak {g['memory_mib']} MiB")
+                + (", shared" if g["shared"] else "")
+            )
     return status
 
 
