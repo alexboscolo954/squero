@@ -77,6 +77,9 @@ HOUR = 3600
 # core quantities (HAMi's nvidia.com/gpumem, gpucores), which aren't GPUs.
 GPU_REQUEST = re.compile(r"nvidia_com_(gpu|gpu_shared|mig_.+)")
 GPU_PRODUCT = "nvidia.com/gpu.product"  # GPU Feature Discovery's node label (slice 17.5a)
+# slice 17.3: vLLM's own metrics, read where a container requests a GPU
+KV_CACHE = "vllm:kv_cache_usage_perc"  # a 0 to 1 share of its cache blocks, despite its name
+KV_CONFIG = "vllm:cache_config_info"  # 1, its labels gpu_memory_utilization, num_gpu_blocks
 
 
 @dataclass(frozen=True)
@@ -429,6 +432,9 @@ class ContainerUsage:
     gpus: float = 0.0
     gpus_shared: bool = False
     gpu: dict[str, Gpu] = field(default_factory=dict)
+    # slice 17.3, a vLLM container's: its KV cache's peak share, the hours read, and what
+    # vLLM reserves of the GPU and its cache blocks (from cache_config_info, None unread)
+    kv: dict[str, Any] | None = None
 
 
 @dataclass
@@ -608,7 +614,55 @@ def usage(
         for (w, _), r in rows.items():
             r.labels = newest.get(w, {})
     unknown = sorted(f"{n}/{p}" for n, p in pods - owners.keys())
-    return Usage(list(rows.values()), unknown, error, gpus(prom, t, start, end, rows, owners))
+    notes = [gpus(prom, t, start, end, rows, owners), kv_cache(prom, t, start, end, rows, owners)]
+    return Usage(list(rows.values()), unknown, error, "; ".join(n for n in notes if n) or None)
+
+
+def kv_cache(
+    prom: Prom,
+    t: Target,
+    start: float,
+    end: float,
+    rows: dict[tuple[Workload, str], ContainerUsage],
+    owners: dict[tuple[str, str], Workload],
+) -> str | None:
+    """Each vLLM container's KV cache (slice 17.3): the highest of the window's hourly
+    peaks, the hours read, and from vLLM's cache_config_info what it reserves of the GPU
+    and its cache blocks. Asked only where a container requests a GPU; a series counts for
+    a pod of the Contract's, its own container (by the `container` label) or the pod's one
+    container that requests a GPU. Returns why it wasn't read; a failed read costs only it."""
+    if not any(r.gpus for r in rows.values()):
+        return None
+
+    def row_of(m: dict[str, str]) -> ContainerUsage | None:
+        w = owners.get((m.get("namespace", ""), m.get("pod", "")))
+        if w is None:
+            return None
+        named = rows.get((w, m.get("container", "")))
+        if named is not None and named.gpus:
+            return named
+        asking = [r for (of, _), r in rows.items() if of == w and r.gpus]
+        return asking[0] if len(asking) == 1 else None
+
+    try:
+        peaks = prom.range(f"max_over_time({selector(KV_CACHE, t)}[{HOUR}s])", start, end, HOUR)
+        window = f"{max(HOUR, int(end - start))}s"
+        config = prom.instant(f"last_over_time({selector(KV_CONFIG, t)}[{window}])", end)
+    except UsageError as e:
+        return f"vLLM's KV cache not read: {e}"
+    for s in peaks:
+        hit = row_of(s["metric"])
+        values = [(float(at), float(v)) for at, v in s["values"]]
+        if hit is None or not values:
+            continue
+        kv = hit.kv = hit.kv or {"peak": 0.0, "hours": set(), "reserved": None, "blocks": None}
+        kv["peak"] = max(kv["peak"], max(v for _, v in values))
+        kv["hours"].update(at for at, _ in values)
+    for s in config:
+        if (hit := row_of(s["metric"])) is not None and hit.kv is not None:
+            hit.kv["reserved"] = s["metric"].get("gpu_memory_utilization") or None
+            hit.kv["blocks"] = s["metric"].get("num_gpu_blocks") or None
+    return None
 
 
 def gpus(

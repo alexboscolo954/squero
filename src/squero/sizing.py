@@ -64,6 +64,7 @@ RiskKind = Literal[
     "capped_by_policy",
     "request_unset",
     "needs_larger_node",  # slice 15.1a
+    "kv_cache_light",  # slice 17.3
 ]
 DERIVED = ("under_requested", "request_unset")  # the action says it: `sizing show` omits them
 
@@ -1007,6 +1008,8 @@ def rows(
                 waste[name] = max(0.0, current - res.target) * pods
             if s.state == "ready":
                 row["waste"] = waste
+            if (kv := u.kv) and len(kv["hours"]) * 3600 >= policy.history and kv["peak"] < KV_LIGHT:
+                risks.append(Risk("kv_cache_light", kv_text(kv)))  # slice 17.3
             row["risks"] = [r._asdict() for r in risks]
             if u.gpus:  # slice 17.2a
                 row["gpus"] = gpu_row(u, policy.history, window)
@@ -1460,6 +1463,19 @@ def money(value: float, currency: str) -> str:
 
 
 IDLE = 0.05  # an Idle GPU's busiest hour stays under this busy share (Phase 17's grill)
+KV_LIGHT = 0.5  # a vLLM KV cache that stays under this share of its blocks is light (17.3)
+
+
+def kv_text(kv: dict[str, Any]) -> str:
+    """The `kv_cache_light` Risk's text: what was used of the cache, what vLLM reserves,
+    and what that suggests; no new setting is computed, since the model's weights sit in
+    the reservation and no metric gives their size."""
+    blocks = f"its {int(kv['blocks']):,} blocks" if kv.get("blocks") else "its cache"
+    reserved = f", vLLM reserving {kv['reserved']} of the GPU" if kv.get("reserved") else ""
+    return (
+        f"the KV cache peaked at {kv['peak']:.0%} of {blocks} in the window{reserved}: a lower "
+        "gpu_memory_utilization or a smaller GPU or MIG slice would likely hold it"
+    )
 
 
 def gpu_row(u: ContainerUsage, needs_s: float, window_s: int) -> dict[str, Any]:
