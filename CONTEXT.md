@@ -212,6 +212,10 @@ How Sizings are computed: the percentile, the look-back window, headroom, minimu
 The requests above a Workload's Sizings, times its average pods: what the Sizings would free with headroom kept. A container that is learning, needs more, or is held by throttling or an OOM kill has none. Stored hourly with the Sizings and their risks. A DaemonSet's container whose Actuator applies its Sizings per instance type counts each type's pods against that type's own Sizing (a type still learning has none), and its requests cost what each type's pods ask.
 _Avoid_: Savings (that is waste priced, Phase 10), over-provisioning (for the number)
 
+**Idle GPU**:
+A GPU a container requests whose busiest hour in its Sizing policy's window stays under 5% busy (DCGM's graphics engine activity where the exporter has it, its GPU utilization otherwise); memory used is shown, never counted. Counted per GPU and grouped by Workload, with its cost; a GPU shared by time-slicing or a MIG instance is not judged. Reported only, never actuated. Not Waste: a GPU has no Sizing, so its cost is a line of its own beside Waste.
+_Avoid_: GPU waste, unused GPU (a GPU no container requests is a node's, Phase 17.5)
+
 **Automation**:
 The standing approval for one Workload: the Operator approves its Sizing policy once, in the contracts repo (`automate: true` on the rule that picks the policy, in a Contract whose cluster runs an Actuator), and the Actuator then applies its Sizings without asking: each run's newest, a change under 10% ignored, an increase at once, a decrease at most once a day per container. Three Rollbacks of the Workload in 7 days end it until the oldest of them is 7 days old; the Operator hears of it in Slack. A person stops it on one Workload with the pause annotation. Off by default.
 _Avoid_: Auto mode, Proposed action (a Sizing under Automation never pauses)
