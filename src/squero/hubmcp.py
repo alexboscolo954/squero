@@ -186,6 +186,7 @@ def _nodes(cl: webapp.ClusterNodes, top: int) -> dict[str, Any]:
                 **{"more_blockers": max(0, len(blockers) - MAX_BLOCKERS)},
             }
             | ({"restart": _restart(n.verdict.restart)} if n.verdict.restart else {})
+            | ({"gpus": n.gpus.model_dump()} if n.gpus else {})  # slice 17.5b
         )
     went = cl.could_go.model_dump(mode="json") if cl.could_go else None
     return {
@@ -198,7 +199,7 @@ def _nodes(cl: webapp.ClusterNodes, top: int) -> dict[str, Any]:
         **{"spot_candidates": cl.candidates.model_dump() if cl.candidates else None},
         **{"spot_workloads": _spotted(cl.spot_workloads) if cl.spot_workloads else None},
         **{"nodes": nodes, "more_nodes": max(0, len(listed) - top)},
-    }
+    } | ({"unrequested_gpus": cl.unrequested_gpus.model_dump()} if cl.unrequested_gpus else {})
 
 
 def _workload(w: webapp.Workload, approved: dict[str, Any]) -> dict[str, Any]:
@@ -553,6 +554,11 @@ def build(
         words only where it would undo something the client set on purpose.
         autoscaler_settings_to_check: the autoscaler's own settings that decide the same for
         the whole cluster, with their documented defaults; the Hub can't read the cluster's.
+        GPUs: a GPU node's gpus (allocatable, capacity, requested, product); a GPU pod moves
+        only to as many free GPUs of the same product (could_go's gpu_note when a node
+        doesn't say its product), and could_go's cost counts the GPUs at the cluster's GPU
+        price (none without one). unrequested_gpus: GPUs no pod asks for, how many nodes
+        have some and their monthly cost, apart from idle GPUs and waste.
         Nothing here removes a node or changes a cluster."""
         c = resolve(contract)
 

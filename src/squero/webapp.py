@@ -408,6 +408,8 @@ class NodePod(BaseModel):
     kind: str | None = None  # its controller's kind, "" for none (from slice 15.1c)
     containers: list[dict[str, Any]] = []  # each one's requests (from slice 15.4)
     workload: dict[str, str] | None = None  # kind and name, where its owners resolve
+    gpus: float | None = None  # the GPUs it asks (slice 17.5a)
+    gpus_unread: bool = False  # asks a time-sliced GPU or a MIG profile: it never moves
 
 
 class BlockerChange(BaseModel):
@@ -453,6 +455,15 @@ class Share(BaseModel):
     memory: float
 
 
+class NodeGpus(BaseModel):
+    """A GPU node's GPUs (slice 17.5a), apart from its cpu and memory."""
+
+    allocatable: float
+    capacity: float  # what it is priced at
+    requests: float  # of every pod on it
+    product: str | None = None  # GPU Feature Discovery's nvidia.com/gpu.product
+
+
 class Node(BaseModel):
     """A node and its Room (slice 15.1a)."""
 
@@ -474,6 +485,7 @@ class Node(BaseModel):
     mine: Share  # the Contract's pods
     others: Share  # not visible: pods outside its namespaces, never named
     own: list[NodePod]
+    gpus: NodeGpus | None = None  # None: no GPUs
 
 
 class CouldGo(BaseModel):
@@ -482,13 +494,23 @@ class CouldGo(BaseModel):
     nodes: list[str]
     cpu: float  # their capacity
     memory: float
-    cost: float | None = None  # a month of it, with a priced Contract
+    gpus: float | None = None  # their GPUs (slice 17.5a)
+    cost: float | None = None  # a month of it, with a priced Contract (and a GPU price)
 
 
 class Scenarios(BaseModel):
     now: CouldGo  # with today's requests
     after: CouldGo  # once the stored Sizings are applied
     note: str | None = None  # why none is counted (audit A3: its pods' needs not known)
+    gpu_note: str | None = None  # GPU pods placed by count alone (slice 17.5a)
+
+
+class UnrequestedGpus(BaseModel):
+    """Unrequested GPUs (slice 17.5a): on the cluster's nodes, asked by no pod."""
+
+    gpus: float
+    nodes: int  # with some
+    cost: float | None = None  # a month of them; None: no GPU price
 
 
 class PlacementShown(BaseModel):
@@ -570,6 +592,7 @@ class ClusterNodes(BaseModel):
     spot: SpotShown | None = None  # None: every node on-demand (slice 16.1a)
     candidates: Candidates | None = None  # None: its read can't say (slice 16.1c)
     spot_workloads: SpotWorkloads | None = None  # None: no Workload under a Spot ratio
+    unrequested_gpus: UnrequestedGpus | None = None  # None: no GPU node (slice 17.5a)
     problem: str | None = None  # why there are none
     largest: dict[str, float] | None = None  # the Room after DaemonSets that caps Sizings
     nodes: list[Node]

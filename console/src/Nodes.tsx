@@ -161,6 +161,8 @@ export function NodesPage({ contract }: { contract: string }) {
                         <strong>
                           {data.currency && went.cost != null ? money(went.cost, data.currency) : both(went)}
                         </strong>
+                        {went.gpus ? ` with ${went.gpus} GPUs` : ""}
+                        {data.currency && went.gpus && went.cost == null ? " (no GPU price: set gpu in its prices)" : ""}
                         .
                       </>
                     )}
@@ -168,10 +170,21 @@ export function NodesPage({ contract }: { contract: string }) {
                 );
               })}{" "}
               {c.could_go.note && <span className="hint"> None counted: {c.could_go.note}.</span>}{" "}
+              {c.could_go.gpu_note && <span className="notice"> {c.could_go.gpu_note}.</span>}{" "}
               <span className="hint">
                 An upper bound: tolerations and spread rules can't be seen. Not part of Savings.
                 {(c.judged.unknown ?? 0) > 0 && ` ${c.judged.unknown} of ${c.nodes.length} nodes not judged.`}
               </span>
+            </p>
+          )}
+          {c.unrequested_gpus && c.unrequested_gpus.gpus > 0 && (
+            <p className="could-go">
+              Unrequested GPUs:{" "}
+              <strong>
+                {c.unrequested_gpus.gpus} on {c.unrequested_gpus.nodes} nodes
+                {data.currency && c.unrequested_gpus.cost != null && `, ${money(c.unrequested_gpus.cost, data.currency)}`}
+              </strong>
+              . <span className="hint">No pod asks for them; apart from idle GPUs and waste. Not part of Savings.</span>
             </p>
           )}
           {c.problem ? (
@@ -195,6 +208,13 @@ export function NodesPage({ contract }: { contract: string }) {
                     <td>
                       {n.node} {n.type && <span className="hint">{n.type}</span>}{" "}
                       {n.cordoned && <span className="chip">cordoned</span>}{" "}
+                      {n.gpus && (
+                        <>
+                          <span className="chip">
+                            {n.gpus.requests} of {n.gpus.allocatable} GPUs asked{n.gpus.product ? `, ${n.gpus.product}` : ""}
+                          </span>{" "}
+                        </>
+                      )}
                       {n.spot && (
                         <>
                           <span className="chip">spot</span>{" "}

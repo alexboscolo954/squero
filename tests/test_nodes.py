@@ -700,6 +700,7 @@ def test_the_nodes_route_gives_the_contracts_own_clusters(
     assert (shown["cluster"], shown["at"], shown["autoscaler"]) == ("test", NOW, None)
     assert [n["node"] for n in shown["nodes"]] == ["n1", "n2"]
     sent = {k: v for k, v in ONE.items() if k != "pvc"}  # read for candidates, not shown
-    assert shown["nodes"][0]["own"][0] == {**API_1, "kind": "ReplicaSet", **sent}
+    no_gpus = {"gpus": None, "gpus_unread": False}  # slice 17.5b: a pod asking none
+    assert shown["nodes"][0]["own"][0] == {**API_1, "kind": "ReplicaSet", **sent, **no_gpus}
     assert shown["nodes"][0]["verdict"]["state"] == "unknown"
     assert shown["nodes"][0]["others"]["pods"] == 2 and "theirs" not in json.dumps(body)

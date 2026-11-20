@@ -1058,6 +1058,16 @@
                 "type": "null"
               }
             ]
+          },
+          "unrequested_gpus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UnrequestedGpus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1468,6 +1478,17 @@
           "cpu": {
             "title": "Cpu",
             "type": "number"
+          },
+          "gpus": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpus"
           },
           "memory": {
             "title": "Memory",
@@ -2902,6 +2923,16 @@
             "title": "Daemonsets",
             "type": "object"
           },
+          "gpus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeGpus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "mine": {
             "$ref": "#/components/schemas/Share"
           },
@@ -2991,6 +3022,41 @@
         "title": "Node",
         "type": "object"
       },
+      "NodeGpus": {
+        "description": "A GPU node's GPUs (slice 17.5a), apart from its cpu and memory.",
+        "properties": {
+          "allocatable": {
+            "title": "Allocatable",
+            "type": "number"
+          },
+          "capacity": {
+            "title": "Capacity",
+            "type": "number"
+          },
+          "product": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product"
+          },
+          "requests": {
+            "title": "Requests",
+            "type": "number"
+          }
+        },
+        "required": [
+          "allocatable",
+          "capacity",
+          "requests"
+        ],
+        "title": "NodeGpus",
+        "type": "object"
+      },
       "NodePod": {
         "properties": {
           "bound": {
@@ -3010,6 +3076,22 @@
           "cpu": {
             "title": "Cpu",
             "type": "number"
+          },
+          "gpus": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpus"
+          },
+          "gpus_unread": {
+            "default": false,
+            "title": "Gpus Unread",
+            "type": "boolean"
           },
           "kind": {
             "anyOf": [
@@ -3638,6 +3720,17 @@
         "properties": {
           "after": {
             "$ref": "#/components/schemas/CouldGo"
+          },
+          "gpu_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Note"
           },
           "note": {
             "anyOf": [
@@ -4329,6 +4422,36 @@
           "history_h"
         ],
         "title": "TypeSizing",
+        "type": "object"
+      },
+      "UnrequestedGpus": {
+        "description": "Unrequested GPUs (slice 17.5a): on the cluster's nodes, asked by no pod.",
+        "properties": {
+          "cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost"
+          },
+          "gpus": {
+            "title": "Gpus",
+            "type": "number"
+          },
+          "nodes": {
+            "title": "Nodes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "gpus",
+          "nodes"
+        ],
+        "title": "UnrequestedGpus",
         "type": "object"
       },
       "Usage": {

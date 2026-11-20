@@ -211,3 +211,45 @@ def test_the_digest_says_unrequested_gpus_only_when_there_are_some() -> None:
            "workloads": [], "learning": [], "excluded": []}  # fmt: skip
     digest = sizing.digest_text("acme", now, now, nodes=[{**u, "could_go": None}])
     assert "Unrequested GPUs: 3 on 2 nodes." in digest
+
+
+# --- the API, the console's Nodes page and the Hub MCP server (slice 17.5b) -----------
+
+
+def test_the_api_and_the_hub_mcp_say_a_contracts_gpu_nodes_and_never_anothers(
+    settings: Any, fake_cluster: Any, database_url: str
+) -> None:
+    """Isolation: acme's GPU node reaches its own Nodes page and `nodes`, never bank's."""
+    import asyncio
+
+    from squero.store import Store, connect
+    from tests.test_console import VIEW
+    from tests.test_hubmcp import call
+    from tests.test_hubmcp import hub as mcp_hub
+
+    g1 = gpu_box("g1", gpu_pod("g1-a"), gpus=4, product=T4)
+
+    async def seed() -> None:
+        async with connect(database_url) as pool:
+            s = Store(pool)
+            await s.migrate()
+            await s.save_rooms("acme", "test", NOW, read_of(g1, box("n1")))
+            await s.save_rooms("bank", "test", NOW, read_of(box("theirs")))
+
+    asyncio.run(seed())
+    with mcp_hub(settings, fake_cluster, database_url) as c:
+        acme = call(c, "list_contracts")[0]["id"]
+        mine, theirs = call(c, "nodes", contract=acme), call(c, "nodes", contract="bank")
+        page = c.get("/api/v1/contracts/acme/nodes", headers=VIEW).json()
+    (cluster,) = mine["clusters"]
+    assert cluster["unrequested_gpus"] == {"gpus": 3.0, "nodes": 1, "cost": None}
+    gpu_node = next(n for n in cluster["nodes"] if n.get("gpus"))
+    assert gpu_node["gpus"] == {"allocatable": 4.0, "capacity": 4.0, "requests": 1.0,
+                                "product": T4}  # fmt: skip
+    assert "gpus" not in next(n for n in cluster["nodes"] if n is not gpu_node)
+    (shown,) = page["clusters"]
+    assert shown["unrequested_gpus"]["gpus"] == 3.0
+    g = next(n for n in shown["nodes"] if n["node"] == "g1")
+    assert g["gpus"]["product"] == T4 and g["own"][0]["gpus"] == 1.0
+    (bank,) = theirs["clusters"]
+    assert "unrequested_gpus" not in bank and all("gpus" not in n for n in bank["nodes"])

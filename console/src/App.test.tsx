@@ -1322,3 +1322,36 @@ test("the Cost page says the idle GPUs beside the Savings (slice 17.2b)", async 
   render(<App />);
   expect((await screen.findByText("0.5 of 1 GPUs idle")).tagName).toBe("STRONG");
 });
+
+test("Nodes shows GPU nodes, their GPUs in what could go and the Unrequested GPUs (slice 17.5b)", async () => {
+  history.replaceState(null, "", "/app/?view=nodes");
+  const base = { type: "", taints: [], cordoned: false, daemonsets: { cpu: 0, memory: 0 }, pods: 1, bound: 0, allocatable: { cpu: 4, memory: 16 * GI },
+    requests: { cpu: 1, memory: GI }, room: { cpu: 3, memory: 15 * GI }, mine: { pods: 1, cpu: 1, memory: GI }, others: { pods: 0, cpu: 0, memory: 0 }, own: [],
+    verdict: { state: "clear", why: null, blockers: [] } };
+  const went = { nodes: ["g1"], cpu: 4, memory: 16 * GI, gpus: 1, cost: 1460 };
+  answer({
+    "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]],
+    "/api/v1/contracts/demo-shop/nodes": [
+      200,
+      { currency: "USD", clusters: [{ cluster: "kind", at: 1_700_000_000, autoscaler: "karpenter", problem: null, largest: null,
+        could_go: { now: went, after: { ...went, cost: null }, note: null, gpu_note: "GPU model not checked: 1 GPU nodes don't carry <b>it</b>" },
+        unrequested_gpus: { gpus: 3, nodes: 2, cost: 1095 },
+        rules: "Karpenter's rules", reported: 1_700_000_600, judged: { clear: 2, blocked: 0, unknown: 0 }, placement: null, spot: null,
+        nodes: [
+          { ...base, node: "g1", gpus: { allocatable: 4, capacity: 4, requests: 1, product: "Tesla-T4" } },
+          { ...base, node: "n1" },
+        ] }] },
+    ],
+  });
+  const { container: page } = render(<App />);
+  await screen.findByText("demo-shop: Nodes");
+  const could = page.querySelector(".could-go")?.textContent ?? "";
+  expect(could).toContain("Could go now: up to 1 (g1), 1,460.00 USD/month with 1 GPUs.");
+  expect(could).toContain("with 1 GPUs (no GPU price: set gpu in its prices).");
+  expect(could).toContain("GPU model not checked: 1 GPU nodes don't carry <b>it</b>.");
+  expect(page.querySelector(".could-go b")).toBeNull();
+  const unrequested = [...page.querySelectorAll(".could-go")].map((p) => p.textContent).find((t) => t?.startsWith("Unrequested"));
+  expect(unrequested).toContain("Unrequested GPUs: 3 on 2 nodes, 1,095.00 USD/month.");
+  const chips = [...page.querySelectorAll("tbody tr")].map((tr) => [...tr.querySelectorAll(".chip")].map((c) => c.textContent));
+  expect(chips).toEqual([["1 of 4 GPUs asked, Tesla-T4"], []]);
+});

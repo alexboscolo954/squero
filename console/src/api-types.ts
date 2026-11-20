@@ -812,6 +812,7 @@ export interface components {
             settings: string[];
             spot?: components["schemas"]["SpotShown"] | null;
             spot_workloads?: components["schemas"]["SpotWorkloads"] | null;
+            unrequested_gpus?: components["schemas"]["UnrequestedGpus"] | null;
         };
         /** ClusterStatus */
         ClusterStatus: {
@@ -942,6 +943,8 @@ export interface components {
             cost?: number | null;
             /** Cpu */
             cpu: number;
+            /** Gpus */
+            gpus?: number | null;
             /** Memory */
             memory: number;
             /** Nodes */
@@ -1413,6 +1416,7 @@ export interface components {
             daemonsets: {
                 [key: string]: number;
             };
+            gpus?: components["schemas"]["NodeGpus"] | null;
             mine: components["schemas"]["Share"];
             /** Node */
             node: string;
@@ -1447,6 +1451,20 @@ export interface components {
             type: string;
             verdict: components["schemas"]["Removal"];
         };
+        /**
+         * NodeGpus
+         * @description A GPU node's GPUs (slice 17.5a), apart from its cpu and memory.
+         */
+        NodeGpus: {
+            /** Allocatable */
+            allocatable: number;
+            /** Capacity */
+            capacity: number;
+            /** Product */
+            product?: string | null;
+            /** Requests */
+            requests: number;
+        };
         /** NodePod */
         NodePod: {
             /**
@@ -1463,6 +1481,13 @@ export interface components {
             }[];
             /** Cpu */
             cpu: number;
+            /** Gpus */
+            gpus?: number | null;
+            /**
+             * Gpus Unread
+             * @default false
+             */
+            gpus_unread: boolean;
             /** Kind */
             kind?: string | null;
             /** Memory */
@@ -1674,6 +1699,8 @@ export interface components {
         /** Scenarios */
         Scenarios: {
             after: components["schemas"]["CouldGo"];
+            /** Gpu Note */
+            gpu_note?: string | null;
             /** Note */
             note?: string | null;
             now: components["schemas"]["CouldGo"];
@@ -1923,6 +1950,18 @@ export interface components {
             state: "ready" | "learning";
             /** Type */
             type: string;
+        };
+        /**
+         * UnrequestedGpus
+         * @description Unrequested GPUs (slice 17.5a): on the cluster's nodes, asked by no pod.
+         */
+        UnrequestedGpus: {
+            /** Cost */
+            cost?: number | null;
+            /** Gpus */
+            gpus: number;
+            /** Nodes */
+            nodes: number;
         };
         /** Usage */
         Usage: {
