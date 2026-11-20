@@ -508,12 +508,21 @@ def _from_list(
     listed = fell = 0  # spot nodes at their spot list price, and at the discount
     spot_paid = spot_worth = 0.0  # what the spot nodes cost, and on demand at the deal
     fallback: list[str] = []  # why a spot node had no spot list price
+    # slice 17.2c: with nodes with GPUs and nodes without, the CPU and memory rates and the
+    # spot shares are the GPU-less nodes'; what a GPU node costs above its CPU and memory
+    # at those rates is its GPUs'. With GPUs on every node nothing sets those rates apart.
+    # GCP's list price is the cores and RAM alone (GPUs are SKUs of their own), so there its
+    # GPU nodes are split like any other and their GPUs stay unpriced
+    has_gpus = [bool(n.get("gpus")) and n["provider"] != "gcp" for n in facts["nodes"]]
+    on_gcp = any(n.get("gpus") and n["provider"] == "gcp" for n in facts["nodes"])
+    split = any(has_gpus) and not all(has_gpus)
+    gpu_nodes: list[tuple[dict[str, Any], float, bool]] = []  # node, paid, on spot
     for n in facts["nodes"]:
         row = rows.get((n["provider"], n["region"], n["type"]))
         if row is None or row["hour_price"] is None:
             why = f" ({row['error']})" if row and row["error"] else " (looked up daily)"
             return f"no list price yet for {n['provider']} {n['type']} in {n['region']}{why}"
-        on_spot = priced and cluster.spot is not None and n.get("spot")
+        on_spot = bool(priced and cluster.spot is not None and n.get("spot"))
         paid = row["hour_price"] * deal
         if on_spot and cluster.spot is not None:
             spot = (spot_rows or {}).get((n["provider"], n["region"], n["type"]))
@@ -527,16 +536,20 @@ def _from_list(
                     if spot and spot["error"]
                     else "no spot list price yet: looked up daily"
                 )
+        oldest = min(oldest, row["ok_at"])
+        shapes[f"{n['provider']} {n['type']} in {n['region']}"] = (
+            shapes.get(f"{n['provider']} {n['type']} in {n['region']}", 0) + 1
+        )
+        if split and n.get("gpus"):
+            gpu_nodes.append((n, paid, on_spot))
+            continue
+        if on_spot:
             spot_paid += paid
             spot_worth += row["hour_price"] * deal
         total += paid
         on_demand += row["hour_price"] * deal
         vcpu += n["vcpu"]
         gib += n["gib"]
-        oldest = min(oldest, row["ok_at"])
-        shapes[f"{n['provider']} {n['type']} in {n['region']}"] = (
-            shapes.get(f"{n['provider']} {n['type']} in {n['region']}", 0) + 1
-        )
     w = c.list_prices.weight
     memory = total / (w * vcpu + gib)
     age = (now - oldest) / HOUR
@@ -558,7 +571,30 @@ def _from_list(
     if spot_worth:  # the spot nodes' effective rate, list prices and discounts as applied
         against = spot_paid / spot_worth
     share = (total / on_demand, against) if cluster.spot and on_demand else None
-    return ClusterPrices(cpu=w * memory, memory=memory), note, share
+    gpu = None
+    if gpu_nodes:  # each GPU node's CPU and memory as the Bill check prices them, the rest
+        blend = share[0] if share else 1.0  # its GPUs'
+        rest = sum(
+            paid - (w * memory * n["vcpu"] + memory * n["gib"]) / blend * (against if s else 1.0)
+            for n, paid, s in gpu_nodes
+        )
+        gpus = sum(n["gpus"] for n, _, _ in gpu_nodes)
+        if rest > 0:
+            gpu = rest / gpus
+            note += f", {gpus:g} GPUs at {gpu:.4g} a GPU-hour"
+        else:  # ponytail: a GPU priced at 0 would read as free
+            note += (
+                ", GPUs unpriced: their nodes cost no more than their CPU and memory at the "
+                "other nodes' rates"
+            )
+    elif any(has_gpus):
+        note += (
+            ", GPUs unpriced: every node has GPUs, so none sets a CPU and memory rate apart "
+            "from them; type the cluster's prices in full (cpu, memory, gpu) to price them"
+        )
+    if on_gcp:
+        note += ", GPUs unpriced: GCP lists them apart from a machine's cores and RAM"
+    return ClusterPrices(cpu=w * memory, memory=memory, gpu=gpu), note, share
 
 
 async def effective(store: "Store", c: Contract, now: float) -> Contract:

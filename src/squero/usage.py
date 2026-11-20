@@ -778,7 +778,7 @@ def nodes(
             s["metric"].get("node", ""): float(s["value"][1])
             for s in read("kube_node_status_capacity", f"resource={_string(res)}")
         }
-        for res in ("cpu", "memory")
+        for res in ("cpu", "memory", "nvidia_com_gpu")  # GPUs: slice 17.2c
     }
     out, lacking = [], 0
     for name in sorted(info):
@@ -798,6 +798,8 @@ def nodes(
                 "vcpu": cpu or 0.0,
                 "gib": (memory or 0.0) / 2**30,
                 "spot": carries(have, spot),
+                # a GPU node's GPUs, so its list price can be split (slice 17.2c)
+                **({"gpus": g} if (g := capacity["nvidia_com_gpu"].get(name)) else {}),
             }
         )
     problem = None
@@ -836,6 +838,15 @@ def node_hours(
 
     (vcpu, sampled, _), (memory, _, days) = hours("cpu"), hours("memory")
     return vcpu, memory / 2**30, sampled, {d: v / 2**30 for d, v in days.items()}
+
+
+def gpu_hours(prom: Prom, t: Target, start: float, end: float) -> float:
+    """The GPU-hours of the cluster's nodes between `start` and `end` (slice 17.2c), from
+    kube-state-metrics' node capacity of nvidia.com/gpu, sampled as `node_hours` is."""
+    scoped = ",".join(f"{k}={_string(v)}" for k, v in sorted(t.labels.items()))
+    match = ",".join(filter(None, [scoped, 'resource="nvidia_com_gpu"']))
+    series = prom.range(f"sum(kube_node_status_capacity{{{match}}})", start, end, 3600)
+    return sum(float(v) for s in series for _, v in s["values"])
 
 
 def spot_hours(prom: Prom, t: Target, spot: str, start: float, end: float) -> tuple[float, float]:

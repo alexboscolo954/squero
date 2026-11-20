@@ -8,10 +8,12 @@ from typing import Any
 
 import pytest
 
-from squero import cli, contracts, listprices, sizing
+from squero import billing, cli, contracts, listprices, sizing
 from squero.servers.sizing import container as agent_view
 from squero.store import Store, connect
 from squero.usage import Gpu
+from tests.fake_prometheus import FakePrometheus
+from tests.test_billing import DAYS as DAYS_
 from tests.test_sizing_store import (
     NOW,
     WEEK,
@@ -333,3 +335,204 @@ def test_the_hub_mcp_server_and_the_api_say_idle_gpus_for_their_own_contract_onl
     (container,) = page["workloads"][0]["containers"]
     assert container["gpus"] == {"asked": 1.0, "gpus": [one]}
     assert page["gpus"]["text"] == page["workloads"][0]["gpus"]["text"] == "1 of 1 GPUs idle"
+
+
+# --- a GPU's price from list prices, and the Bill check (slice 17.2c) ------------------
+
+M5, G4 = ("aws", "us-east-1", "m5.large"), ("aws", "us-east-1", "g4dn.xlarge")
+LIST = {M5: 0.096, G4: 0.526}
+
+
+def node(kind: tuple[str, str, str], gpus: float = 0, spot: bool = False) -> dict[str, Any]:
+    vcpu, gib = (2.0, 8.0) if kind == M5 else (4.0, 16.0)
+    out = {"provider": kind[0], "region": kind[1], "type": kind[2], "vcpu": vcpu, "gib": gib}
+    return {**out, "spot": spot, **({"gpus": gpus} if gpus else {})}
+
+
+def listed(spot: dict[str, Any] | None = None) -> contracts.Contract:
+    data = prometheus_contract().model_dump()
+    data["list_prices"] = {}
+    data["clusters"][0] |= {"provider": "aws", **({"spot": spot} if spot else {})}
+    return contracts.build(data)
+
+
+def split(
+    *nodes: dict[str, Any],
+    c: contracts.Contract | None = None,
+    spot: dict[Any, float] | None = None,
+) -> Any:
+    c = c or listed()
+    rows = {k: {"hour_price": p, "error": None, "ok_at": NOW} for k, p in LIST.items()}
+    spots = {k: {"hour_price": p, "error": None, "ok_at": NOW} for k, p in (spot or {}).items()}
+    facts = {"nodes": list(nodes), "problem": None, "spot": "spot=true"}
+    return listprices._from_list(c, c.clusters[0], facts, rows, NOW, spots)
+
+
+def an_hour(prices: Any, share: Any, *nodes: dict[str, Any]) -> float:
+    """What the Bill check's estimate makes of an hour of these nodes."""
+    blend, against = share or (1.0, 1.0)
+    return sum(
+        (n["vcpu"] * prices.cpu + n["gib"] * prices.memory) / blend * (against if n["spot"] else 1)
+        + n.get("gpus", 0) * (prices.gpu or 0.0)
+        for n in nodes
+    )
+
+
+def test_node_facts_count_a_gpu_nodes_gpus() -> None:
+    from squero import usage
+    from tests.test_usage import _prom
+
+    fake = FakePrometheus()
+    for name, kind, gpus in (("m1", "m5.large", 0), ("g1", "g4dn.xlarge", 1)):
+        fake.add("kube_node_info", 1, node=name, provider_id=f"aws:///us-east-1a/{name}")
+        fake.add("kube_node_labels", 1, node=name, label_node_kubernetes_io_instance_type=kind,
+                 label_topology_kubernetes_io_region="us-east-1")  # fmt: skip
+        fake.add("kube_node_status_capacity", 4, node=name, resource="cpu")
+        fake.add("kube_node_status_capacity", 16 * 2**30, node=name, resource="memory")
+        if gpus:
+            fake.add("kube_node_status_capacity", gpus, node=name, resource="nvidia_com_gpu")
+    t = usage.Target("test", "http://prometheus", None, {}, ["shop"])
+    found = usage.nodes(_prom(fake, t), t, NOW)
+    assert {n["type"]: n.get("gpus") for n in found["nodes"]} == {
+        "m5.large": None,
+        "g4dn.xlarge": 1.0,
+    }
+
+
+def test_a_gpu_nodes_price_above_its_cpu_and_memory_is_its_gpus() -> None:
+    nodes = (node(M5), node(G4, gpus=1))
+    prices, note, share = split(*nodes)
+    memory = 0.096 / (7 * 2 + 8)  # the GPU-less node sets the rates
+    assert prices.memory == pytest.approx(memory) and prices.cpu == pytest.approx(7 * memory)
+    assert prices.gpu == pytest.approx(0.526 - (7 * 4 + 16) * memory)
+    assert note.endswith(f", 1 GPUs at {prices.gpu:.4g} a GPU-hour")
+    assert an_hour(prices, share, *nodes) == pytest.approx(0.096 + 0.526)  # adds back whole
+    plain, _, _ = split(node(M5))
+    assert plain.gpu is None and plain.memory == pytest.approx(memory)
+
+
+def test_with_spot_nodes_each_nodes_price_still_adds_back() -> None:
+    c = listed({"label": "spot=true", "discount": 0.3})
+    nodes = (node(M5), node(M5, spot=True), node(G4, gpus=1, spot=True), node(G4, gpus=1))
+    prices, _, share = split(*nodes, c=c)
+    paid = 0.096 + 0.096 * 0.3 + 0.526 * 0.3 + 0.526
+    assert share is not None and an_hour(prices, share, *nodes) == pytest.approx(paid)
+    # a GPU node's spot list price at another ratio than the m5's: the spot shares stay
+    # the GPU-less nodes', or the m5 on spot would be priced at the GPU's ratio
+    prices, _, share = split(*nodes, c=c, spot={G4: 0.2})
+    paid = 0.096 + 0.096 * 0.3 + 0.2 + 0.526
+    assert share is not None and an_hour(prices, share, *nodes) == pytest.approx(paid)
+    assert an_hour(prices, share, nodes[1]) == pytest.approx(0.096 * 0.3)
+
+
+def test_with_gpus_on_every_node_gpus_stay_unpriced_and_the_note_says_how() -> None:
+    prices, note, _ = split(node(G4, gpus=1), node(G4, gpus=1))
+    assert prices.gpu is None
+    assert prices.memory == pytest.approx(2 * 0.526 / (2 * (7 * 4 + 16)))  # as before 17.2c
+    assert "GPUs unpriced: every node has GPUs" in note and "(cpu, memory, gpu)" in note
+
+
+def test_a_gpu_node_no_dearer_than_its_cpu_and_memory_leaves_gpus_unpriced() -> None:
+    cheap = {**LIST}
+    LIST[G4] = 0.19  # under the 0.192 its CPU and memory cost at the m5's rates
+    try:
+        prices, note, _ = split(node(M5), node(G4, gpus=1))
+    finally:
+        LIST.update(cheap)
+    assert prices.gpu is None and "GPUs unpriced: their nodes cost no more" in note
+
+
+@pytest.mark.anyio
+async def test_the_bill_checks_estimate_adds_the_gpu_hours(store: Any) -> None:  # noqa: F811
+    from tests.test_billing import ESTIMATE, billed, prom_of, seed
+    from tests.test_billing import nodes as bill_nodes
+
+    for gpu, plus in ((None, 0.0), (0.5, 168 * 2 * 0.5)):
+        c = billed(prices={"cpu": 0.03, "memory": 0.004, **({"gpu": gpu} if gpu else {})})
+        fake = FakePrometheus()
+        bill_nodes(fake)
+        fake.add("kube_node_status_capacity", [2.0] * 168, node="n1", resource="nvidia_com_gpu")
+        await seed(store, c, dict.fromkeys(DAYS_, 2.2))
+        (got,) = await billing.report(store, c, NOW, 7, prom_of(fake))
+        assert got["estimated"] == pytest.approx(ESTIMATE + plus)
+        asked = any("nvidia_com_gpu" in q for q in fake.queries)
+        assert asked is (gpu is not None)  # no GPU price: not even read
+
+
+@pytest.mark.anyio
+async def test_a_list_priced_spot_cluster_with_a_gpu_node_reconciles_whole(
+    store: Any,  # noqa: F811
+) -> None:
+    """Through the stored node facts, effective() and the Bill check itself: an on-demand
+    m5, a spot m5 and an on-demand GPU node for a week cost their list prices exactly."""
+    from pydantic import SecretStr
+
+    from tests.test_billing import SECRET, billed, prom_of, seed
+
+    eks = "eks.amazonaws.com/capacityType=SPOT"
+    data = billed().model_dump()
+    data |= {"prices": None, "list_prices": {}}
+    data["clusters"][0] |= {"provider": "aws", "spot": {"label": eks, "discount": 0.3}}
+    c = contracts.build(data, secrets={"aws-key": SecretStr(SECRET)})
+    for key, p in LIST.items():
+        await store.put_list_price(key, p, None, NOW)
+    week = (node(M5), node(M5, spot=True), node(G4, gpus=1))
+    await store.save_nodes("acme", "test", NOW, {"nodes": list(week), "problem": None, "spot": eks})
+    fake = FakePrometheus()
+    for name, n in zip(("a", "b", "g"), week, strict=True):
+        fake.add("kube_node_status_capacity", [n["vcpu"]] * 168, node=name, resource="cpu")
+        fake.add("kube_node_status_capacity", [n["gib"] * 2**30] * 168, node=name,
+                 resource="memory")  # fmt: skip
+        spot = {"label_eks_amazonaws_com_capacity_type": "SPOT"} if n["spot"] else {}
+        fake.add("kube_node_labels", [1.0] * 168, node=name, **spot)
+    fake.add("kube_node_status_capacity", [1.0] * 168, node="g", resource="nvidia_com_gpu")
+    paid = 168 * (0.096 + 0.096 * 0.3 + 0.526)
+    await seed(store, c, dict.fromkeys(DAYS_, paid / 7))
+    (got,) = await billing.report(store, c, NOW, 7, prom_of(fake))
+    assert got["estimated"] == pytest.approx(paid) and got["within"] is True
+
+
+def test_gpu_hours_are_the_clusters_own() -> None:
+    """Isolation: two clusters on one store, told apart by their labels."""
+    from squero import usage
+    from tests.test_usage import _prom
+
+    fake = FakePrometheus()
+    for cluster, gpus in (("eu", 2.0), ("us", 8.0)):
+        fake.add("kube_node_status_capacity", [gpus] * 24, node="g", resource="nvidia_com_gpu",
+                 cluster=cluster)  # fmt: skip
+    for cluster, hours in (("eu", 48.0), ("us", 192.0)):
+        t = usage.Target(cluster, "http://prometheus", None, {"cluster": cluster}, ["shop"])
+        assert usage.gpu_hours(_prom(fake, t), t, NOW - 86400, NOW) == hours
+
+
+def test_gcp_gpus_stay_unpriced_and_out_of_its_bill_check() -> None:
+    gcp = ("gcp", "us-central1", "n1-standard-4")
+    LIST[gcp] = 0.19
+    try:
+        a = {**node(M5), "provider": "gcp", "region": "us-central1", "type": "n1-standard-4"}
+        prices, note, _ = split(node(M5), {**a, "gpus": 1.0}, a)
+    finally:
+        del LIST[gcp]
+    assert prices.gpu is None and "GCP lists them apart" in note
+
+
+@pytest.mark.anyio
+async def test_a_gcp_bill_check_leaves_gpu_hours_out(
+    store: Any,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GCP's bill is read as its core and RAM lines: its GPUs, lines apart, aren't in it."""
+    from tests.test_billing import ESTIMATE, billed, prom_of, seed
+    from tests.test_billing import nodes as bill_nodes
+
+    c = billed(prices={"cpu": 0.03, "memory": 0.004, "gpu": 0.5})
+    # read as GCP's (its bill already stored): built as AWS's, which needs no table
+    monkeypatch.setattr(contracts.Contract, "bill_provider", lambda self, cluster: "gcp")
+    fake = FakePrometheus()
+    bill_nodes(fake)
+    fake.add("kube_node_status_capacity", [2.0] * 168, node="n1", resource="nvidia_com_gpu")
+    await seed(store, c, dict.fromkeys(DAYS_, 2.2))
+    (got,) = await billing.report(store, c, NOW, 7, prom_of(fake))
+    assert got["estimated"] == pytest.approx(ESTIMATE)
+    assert not any("nvidia_com_gpu" in q for q in fake.queries)

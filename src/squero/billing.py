@@ -618,6 +618,13 @@ async def report(
                 if cl.spot
                 else (0.0, 0.0)
             )
+            # slice 17.2c: a GPU node's GPUs, so its price adds back whole; not on GCP,
+            # whose bill read here is the core and RAM lines (its GPUs are lines apart)
+            gpus = (
+                await asyncio.to_thread(usage.gpu_hours, prom(t), t, first, last)
+                if price.gpu is not None and c.bill_provider(cl) != "gcp"
+                else 0.0
+            )
         except usage.UsageError as e:
             row["note"] = f"the node-hours failed to read: {e}"
             continue
@@ -625,6 +632,8 @@ async def report(
         share, against = c._spot_shares.get(cl.name, (1.0, 1.0))
         on_spot = spot_cpu * price.cpu + spot_gib * price.memory
         row["estimated"] = (vcpu * price.cpu + gib * price.memory - (1 - against) * on_spot) / share
+        # ponytail: one GPU rate for spot and on-demand GPUs, the latest mix's
+        row["estimated"] += gpus * (price.gpu or 0.0)
         row["gap"] = gap(row["estimated"], row["billed"])
         row["within"] = row["gap"] is not None and abs(row["gap"]) <= TOLERANCE
         row["sampled"], row["coverage"] = sampled, min(sampled / row["hours"], 1.0)
