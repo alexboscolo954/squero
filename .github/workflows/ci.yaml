@@ -82,6 +82,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [lint-test, console, integration, hub-smoke]
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # ~5 normally; 0.63.0's arm64 npm ci under QEMU hung 75 minutes
     permissions:
       contents: read
       packages: write
