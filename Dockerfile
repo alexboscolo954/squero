@@ -70,8 +70,10 @@ RUN uv sync --locked --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --locked --no-dev --no-editable
 
-# The console app (console/, slice 9.5a): built here, only its static files ship.
-FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS console
+# The console app (console/, slice 9.5a): built here, only its static files ship. They are the
+# same for every architecture, so it builds on the runner's own (18.1d): arm64's npm ci under
+# QEMU hung 75 minutes in 0.63.0's tag run.
+FROM --platform=$BUILDPLATFORM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS console
 WORKDIR /console
 COPY console/package.json console/package-lock.json ./
 RUN npm ci --ignore-scripts --no-fund --no-audit
