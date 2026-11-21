@@ -4,5 +4,5 @@ description: The squero Relay and Actuator, in a client's cluster (Phase 18.1).
 type: application
 home: https://github.com/alexboscolo954/squero
 sources: [https://github.com/alexboscolo954/squero]   # helm push links the package to the repo
-version: 0.62.0
-appVersion: "0.62.0"
+version: 0.63.0
+appVersion: "0.63.0"
