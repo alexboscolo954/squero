@@ -34,7 +34,7 @@ What the Operator should look at now in one Contract, ranked without a model in 
 _Avoid_: Inbox, to-do, dashboard
 
 **Stale notice**:
-The Hub's own Slack post, in a Contract's operator channel, when one of its reads has failed for 3 hours without a break: a cluster's Sizing reads, a Relay that is offline, or a cluster's Bill reads, as the Agenda lists them. One thread per cluster and kind, with a reminder a day while it fails and a reply when it reads again. Claimed in Postgres, so it is posted once. A Contract without Slack has only the Agenda.
+The Hub's own Slack post, in a Contract's operator channel, when one of its reads has failed for 3 hours without a break: a cluster's Sizing reads, a Relay that is offline, or a cluster's Bill reads, as the Agenda lists them. One thread per cluster and kind, with a reminder a day while it fails and a reply when it reads again (a cluster taken out of the Contract ends quietly). Claimed in Postgres, so it is never posted twice. A Contract without Slack has only the Agenda.
 _Avoid_: Alert (that is what Alertmanager or Grafana sends the Hub), alarm
 
 **Proposed change**:

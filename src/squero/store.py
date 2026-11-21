@@ -1203,6 +1203,54 @@ class Store:
                 (contract_id, key, next_due),
             )
 
+    async def stale_notices(self, contract_id: str) -> list[dict[str, Any]]:
+        """A Contract's failing reads the Hub is following (audit A14), oldest first."""
+        return await self._all(
+            "select cluster, kind, since, ts, told_at from stale_notices "
+            "where contract_id = %s order by since, cluster, kind",
+            (contract_id,),
+        )
+
+    async def note_stale(self, contract_id: str, cluster: str, kind: str, since: float) -> None:
+        """A failing read first seen: kept with its `since` (an earlier one, when told, wins)."""
+        await self._exec(
+            "insert into stale_notices (contract_id, cluster, kind, since) "
+            "values (%s, %s, %s, %s) on conflict (contract_id, cluster, kind) "
+            "do update set since = least(stale_notices.since, excluded.since)",
+            (contract_id, cluster, kind, since),
+        )
+
+    async def claim_stale(
+        self, contract_id: str, cluster: str, kind: str, at: float, due: float
+    ) -> bool:
+        """True once per telling: its `told_at` moves to `at` in the same statement that
+        finds it untold, or last told at or before `due`."""
+        row = await self._one(
+            "update stale_notices set told_at = %s where contract_id = %s and cluster = %s "
+            "and kind = %s and (told_at is null or told_at <= %s) returning cluster",
+            (at, contract_id, cluster, kind, due),
+        )
+        return row is not None
+
+    async def told_stale(
+        self, contract_id: str, cluster: str, kind: str, ts: str | None, told_at: float | None
+    ) -> None:
+        """After posting: its thread's ts (kept from the first), or a failed post undone."""
+        await self._exec(
+            "update stale_notices set ts = coalesce(ts, %s), told_at = %s "
+            "where contract_id = %s and cluster = %s and kind = %s",
+            (ts, told_at, contract_id, cluster, kind),
+        )
+
+    async def end_stale(self, contract_id: str, cluster: str, kind: str) -> bool:
+        """A read that works again: its row gone; True when this call removed it."""
+        row = await self._one(
+            "delete from stale_notices where contract_id = %s and cluster = %s and kind = %s "
+            "returning cluster",
+            (contract_id, cluster, kind),
+        )
+        return row is not None
+
     async def claim_digest(self, contract_id: str, at: float, next_due: float) -> bool:
         """True once per due time: its next due time moves to `next_due` (computed from
         now, so missed fire times post once) in the same statement that finds it due."""

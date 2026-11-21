@@ -54,6 +54,7 @@ from squero import (
     hubmcp,
     listprices,
     masking,
+    notices,
     proposals,
     related,
     relay,
@@ -88,6 +89,7 @@ from squero.store import Store, connect, now
 
 log = logging.getLogger("squero.api")
 CHECK_TICK = 30  # seconds between looks for due Checks
+NOTICE_EVERY = 600  # seconds between looks for Stale notices (audit A14)
 # Rollbacks told in Slack (slice 12.9c): a cluster's in one hour, the rest counted in one
 # line; and how long one Slack never took is still tried
 ROLLBACK_POSTS, TELL_FOR, LATE = 20, 7 * 86400, 600
@@ -300,6 +302,7 @@ def create_app(
             app.state.poll_deploys, app.state.due_deploys = poll_deploys, due_deploys
             app.state.due_sizings, app.state.due_digests = due_sizings, due_digests
             app.state.tell = tell
+            app.state.due_notices = due_notices  # for tests: one look at a given time
             if settings.slack_app_token:
                 spawn(db["slack"].listen(settings.slack_app_token, on_socket))
             try:
@@ -1319,10 +1322,27 @@ def create_app(
                 log.exception("sizing digest %s failed", cid)
         return posted
 
+    async def due_notices(at: float | None = None) -> None:
+        """Stale notices (audit A14) of every Contract with a Slack channel, while the Hub
+        has a bot token; one Contract failing stops none of the others."""
+        if not settings.slack_bot_token:
+            return
+        at = now() if at is None else at
+
+        async def post(channel: str, text: str, thread: str | None) -> str | None:
+            ts: str | None = await db["slack"].post(channel, text, thread_ts=thread)
+            return ts
+
+        for cid, c in by_id.items():
+            try:
+                await notices.tick(store(), c, at, post, settings.console_url)
+            except Exception:
+                log.exception("stale notices %s failed", cid)
+
     sizing_task: list[asyncio.Task[Any]] = []
 
     async def scheduler() -> None:
-        polled = 0.0
+        polled = noticed = 0.0
         while True:
             await asyncio.sleep(CHECK_TICK)
             if not sizing_task or sizing_task[0].done():  # a slow Prometheus never overlaps
@@ -1330,6 +1350,9 @@ def create_app(
             try:
                 await due_checks()
                 await due_digests()
+                if time.monotonic() - noticed >= NOTICE_EVERY:
+                    noticed = time.monotonic()
+                    await due_notices()
                 if not telling.locked():  # beside the tick, never in it: Slack may be slow
                     spawn(tell())  # Rollbacks Slack didn't take when they arrived (12.9c)
                 if time.monotonic() - polled >= deploys.POLL_SECONDS:

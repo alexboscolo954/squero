@@ -96,6 +96,8 @@ src/squero/
                    from the Hub and resizes pods in place.
   blockers.py      Blockers (15.1b): the Actuator's report of the pods that may keep a node
                    from being removed, each autoscaler's rules, a node's verdict.
+  notices.py       Stale notices (audit A14): a read failing 3 hours, posted, reminded daily,
+                   closed when it reads again; the Agenda's source of failing reads too.
   billing.py       Cloud bills (AWS Cost Explorer, Azure Cost Management, GCP's BigQuery
                    billing export) vs the estimate.
   evals.py         Scenario replay and scoring.
@@ -136,7 +138,8 @@ examples/          Example inputs.
   at startup. Pending approvals survive restarts (Postgres checkpointer).
 - **The hourly tick** (`api.py` lifespan) stores Sizings, reads node facts, looks up list
   prices (daily per price), reads bills (daily per cluster; a failure is retried after an
-  hour), and sends digests. A failure in one Contract is logged and never stops the others.
+  hour), and sends digests; every 10 minutes it posts Stale notices of reads failing 3
+  hours. A failure in one Contract is logged and never stops the others.
 - **Optimizer money model.** Unit prices are per vCPU-hour and per GiB-hour, typed in the
   Contract or derived from cloud list prices (a node's price split by a weight so the two add
   back up exactly). The Bill check compares the cluster's node capacity-hours at those prices
@@ -150,7 +153,7 @@ examples/          Example inputs.
 Use the terms in `CONTEXT.md` exactly and do not invent synonyms: Contract, Operator,
 Integration, Hub, Alert, Alert group, Investigation, Triage, Question, Check, Report,
 Evidence, Runbook, Category, Recommendation, Proposed action, Approval decision, Executed
-action, Teaching, Workload, Sizing, Sizing policy, Waste, Idle GPU, Unrequested GPU, Automation, Actuator, Actuation, Revert, Reflex, Step-up, Startup boost, Burst, OOM kill, Need, Floor, Weekly profile, Backtest, Room, Blocker, Node that could go, Placement, Pinned node, Spot node, Spot ratio, On-demand minimum,
+action, Teaching, Workload, Sizing, Sizing policy, Waste, Idle GPU, Unrequested GPU, Stale notice, Automation, Actuator, Actuation, Revert, Reflex, Step-up, Startup boost, Burst, OOM kill, Need, Floor, Weekly profile, Backtest, Room, Blocker, Node that could go, Placement, Pinned node, Spot node, Spot ratio, On-demand minimum,
 List price, Bill, Savings, Scenario, Expectation. A *Sizing* is machine output for a
 Workload; a *Recommendation* is human advice in a Report, so do not mix them.
 

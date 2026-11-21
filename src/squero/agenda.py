@@ -14,7 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from squero import billing, relay, usage
+from squero import billing, notices
 from squero.contracts import Contract
 from squero.sizing import show
 from squero.store import Store
@@ -37,6 +37,12 @@ class Item(BaseModel):
 class Agenda(BaseModel):
     contract: str
     items: list[Item]
+
+
+def _stale_title(f: notices.Failing) -> str:
+    if f.kind == "relay":
+        return f"Relay {f.error}: the Hub can't read cluster {f.cluster}"
+    return f"{notices.WHAT[f.kind]} failing: {f.error}"
 
 
 async def of(st: Store, c: Contract, now: float) -> Agenda:
@@ -81,22 +87,9 @@ async def of(st: Store, c: Contract, now: float) -> Agenda:
             )
         )
     w = await webapp.workloads_of(st, c, now)
-    stale = [
-        Item(kind="stale", title=f"Sizing reads failing: {s.error}", at=s.since, cluster=k)
-        for k, s in w.clusters.items()
-        if s.error
-    ]
-    for cl in (cl for cl in c.clusters if cl.via == "relay"):  # slice 3.3b
-        ok, since, text = relay.HUB.state(c.id, cl.name)
-        if not ok:
-            title = f"Relay {text}: the Hub can't read cluster {cl.name}"
-            stale.append(Item(kind="stale", title=title, at=since, cluster=cl.name))
-    names = {t.cluster for t in usage.targets(c)}
-    _, tries = await st.bills(c.id)
-    stale += [
-        Item(kind="stale", title=f"Bill reads failing: {t['error']}", at=t["tried_at"], cluster=k)
-        for k, t in tries.items()
-        if t["error"] and k in names
+    stale = [  # the Stale notices' source too (audit A14), so both always agree
+        Item(kind="stale", title=_stale_title(f), at=f.at, cluster=f.cluster)
+        for f in await notices.failing(st, c)
     ]
     items += sorted(stale, key=lambda i: i.at or inf)
     bills = await billing.report(st, c, now, 7)
