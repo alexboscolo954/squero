@@ -1015,7 +1015,10 @@ def test_it_refuses_a_cluster_without_in_place_resize(minor: str, ok: bool) -> N
 
 
 def test_the_manifests_resize_pods_and_never_edit_a_deployment() -> None:
-    docs = list(yaml.safe_load_all((ROOT / "deploy/actuator/rbac.yaml").read_text()))
+    from tests.test_chart import ACTUATOR, render
+
+    every = render(relay={"enabled": False}, actuator=ACTUATOR)  # Phase 18.1a: the chart
+    docs = [d for d in every if d["kind"] in ("ClusterRole", "Role", "RoleBinding")]
     rules = [r for d in docs if d["kind"] in ("ClusterRole", "Role") for r in d["rules"]]
     writes = {
         (res, verb)
@@ -1046,11 +1049,12 @@ def test_the_manifests_resize_pods_and_never_edit_a_deployment() -> None:
     assert batch in rules  # slice 12.8c: read only
     webhook_rbac = next(r for r in rules if "mutatingwebhookconfigurations" in r["resources"])
     assert webhook_rbac["resourceNames"] == [actuator.WEBHOOK]
-    deploy, service = yaml.safe_load_all((ROOT / "deploy/actuator/deployment.yaml").read_text())
+    deploy = next(d for d in every if d["kind"] == "Deployment")
+    service = next(d for d in every if d["kind"] == "Service")
     assert deploy["spec"]["template"]["spec"]["enableServiceLinks"] is False
     assert service["metadata"]["name"] == actuator.WEBHOOK
     assert service["spec"]["ports"] == [{"name": "webhook", "port": 443, "targetPort": "webhook"}]
-    (hook,) = yaml.safe_load_all((ROOT / "deploy/actuator/webhook.yaml").read_text())
+    hook = next(d for d in every if d["kind"] == "MutatingWebhookConfiguration")
     (w,) = hook["webhooks"]
     assert (w["failurePolicy"], w["timeoutSeconds"], w["sideEffects"]) == ("Ignore", 2, "None")
     assert w["clientConfig"]["service"] == {

@@ -1,0 +1,165 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: squero-relay
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: squero-relay
+  namespace: squero-relay
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: squero-relay-actions
+  namespace: demo
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods/eviction
+  verbs:
+  - create
+- apiGroups:
+  - apps
+  resources:
+  - deployments/scale
+  verbs:
+  - get
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: squero-relay-read
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - pods/log
+  - events
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - replicasets
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: squero-relay-actions
+  namespace: demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: squero-relay-actions
+subjects:
+- kind: ServiceAccount
+  name: squero-relay
+  namespace: squero-relay
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: squero-relay-read
+  namespace: demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: squero-relay-read
+subjects:
+- kind: ServiceAccount
+  name: squero-relay
+  namespace: squero-relay
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: squero-relay
+  name: squero-relay
+  namespace: squero-relay
+spec:
+  ports:
+  - name: alerts
+    port: 8080
+    targetPort: alerts
+  selector:
+    app: squero-relay
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: squero-relay
+  name: squero-relay
+  namespace: squero-relay
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: squero-relay
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: squero-relay
+    spec:
+      automountServiceAccountToken: true
+      containers:
+      - args:
+        - relay
+        env:
+        - name: HOME
+          value: /tmp
+        - name: SQUERO_RELAY_HUB
+          value: wss://hub.example.com/relay
+        - name: SQUERO_RELAY_CLUSTER
+          value: demo
+        - name: SQUERO_RELAY_NAMESPACES
+          value: '["demo"]'
+        - name: SQUERO_RELAY_WRITES
+          value: "true"
+        envFrom:
+        - secretRef:
+            name: squero-relay
+        image: ghcr.io/alexboscolo954/squero:0.61.0
+        name: relay
+        ports:
+        - containerPort: 8080
+          name: alerts
+        resources:
+          limits:
+            memory: 256Mi
+          requests:
+            cpu: 50m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: squero-relay
+      volumes:
+      - emptyDir: {}
+        name: tmp

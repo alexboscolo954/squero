@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "squero chart values (Phase 18.1): a typo fails, as in a Contract; no token is ever a value",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "tag": {"type": "string"}
+      }
+    },
+    "namespaces": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+      "uniqueItems": true
+    },
+    "relay": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "namespace": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+        "hub": {"type": "string"},
+        "cluster": {"type": "string"},
+        "existingSecret": {"type": "string", "minLength": 1},
+        "prometheusUrl": {"type": "string"},
+        "writes": {"type": "boolean"},
+        "gitopsNamespaces": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+          "uniqueItems": true
+        },
+        "alertsPort": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "callSeconds": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "resources": {"type": "object"}
+      }
+    },
+    "actuator": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "namespace": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+        "hub": {"type": "string"},
+        "existingSecret": {"type": "string", "minLength": 1},
+        "interval": {"type": ["integer", "null"], "minimum": 1},
+        "nodes": {"type": "boolean"},
+        "nodeEvents": {"type": "boolean"},
+        "self": {"type": "boolean"},
+        "resources": {"type": "object"}
+      }
+    }
+  }
+}

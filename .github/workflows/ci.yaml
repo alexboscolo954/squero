@@ -17,6 +17,9 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.0
       - run: uv sync --locked
       - run: .github/install-sops.sh
+      - uses: azure/setup-helm@v4   # the tests render the chart (Phase 18.1a)
+        with:
+          version: v3.17.3
       - run: make lint
       - run: make test
 
@@ -39,6 +42,9 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.0
       - run: uv sync --locked
       - run: .github/install-sops.sh
+      - uses: azure/setup-helm@v4   # actuator-smoke installs the chart (Phase 18.1a)
+        with:
+          version: v3.17.3
       - uses: helm/kind-action@v1
         with:
           cluster_name: squero

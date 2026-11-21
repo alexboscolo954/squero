@@ -39,7 +39,7 @@ Read next, in this order when you need depth:
 ## 2. Setup and commands
 
 Tools: `uv`, Docker (a throwaway Postgres and kind), `sops` (the tests decrypt SOPS fixtures),
-`kubectl`/`kind`/`helm` for the demo only.
+`helm` (the tests render the chart, and fail without it), `kubectl`/`kind` for the demo only.
 
 ```bash
 uv sync --locked                      # install exactly what uv.lock pins
@@ -107,8 +107,10 @@ src/squero/
                    with snapshots/ of their tool schemas).
 tests/             pytest. conftest.py has make_contract(); fake_prometheus.py; fixtures/.
 evals/             scenarios/ (recorded tool outputs), results/ (committed runs), record_*.py.
-deploy/            base/ (kustomize), actions/ and gitops/ (RBAC overlays), hub/ (compose stack),
-                   relay/ and actuator/ (applied in a client's cluster).
+deploy/            base/ (kustomize), actions/ and gitops/ (RBAC overlays), hub/ (compose stack).
+charts/squero/     The Helm chart of what runs in a client's cluster: the Relay and the Actuator
+                   (Phase 18.1). tests/fixtures/rbac-0.61/ keeps what it replaced, as the
+                   reference its objects must equal.
 demo/              kind demo workloads, the lab (demo/lab), smoke scripts.
 console/           React app (Vite, TypeScript). Types are generated, not hand-written.
 docs/              roadmap.md, adr/, and the user guide (running-the-hub, contracts,
@@ -285,8 +287,8 @@ code, allowed environment variables, which are secrets), a snapshot of its tool 
   watch it with `gh run watch <id> --exit-status`.
 - **Release** (the owner asks for it; versions are `0.N.0`, patches `0.N.P`):
   1. Replace the old version in `pyproject.toml`, the `squero` entry in `uv.lock`,
-     `deploy/base/deployment.yaml`, `deploy/relay/deployment.yaml`,
-     `deploy/actuator/deployment.yaml`, `deploy/hub/compose.yaml`,
+     `deploy/base/deployment.yaml`, `charts/squero/Chart.yaml` (`version` and `appVersion`),
+     `deploy/hub/compose.yaml`,
      `deploy/hub/env.example` and `demo/deploy-smoke.sh` (`git grep -n 0.15.0` before and after to check).
   2. Commit `Version X.Y.Z: deploys and the Hub compose stack use the X.Y.Z image`.
   3. Push, tag `vX.Y.Z`, push the tag. The tag run builds and publishes the image

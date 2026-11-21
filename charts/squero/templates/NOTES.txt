@@ -1,0 +1,7 @@
+squero {{ .Chart.AppVersion }} in this cluster, for the Contract's namespaces {{ .Values.namespaces | toJson }}.
+{{- if .Values.relay.enabled }}
+Relay: namespace {{ .Values.relay.namespace }}, dialing {{ .Values.relay.hub }} as cluster {{ .Values.relay.cluster }}; its token from Secret {{ .Values.relay.existingSecret }}.
+{{- end }}
+{{- if .Values.actuator.enabled }}
+Actuator: namespace {{ .Values.actuator.namespace }}, pulling from {{ .Values.actuator.hub }}; its token from Secret {{ .Values.actuator.existingSecret }}.
+{{- end }}

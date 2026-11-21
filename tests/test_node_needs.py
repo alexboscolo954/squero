@@ -624,13 +624,9 @@ def test_the_actuator_reports_needs_when_its_hub_asks() -> None:
 
 
 def test_the_node_read_is_its_own_clusterrole_listing_nodes_and_nothing_else() -> None:
-    from pathlib import Path
+    from tests.test_chart import ACTUATOR, render
 
-    import yaml
-
-    docs = list(
-        yaml.safe_load_all((Path(__file__).parent.parent / "deploy/actuator/rbac.yaml").read_text())
-    )
+    docs = render(relay={"enabled": False}, actuator=ACTUATOR)  # Phase 18.1a: the chart
     (role,) = [
         d
         for d in docs

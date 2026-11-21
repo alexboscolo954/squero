@@ -1,0 +1,380 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: squero-actuator
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: squero-actuator
+  namespace: squero-actuator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: squero-actuator-node-events
+  namespace: default
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - get
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: squero-actuator-self
+  namespace: squero-actuator
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: squero-actuator-state
+  namespace: squero-actuator
+rules:
+- apiGroups:
+  - ""
+  resourceNames:
+  - squero-actuator
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - create
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: squero-actuator-nodes
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  verbs:
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: squero-actuator-resize
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - ""
+  resources:
+  - pods/resize
+  verbs:
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - pods/eviction
+  verbs:
+  - create
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - replicasets
+  - statefulsets
+  - daemonsets
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - argoproj.io
+  resources:
+  - rollouts
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - batch
+  resources:
+  - cronjobs
+  - jobs
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - ""
+  resources:
+  - limitranges
+  - resourcequotas
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - autoscaling
+  resources:
+  - horizontalpodautoscalers
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - autoscaling.k8s.io
+  resources:
+  - verticalpodautoscalers
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - get
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: squero-actuator-webhook
+rules:
+- apiGroups:
+  - admissionregistration.k8s.io
+  resourceNames:
+  - squero-actuator
+  resources:
+  - mutatingwebhookconfigurations
+  verbs:
+  - get
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: squero-actuator-node-events
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: squero-actuator-node-events
+subjects:
+- kind: ServiceAccount
+  name: squero-actuator
+  namespace: squero-actuator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: squero-actuator-resize
+  namespace: demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: squero-actuator-resize
+subjects:
+- kind: ServiceAccount
+  name: squero-actuator
+  namespace: squero-actuator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: squero-actuator-self
+  namespace: squero-actuator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: squero-actuator-self
+subjects:
+- kind: ServiceAccount
+  name: squero-actuator
+  namespace: squero-actuator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: squero-actuator-state
+  namespace: squero-actuator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: squero-actuator-state
+subjects:
+- kind: ServiceAccount
+  name: squero-actuator
+  namespace: squero-actuator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: squero-actuator-nodes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: squero-actuator-nodes
+subjects:
+- kind: ServiceAccount
+  name: squero-actuator
+  namespace: squero-actuator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: squero-actuator-webhook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: squero-actuator-webhook
+subjects:
+- kind: ServiceAccount
+  name: squero-actuator
+  namespace: squero-actuator
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: squero-actuator
+  name: squero-actuator
+  namespace: squero-actuator
+spec:
+  ports:
+  - name: webhook
+    port: 443
+    targetPort: webhook
+  selector:
+    app: squero-actuator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: squero-actuator
+  name: squero-actuator
+  namespace: squero-actuator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: squero-actuator
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict-local-volumes: tmp
+      labels:
+        app: squero-actuator
+    spec:
+      automountServiceAccountToken: true
+      containers:
+      - args:
+        - actuator
+        env:
+        - name: HOME
+          value: /tmp
+        - name: SQUERO_ACTUATOR_HUB
+          value: https://hub.example.com
+        - name: SQUERO_ACTUATOR_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: SQUERO_ACTUATOR_POD
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        envFrom:
+        - secretRef:
+            name: squero-actuator
+        image: ghcr.io/alexboscolo954/squero:0.61.0
+        name: actuator
+        ports:
+        - containerPort: 8443
+          name: webhook
+        resources:
+          limits:
+            memory: 256Mi
+          requests:
+            cpu: 20m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: squero-actuator
+      volumes:
+      - emptyDir: {}
+        name: tmp
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: squero-actuator
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: squero-actuator
+      namespace: squero-actuator
+      path: /mutate
+  failurePolicy: Ignore
+  name: pods.squero-actuator.io
+  namespaceSelector:
+    matchExpressions:
+    - key: kubernetes.io/metadata.name
+      operator: In
+      values:
+      - demo
+  reinvocationPolicy: Never
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - pods
+    scope: Namespaced
+  sideEffects: None
+  timeoutSeconds: 2

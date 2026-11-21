@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-# The Actuator's real image and shipped manifests on kind (slice 12.2): it starts, puts its
-# certificate in its own webhook, and a new pod of a Deployment it holds is created with
-# the held requests; scaled to zero, the webhook fails open and pods start from their
-# template. No Hub: it pulls in vain and keeps what its ConfigMap holds. Cleans up after.
+# The Actuator's real image and shipped chart on kind (slice 12.2; Phase 18.1a: installed
+# with Helm, its namespace and token Secret created first, as a client does): it starts,
+# puts its certificate in its own webhook, and a new pod of a Deployment it holds is
+# created with the held requests; a `helm upgrade` leaves that certificate in place; scaled
+# to zero, the webhook fails open and pods start from their template. No Hub: it pulls in
+# vain and keeps what its ConfigMap holds. Cleans up after.
 set -euo pipefail
 ctx=$1
 k() { kubectl --context "$ctx" "$@"; }
-manifests=$(kubectl kustomize deploy/actuator \
-  | sed -e 's#ghcr.io/alexboscolo954/squero:[0-9.]*#squero:ci#' \
-        -e 's/namespace: demo$/namespace: orders/' -e 's/^\( *\)- demo$/\1- orders/')
-trap 'k delete --ignore-not-found --wait=false -f - <<<"$manifests" >/dev/null' EXIT
-k apply -f - <<<"$manifests" >/dev/null
+release() {
+  helm --kube-context "$ctx" upgrade --install squero charts/squero -n squero-actuator \
+    --set relay.enabled=false --set actuator.enabled=true \
+    --set actuator.hub=https://hub.example.com --set 'namespaces={orders}' \
+    --set image.repository=squero --set image.tag=ci >/dev/null
+}
+trap 'helm --kube-context "$ctx" uninstall squero -n squero-actuator >/dev/null 2>&1 || true
+  k delete namespace squero-actuator --ignore-not-found --wait=false >/dev/null' EXIT
+k create namespace squero-actuator --dry-run=client -o yaml | k apply -f - >/dev/null
 k -n squero-actuator create secret generic squero-actuator \
   --from-literal=SQUERO_ACTUATOR_TOKEN=smoke-token-not-the-hubs-0123456789 \
   --dry-run=client -o yaml | k apply -f - >/dev/null
@@ -19,6 +25,7 @@ held='{"orders/Deployment/inventory/app": {"run_id": 1, "outcome": "applied", "a
   "requests": {"cpu": "37m"}, "template": {"cpu": "10m"}}}'
 k -n squero-actuator create configmap squero-actuator --from-literal=applied.json="$held" \
   --dry-run=client -o yaml | k apply -f - >/dev/null
+release
 k -n squero-actuator rollout status deploy/squero-actuator --timeout=3m
 for _ in $(seq 60); do
   ca=$(k get mutatingwebhookconfiguration squero-actuator -o jsonpath='{.webhooks[0].clientConfig.caBundle}')
@@ -27,6 +34,10 @@ for _ in $(seq 60); do
   sleep 2
 done
 [[ -n $ca ]] || { echo "the Actuator never put its certificate in its webhook"; exit 1; }
+release  # an upgrade that changes nothing of the pod: the certificate must stay
+after=$(k get mutatingwebhookconfiguration squero-actuator -o jsonpath='{.webhooks[0].clientConfig.caBundle}')
+[[ $after == "$ca" ]] || { echo "helm upgrade cleared the webhook's certificate: it would fail open"; exit 1; }
+echo "ok   a helm upgrade keeps the Actuator's certificate in its webhook"
 
 replaced_cpu() {  # inventory's pod replaced: the cpu its replacement was created with
   old=$(k -n orders get pods -l app=inventory -o jsonpath='{.items[0].metadata.name}')

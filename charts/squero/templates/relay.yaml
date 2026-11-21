@@ -1,0 +1,184 @@
+{{- if .Values.relay.enabled }}
+{{- include "squero.namespaces" . }}
+{{- $ns := .Values.relay.namespace }}
+# The Relay (Phase 3), in the client's cluster: it reads that cluster and dials the Hub;
+# nothing reaches it from outside the cluster (its Service takes the cluster's own
+# Alertmanager webhook). Read-only, bound per namespace with RoleBindings, so RBAC
+# enforces the same namespaces as SQUERO_RELAY_NAMESPACES. Secrets and ConfigMaps are
+# not readable.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: squero-relay
+  namespace: {{ $ns }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: squero-relay-read
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, events]
+    verbs: [get, list, watch]
+  - apiGroups: ["apps"]
+    resources: [deployments, replicasets]
+    verbs: [get, list, watch]
+{{- range .Values.namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: squero-relay-read
+  namespace: {{ . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: squero-relay-read
+subjects:
+  - kind: ServiceAccount
+    name: squero-relay
+    namespace: {{ $ns }}
+{{- end }}
+{{- if .Values.relay.writes }}
+{{- range .Values.namespaces }}
+---
+# The client's switch: the Hub's two write tools (evict a pod, scale a deployment), each
+# still approved by the Operator on the Hub. Deliberately NOT `patch deployments`: that
+# would let the agent change images and commands.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: squero-relay-actions
+  namespace: {{ . }}
+rules:
+  - apiGroups: [""]
+    resources: [pods/eviction]
+    verbs: [create]
+  - apiGroups: ["apps"]
+    resources: [deployments/scale]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: squero-relay-actions
+  namespace: {{ . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: squero-relay-actions
+subjects:
+  - kind: ServiceAccount
+    name: squero-relay
+    namespace: {{ $ns }}
+{{- end }}
+{{- end }}
+{{- range .Values.relay.gitopsNamespaces }}
+---
+# recent_changes reads Argo CD Applications and Flux Kustomizations and HelmReleases here:
+# every GitOps kind, so a 403 means a missing grant. Deliberately not secrets or
+# configmaps: argocd and flux-system hold cluster tokens and repo keys.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: squero-relay-gitops
+  namespace: {{ . }}
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: [applications]
+    verbs: [get, list]
+  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+    resources: [kustomizations]
+    verbs: [get, list]
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: [helmreleases]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: squero-relay-gitops
+  namespace: {{ . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: squero-relay-gitops
+subjects:
+  - kind: ServiceAccount
+    name: squero-relay
+    namespace: {{ $ns }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: squero-relay
+  namespace: {{ $ns }}
+  labels: {app: squero-relay}
+spec:
+  replicas: 1                 # one live connection per token: a second would replace the first
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: squero-relay}
+  template:
+    metadata:
+      labels: {app: squero-relay}
+    spec:
+      serviceAccountName: squero-relay
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: relay
+          image: {{ include "squero.image" . }}
+          args: [relay]
+          env:
+            - {name: HOME, value: /tmp}   # read-only root fs
+            - {name: SQUERO_RELAY_HUB, value: {{ required "relay.hub: the Hub's wss://<domain>/relay" .Values.relay.hub | quote }}}
+            - {name: SQUERO_RELAY_CLUSTER, value: {{ required "relay.cluster: the cluster's name in the Contract" .Values.relay.cluster | quote }}}
+            - {name: SQUERO_RELAY_NAMESPACES, value: {{ .Values.namespaces | toJson | quote }}}
+            {{- with .Values.relay.prometheusUrl }}
+            - {name: SQUERO_RELAY_PROMETHEUS_URL, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.relay.gitopsNamespaces }}
+            - {name: SQUERO_RELAY_GITOPS_NAMESPACES, value: {{ . | toJson | quote }}}
+            {{- end }}
+            {{- if ne (int .Values.relay.alertsPort) 8080 }}
+            - {name: SQUERO_RELAY_ALERTS_PORT, value: {{ .Values.relay.alertsPort | quote }}}
+            {{- end }}
+            {{- with .Values.relay.callSeconds }}
+            - {name: SQUERO_RELAY_CALL_SECONDS, value: {{ . | quote }}}
+            {{- end }}
+            {{- if .Values.relay.writes }}
+            - {name: SQUERO_RELAY_WRITES, value: "true"}
+            {{- end }}
+          envFrom:
+            - secretRef: {name: {{ .Values.relay.existingSecret }}}   # SQUERO_RELAY_TOKEN
+          ports:
+            - {name: alerts, containerPort: {{ .Values.relay.alertsPort }}}   # its Alertmanager receiver
+          resources: {{ .Values.relay.resources | toJson }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# The cluster's Alertmanager posts here (slice 3.4): POST /alertmanager with the
+# Contract's webhook token as its bearer credentials, as it would to the Hub.
+apiVersion: v1
+kind: Service
+metadata:
+  name: squero-relay
+  namespace: {{ $ns }}
+  labels: {app: squero-relay}
+spec:
+  selector: {app: squero-relay}
+  ports:
+    - {name: alerts, port: {{ .Values.relay.alertsPort }}, targetPort: alerts}
+{{- end }}

@@ -1,0 +1,42 @@
+# The squero Relay and Actuator in a client's cluster (Phase 18.1). Create their namespaces
+# and token Secrets first; the chart creates neither, so `helm uninstall` never deletes
+# the Actuator's ConfigMap (what it holds) or a token:
+#   kubectl create namespace squero-relay
+#   kubectl -n squero-relay create secret generic squero-relay --from-literal=SQUERO_RELAY_TOKEN=...
+# One release per cluster: its objects have fixed names the Hub and the code expect.
+
+image:
+  repository: ghcr.io/alexboscolo954/squero
+  tag: ""                     # the chart's appVersion when empty
+
+# The Contract's namespaces on this cluster: the RoleBindings, the Relay's
+# SQUERO_RELAY_NAMESPACES and the Actuator's webhook all take this one list.
+namespaces: []
+
+relay:
+  enabled: true
+  namespace: squero-relay     # create it first, with its token Secret
+  hub: ""                     # wss://<the Hub's domain>/relay
+  cluster: ""                 # the cluster's name in the Contract
+  existingSecret: squero-relay  # SQUERO_RELAY_TOKEN, and SQUERO_RELAY_PROMETHEUS_TOKEN if it has one
+  prometheusUrl: ""           # the cluster's Prometheus inside the client's network
+  writes: false               # the client's switch for evicting pods and scaling deployments
+  gitopsNamespaces: []        # where Argo CD or Flux objects live: read there, nothing else
+  alertsPort: 8080            # its Alertmanager receiver
+  callSeconds: null           # SQUERO_RELAY_CALL_SECONDS, when set
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 256Mi}
+
+actuator:
+  enabled: false
+  namespace: squero-actuator  # create it first, with its token Secret (never the Relay's)
+  hub: ""                     # https://<the Hub's domain>
+  existingSecret: squero-actuator  # SQUERO_ACTUATOR_TOKEN
+  interval: null              # SQUERO_ACTUATOR_INTERVAL (seconds between pulls), when set
+  nodes: true                 # audit A3: list nodes, for the labels its pods' placement needs
+  nodeEvents: true            # 13.1a: read Events in `default`, a node's OOM kills among them
+  self: true                  # audit A4: read its own pod by name
+  resources:
+    requests: {cpu: 20m, memory: 128Mi}
+    limits: {memory: 256Mi}

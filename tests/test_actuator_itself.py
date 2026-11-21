@@ -5,14 +5,12 @@ counts the pod on its node and moves it with the node's others."""
 
 import json
 import math
-from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
 import httpx
 import kubernetes.client as k
 import pytest
-import yaml
 from fastapi.testclient import TestClient
 from kubernetes.client.exceptions import ApiException
 
@@ -366,11 +364,16 @@ def test_its_settings_take_its_pods_name() -> None:
 
 # --- the manifests -----------------------------------------------------------------------
 
-DEPLOY = Path(__file__).parent.parent / "deploy/actuator"
+
+def chart() -> list[dict[str, Any]]:
+    """The Actuator's objects as the chart renders them (Phase 18.1a)."""
+    from tests.test_chart import ACTUATOR, render
+
+    return render(relay={"enabled": False}, actuator=ACTUATOR)
 
 
 def test_its_own_pod_is_read_by_a_role_of_its_own_namespace_getting_pods_only() -> None:
-    docs = list(yaml.safe_load_all((DEPLOY / "rbac.yaml").read_text()))
+    docs = chart()
     (role,) = [
         d for d in docs if d["kind"] == "Role" and d["metadata"]["name"] == "squero-actuator-self"
     ]
@@ -393,7 +396,7 @@ def test_its_own_pod_is_read_by_a_role_of_its_own_namespace_getting_pods_only() 
 
 
 def test_its_pod_knows_its_name_and_names_every_emptydir_safe() -> None:
-    (deploy, *_) = yaml.safe_load_all((DEPLOY / "deployment.yaml").read_text())
+    deploy = next(d for d in chart() if d["kind"] == "Deployment")
     template = deploy["spec"]["template"]
     (ctr,) = template["spec"]["containers"]
     named = {e["name"]: e.get("valueFrom") for e in ctr["env"]}

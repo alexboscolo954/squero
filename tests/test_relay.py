@@ -376,23 +376,29 @@ async def test_the_relay_dials_again_slower_each_time_and_fast_after_a_held_conn
 def test_the_relay_manifests_read_only_and_writes_only_in_the_overlay() -> None:
     import yaml
 
+    from tests.test_chart import RELAY, render
     from tests.test_shared import ROOT
 
-    docs = list(yaml.safe_load_all((ROOT / "deploy/relay/deployment.yaml").read_text()))
-    pod = docs[0]["spec"]["template"]["spec"]
+    every = render(relay=RELAY)  # Phase 18.1a: the chart
+    deploy = next(d for d in every if d["kind"] == "Deployment")
+    service = next(d for d in every if d["kind"] == "Service")
+    pod = deploy["spec"]["template"]["spec"]
     (container,) = pod["containers"]
     assert container["args"] == ["relay"]
     assert container["securityContext"]["readOnlyRootFilesystem"] is True
     assert "SQUERO_RELAY_WRITES" not in {e["name"] for e in container["env"]}
-    service = docs[1]  # the cluster's Alertmanager posts to its receiver (slice 3.4)
-    assert service["spec"]["selector"] == docs[0]["spec"]["selector"]["matchLabels"]
+    # the cluster's Alertmanager posts to its receiver (slice 3.4)
+    assert service["spec"]["selector"] == deploy["spec"]["selector"]["matchLabels"]
     assert [p["targetPort"] for p in service["spec"]["ports"]] == ["alerts"]
     assert container["ports"] == [{"name": "alerts", "containerPort": 8080}]
     hub = next(yaml.safe_load_all((ROOT / "deploy/base/deployment.yaml").read_text()))
     assert container["image"] == hub["spec"]["template"]["spec"]["containers"][0]["image"]
-    overlay = (ROOT / "deploy/relay-actions/kustomization.yaml").read_text()
-    assert "SQUERO_RELAY_WRITES" in overlay
-    rbac = (ROOT / "deploy/relay/rbac.yaml").read_text()
+    writing = render(relay={**RELAY, "writes": True})
+    (on,) = [d for d in writing if d["kind"] == "Deployment"]
+    assert {"name": "SQUERO_RELAY_WRITES", "value": "true"} in on["spec"]["template"]["spec"][
+        "containers"
+    ][0]["env"]
+    rbac = str([d for d in every if d["kind"] in ("ClusterRole", "Role")])
     assert "secrets" not in rbac and "patch" not in rbac
 
 
@@ -895,7 +901,7 @@ def test_health_shows_each_relay_and_probes_through_it(
     ("path", "account"),
     [
         ("deploy/gitops/rbac-gitops.yaml", ("squero", "squero")),
-        ("deploy/relay/rbac-gitops.yaml", ("squero-relay", "squero-relay")),
+        ("chart", ("squero-relay", "squero-relay")),  # Phase 18.1a: relay.gitopsNamespaces
     ],
 )
 def test_gitops_rbac_grants_every_kind_recent_changes_reads_in_each_namespace(
@@ -907,7 +913,18 @@ def test_gitops_rbac_grants_every_kind_recent_changes_reads_in_each_namespace(
 
     from tests.test_shared import ROOT
 
-    docs = list(yaml.safe_load_all((ROOT / path).read_text()))
+    if path == "chart":
+        from tests.test_chart import RELAY, render
+
+        gitops = render(relay={**RELAY, "gitopsNamespaces": ["argocd", "flux-system"]})
+        docs = [d for d in gitops if d["metadata"]["name"] == "squero-relay-gitops"]
+        assert (
+            not [  # opt-in: none without its namespaces
+                d for d in render(relay=RELAY) if d["metadata"]["name"] == "squero-relay-gitops"
+            ]
+        )
+    else:
+        docs = list(yaml.safe_load_all((ROOT / path).read_text()))
     subjects = [s for d in docs if d["kind"] == "RoleBinding" for s in d["subjects"]]
     assert subjects and all((s["name"], s["namespace"]) == account for s in subjects)
     wanted = {(group, plural) for group, _, plural in kubernetes.GITOPS}
@@ -919,8 +936,9 @@ def test_gitops_rbac_grants_every_kind_recent_changes_reads_in_each_namespace(
         }
         verbs = {v for rule in role["rules"] for v in rule["verbs"]}
         assert granted == wanted and verbs == {"get", "list"}, role["metadata"]["namespace"]
-    kustomization = (ROOT / path).parent / "kustomization.yaml"  # opt-in: never in a base
-    assert not kustomization.exists() or "rbac-gitops" not in kustomization.read_text()
+    if path != "chart":
+        kustomization = (ROOT / path).parent / "kustomization.yaml"  # opt-in: never in a base
+        assert not kustomization.exists() or "rbac-gitops" not in kustomization.read_text()
 
 
 # --- alerts through the Relay (slice 3.4) ----------------------------------------------
@@ -1118,12 +1136,10 @@ def test_the_relays_settings_survive_its_own_services_links(monkeypatch: Any) ->
     """Kubernetes gives each pod environment variables for every Service in its
     namespace: for the Relay's own Service (`squero-relay`) they share its prefix, and
     v0.32.0 read SQUERO_RELAY_PORT=tcp://... as its port and failed to start."""
-    import yaml
 
-    from tests.test_shared import ROOT
+    from tests.test_chart import RELAY, render
 
-    docs = list(yaml.safe_load_all((ROOT / "deploy/relay/deployment.yaml").read_text()))
-    service = next(d for d in docs if d["kind"] == "Service")
+    service = next(d for d in render(relay=RELAY) if d["kind"] == "Service")
     name = service["metadata"]["name"].upper().replace("-", "_")
     port = service["spec"]["ports"][0]["port"]
     links = {

@@ -1,0 +1,312 @@
+{{- if .Values.actuator.enabled }}
+{{- include "squero.namespaces" . }}
+{{- $ns := .Values.actuator.namespace }}
+# The Actuator (Phase 12), in the client's cluster: it pulls the Approved Sizings of its
+# Contract's cluster from the Hub and resizes pods in place. Its writes are pod resizes
+# (pods/resize: requests and limits only, never an image or a command), pod evictions
+# (pods/eviction, used only when the Contract turns eviction on, through the Eviction API so
+# PodDisruptionBudgets hold), Events, and its own ConfigMap. It never patches a workload:
+# it only reads them. Bound per namespace with RoleBindings: the Contract's namespaces.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: squero-actuator
+  namespace: {{ $ns }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: squero-actuator-resize
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods/resize]
+    verbs: [patch]
+  - apiGroups: [""]
+    resources: [pods/eviction]
+    verbs: [create]   # slice 12.7: only an Infeasible pod, in the Contract's windows
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create]
+  - apiGroups: ["apps"]
+    resources: [deployments, replicasets, statefulsets, daemonsets]
+    verbs: [get, list]
+  - apiGroups: [argoproj.io]
+    resources: [rollouts]
+    verbs: [get, list]   # slice 12.8b: none installed is none
+  - apiGroups: [batch]
+    resources: [cronjobs, jobs]
+    verbs: [get, list]   # slice 12.8c: a CronJob's template, and its runs to watch
+  # What would refuse or fight a resize (slice 12.3): read only.
+  - apiGroups: [""]
+    resources: [limitranges, resourcequotas]
+    verbs: [get, list]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list]
+  - apiGroups: [autoscaling.k8s.io]
+    resources: [verticalpodautoscalers]
+    verbs: [get, list]
+  # Before an eviction (slice 12.7): only a pod a PodDisruptionBudget covers is evicted.
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list]
+---
+# Its own webhook's caBundle, at each start: that one object only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: squero-actuator-webhook
+rules:
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [mutatingwebhookconfigurations]
+    resourceNames: [squero-actuator]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: squero-actuator-webhook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: squero-actuator-webhook
+subjects:
+  - kind: ServiceAccount
+    name: squero-actuator
+    namespace: {{ $ns }}
+{{- if .Values.actuator.nodes }}
+---
+# Audit A3 (actuator.nodes): the nodes' labels, so the Hub can tell where a pod that needs
+# a node label could move. It lists nodes, which hold more than labels; the Actuator sends
+# only the values of the label keys its pods name. Off: that cluster lists no node that
+# could go, and the Hub says why.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: squero-actuator-nodes
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: squero-actuator-nodes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: squero-actuator-nodes
+subjects:
+  - kind: ServiceAccount
+    name: squero-actuator
+    namespace: {{ $ns }}
+{{- end }}
+{{- range .Values.namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: squero-actuator-resize
+  namespace: {{ . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: squero-actuator-resize
+subjects:
+  - kind: ServiceAccount
+    name: squero-actuator
+    namespace: {{ $ns }}
+{{- end }}
+{{- if .Values.actuator.nodeEvents }}
+---
+# Slice 13.1a (actuator.nodeEvents), for the Contract's `reflexes.oom`: a Node's Events are
+# in `default`, and the kubelet's `SystemOOM` one there tells an OOM kill of a node out of
+# memory from one at a container's own limit. It reads every Event in `default`. Off: an
+# OOM kill of a container with a memory limit counts as container-limit.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: squero-actuator-node-events
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: squero-actuator-node-events
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: squero-actuator-node-events
+subjects:
+  - kind: ServiceAccount
+    name: squero-actuator
+    namespace: {{ $ns }}
+{{- end }}
+{{- if .Values.actuator.self }}
+---
+# Audit A4 (actuator.self): its own pod, read by name in its own namespace, so the Hub
+# counts it on its node with the rules any pod's go by. Off: its node is "unknown", one pod
+# there not visible.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: squero-actuator-self
+  namespace: {{ $ns }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: squero-actuator-self
+  namespace: {{ $ns }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: squero-actuator-self
+subjects:
+  - kind: ServiceAccount
+    name: squero-actuator
+    namespace: {{ $ns }}
+{{- end }}
+---
+# What it applied, in its own namespace: one ConfigMap, read and replaced by name.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: squero-actuator-state
+  namespace: {{ $ns }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [squero-actuator]
+    verbs: [get, update]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create]   # RBAC can't limit create by name
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create]   # on its ConfigMap: the Hub unreachable for 15 minutes (slice 12.5)
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: squero-actuator-state
+  namespace: {{ $ns }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: squero-actuator-state
+subjects:
+  - kind: ServiceAccount
+    name: squero-actuator
+    namespace: {{ $ns }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: squero-actuator
+  namespace: {{ $ns }}
+  labels: {app: squero-actuator}
+spec:
+  replicas: 1                 # one writer per cluster
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: squero-actuator}
+  template:
+    metadata:
+      labels: {app: squero-actuator}
+      annotations:
+        # its /tmp holds nothing to keep: Cluster Autoscaler may remove its node (audit A4)
+        cluster-autoscaler.kubernetes.io/safe-to-evict-local-volumes: tmp
+    spec:
+      serviceAccountName: squero-actuator
+      automountServiceAccountToken: true
+      enableServiceLinks: false   # a Service named squero-actuator would set SQUERO_ACTUATOR_PORT
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: actuator
+          image: {{ include "squero.image" . }}
+          args: [actuator]
+          env:
+            - {name: HOME, value: /tmp}   # read-only root fs
+            - {name: SQUERO_ACTUATOR_HUB, value: {{ required "actuator.hub: the Hub's https://<domain>" .Values.actuator.hub | quote }}}
+            - name: SQUERO_ACTUATOR_NAMESPACE   # where its ConfigMap lives
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - name: SQUERO_ACTUATOR_POD   # its own pod, reported so its node can be judged
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            {{- with .Values.actuator.interval }}
+            - {name: SQUERO_ACTUATOR_INTERVAL, value: {{ . | quote }}}
+            {{- end }}
+          envFrom:
+            - secretRef: {name: {{ .Values.actuator.existingSecret }}}   # SQUERO_ACTUATOR_TOKEN
+          ports:
+            - {name: webhook, containerPort: 8443}   # the API server calls it as new pods are created
+          resources: {{ .Values.actuator.resources | toJson }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# The API server reaches its webhook here; the Actuator's own certificate names this
+# Service (squero-actuator.<its namespace>.svc).
+apiVersion: v1
+kind: Service
+metadata:
+  name: squero-actuator
+  namespace: {{ $ns }}
+  labels: {app: squero-actuator}
+spec:
+  selector: {app: squero-actuator}
+  ports:
+    - {name: webhook, port: 443, targetPort: webhook}
+---
+# Its pod-creation webhook (slice 12.2): a new pod of a workload whose requests the
+# Actuator applied gets them too. It fails open: with the Actuator down or slow (2 s), the
+# API server creates the pod unchanged. Only the Contract's namespaces on this cluster,
+# never kube-* or the Actuator's own (it refuses those itself as well). The Actuator puts
+# its own certificate in caBundle when it starts: the chart never sets one.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: squero-actuator
+webhooks:
+  - name: pods.squero-actuator.io
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: Ignore
+    timeoutSeconds: 2
+    reinvocationPolicy: Never
+    clientConfig:
+      service: {name: squero-actuator, namespace: {{ $ns }}, path: /mutate}
+    rules:
+      - operations: [CREATE]
+        apiGroups: [""]
+        apiVersions: [v1]
+        resources: [pods]
+        scope: Namespaced
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values: {{ .Values.namespaces | toJson }}   # the Contract's namespaces, as the RoleBindings grant
+{{- end }}
