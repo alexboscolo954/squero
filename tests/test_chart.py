@@ -54,8 +54,11 @@ def keyed(docs: list[dict[str, Any]]) -> dict[tuple[str, str, str], dict[str, An
 
 
 def before(*names: str) -> dict[tuple[str, str, str], dict[str, Any]]:
-    """What the kustomize directories rendered, their Namespaces left out."""
-    docs = [d for n in names for d in yaml.safe_load_all((BEFORE / n).read_text()) if d]
+    """What the kustomize directories rendered, their Namespaces left out, their image at
+    this release's version (the chart's default, which a release moves)."""
+    version = yaml.safe_load((CHART / "Chart.yaml").read_text())["appVersion"]
+    texts = [(BEFORE / n).read_text().replace("squero:0.61.0", f"squero:{version}") for n in names]
+    docs = [d for t in texts for d in yaml.safe_load_all(t) if d]
     return {k: v for k, v in keyed(docs).items() if k[0] != "Namespace"}
 
 

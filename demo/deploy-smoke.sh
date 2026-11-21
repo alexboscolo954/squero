@@ -31,7 +31,7 @@ mkdir -p "$work/check/in-cluster"
 cp "$work/base/contract.yaml" "$work/base/secrets.sops.yaml" "$work/check/in-cluster/"
 SOPS_AGE_KEY_FILE=$agekey uv run squero contracts validate "$work/check"  # fails here, not as a rollout
 kubectl kustomize "$work/base" \
-  | sed 's#ghcr.io/alexboscolo954/squero:0.61.0#squero:ci#' \
+  | sed 's#ghcr.io/alexboscolo954/squero:0.62.0#squero:ci#' \
   | k apply -f -
 k -n squero rollout status deploy/squero --timeout=3m
 # kubectl itself, not the k() wrapper: $! must be kubectl's pid for the trap to stop it.
