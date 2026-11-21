@@ -16,7 +16,7 @@ import httpx
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
-from pydantic import Field, SecretStr
+from pydantic import Field
 
 from squero.servers import Access
 
@@ -43,23 +43,19 @@ def _num(v: str) -> float | str:
 
 
 def build_server(
-    stores: dict[str, tuple[str, SecretStr | None]],
+    stores: dict[str, tuple[str, httpx.Auth | None]],
     clustered: bool,
     http: dict[str, httpx.Client] | None = None,
     shared: list[str] | None = None,
     relayed: list[str] | None = None,
 ) -> FastMCP:
-    """stores: cluster -> (url, token); one under "" when not clustered (a Contract
+    """stores: cluster -> (url, auth: `usage.auth`); one under "" when not clustered (a Contract
     without clusters: no `cluster` argument). shared: the clusters left out, for the
     argument's description. relayed: clusters the model may name whose Prometheus the
     Hub reaches through their Relay (slice 3.3a). http: cluster -> client, for tests."""
     clients = http or {
-        name: httpx.Client(
-            base_url=url,
-            headers={"Authorization": f"Bearer {token.get_secret_value()}"} if token else {},
-            timeout=15,
-        )
-        for name, (url, token) in stores.items()
+        name: httpx.Client(base_url=url, auth=auth, timeout=15)
+        for name, (url, auth) in stores.items()
     }
     mcp = FastMCP("prometheus", instructions="Query metrics and alerts with PromQL.")
     names = sorted([*stores, *(relayed or [])])

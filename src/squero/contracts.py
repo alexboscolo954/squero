@@ -96,6 +96,7 @@ RELAY_HOLDS = (
     "allow_exec",
     "prometheus_url",
     "prometheus_token_secret",
+    "prometheus_user",
 )
 
 
@@ -151,6 +152,8 @@ class Cluster(Strict):
     # store shared by several clusters (Thanos, Mimir), added to every query.
     prometheus_url: str | None = None
     prometheus_token_secret: str | None = None
+    prometheus_auth: Literal["bearer", "basic"] = "bearer"  # how the token is sent (19.1a)
+    prometheus_user: str | None = None  # basic's user id (Grafana Cloud's), not a secret
     prometheus_labels: dict[Annotated[str, Field(pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")], str] = {}
     prices: ClusterPrices | None = None  # else the Contract's
     provider: Literal["aws", "azure", "gcp"] | None = None  # else read from kube_node_info
@@ -184,6 +187,7 @@ class Cluster(Strict):
             if not self.relay_token_secret:
                 raise ValueError("via: relay needs relay_token_secret")
             direct = [f for f in RELAY_HOLDS if getattr(self, f) not in (None, False, {})]
+            direct += ["prometheus_auth"] if self.prometheus_auth != "bearer" else []
             if direct:
                 raise ValueError(f"via: relay: the Relay holds these, not the Hub: {direct}")
             return self
@@ -191,6 +195,13 @@ class Cluster(Strict):
             raise ValueError("relay_token_secret is for via: relay")
         if self.prometheus_token_secret and not self.prometheus_url:
             raise ValueError("prometheus_token_secret needs prometheus_url")
+        auth_rules(
+            self.prometheus_auth,
+            self.prometheus_user,
+            self.prometheus_token_secret,
+            self.prometheus_url,
+            "prometheus_",
+        )
         if (
             self.in_cluster
             + (self.kubeconfig_file is not None)
@@ -203,6 +214,20 @@ class Cluster(Strict):
         return self
 
 
+def auth_rules(
+    auth: str, user: str | None, secret: str | None, url: str | None, p: str = ""
+) -> None:
+    """How a Prometheus's token is sent (19.1a): `bearer`, or `basic` with a user id
+    (Grafana Cloud), never over plain http. p: the cluster fields' prefix."""
+    if auth == "basic":
+        if not (user and secret):
+            raise ValueError(f"{p}auth: basic needs {p}user and {p}token_secret")
+        if not (url or "").startswith("https://"):
+            raise ValueError(f"{p}auth: basic needs an https:// {p}url: the password goes in clear")
+    elif user:
+        raise ValueError(f"{p}user is for {p}auth: basic")
+
+
 class Kubernetes(Strict):
     name: Literal["kubernetes"]
     enable_actions: bool = False
@@ -213,6 +238,13 @@ class Prometheus(Strict):
     name: Literal["prometheus"]
     url: str
     token_secret: str | None = None
+    auth: Literal["bearer", "basic"] = "bearer"  # how the token is sent (19.1a)
+    user: str | None = None  # basic's user id (Grafana Cloud's), not a secret
+
+    @model_validator(mode="after")
+    def _auth(self) -> "Prometheus":
+        auth_rules(self.auth, self.user, self.token_secret, self.url)
+        return self
 
 
 class Jira(Strict):

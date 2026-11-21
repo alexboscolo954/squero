@@ -17,7 +17,7 @@ import re
 import socket
 import time
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -95,6 +95,24 @@ class Target:
     # exported_namespace (its own namespace wins `namespace`); check() finds out.
     ksm_namespace: str = "namespace"
     relay: tuple[str, str] | None = None  # (contract, cluster): read through its Relay
+    user: str | None = None  # with the token: Basic auth (slice 19.1a), else Bearer
+
+
+class Bearer(httpx.Auth):
+    def __init__(self, token: SecretStr) -> None:
+        self.token = token
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+        request.headers["Authorization"] = f"Bearer {self.token.get_secret_value()}"
+        yield request
+
+
+def auth(token: SecretStr | None, user: str | None = None) -> httpx.Auth | None:
+    """How a Prometheus's token is sent (slice 19.1a): Basic with its user id (Grafana
+    Cloud), else Bearer; none without a token."""
+    if token is None:
+        return None
+    return httpx.BasicAuth(user, token.get_secret_value()) if user else Bearer(token)
 
 
 def targets(contract: Contract) -> list[Target]:
@@ -111,14 +129,16 @@ def targets(contract: Contract) -> list[Target]:
                 labels, spaces = dict(c.prometheus_labels), list(c.namespaces)
                 out.append(Target(c.name, "", None, labels, spaces, relay=where))
             continue
-        url, secret = (
-            (c.prometheus_url, c.prometheus_token_secret)
+        # the token and user from where the URL is: one store's never go to another
+        url, secret, user = (
+            (c.prometheus_url, c.prometheus_token_secret, c.prometheus_user)
             if c.prometheus_url
-            else ((shared.url, shared.token_secret) if shared else (None, None))
+            else ((shared.url, shared.token_secret, shared.user) if shared else (None, None, None))
         )
         if url:
             token = contract.secret(secret) if secret else None
-            out.append(Target(c.name, url, token, dict(c.prometheus_labels), list(c.namespaces)))
+            labels, spaces = dict(c.prometheus_labels), list(c.namespaces)
+            out.append(Target(c.name, url, token, labels, spaces, user=user))
     return out
 
 
@@ -147,8 +167,7 @@ class Prom:
 
     def __init__(self, t: Target, http: httpx.Client | None = None) -> None:
         if http is None:
-            auth = {"Authorization": f"Bearer {t.token.get_secret_value()}"} if t.token else {}
-            http = httpx.Client(base_url=t.url, headers=auth, timeout=30)
+            http = httpx.Client(base_url=t.url, auth=auth(t.token, t.user), timeout=30)
         self.http = http
 
     def _get(self, path: str, params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -228,9 +247,9 @@ def ask_stores(
 
     def who(ask: tuple[str, Target]) -> str | None:
         cid, t = ask
-        auth = {"Authorization": f"Bearer {t.token.get_secret_value()}"} if t.token else {}
         try:
-            r = client.get(f"{t.url.rstrip('/')}/api/v1/status/runtimeinfo", headers=auth)
+            url = f"{t.url.rstrip('/')}/api/v1/status/runtimeinfo"
+            r = client.get(url, auth=auth(t.token, t.user))
             r.raise_for_status()
             start = r.json()["data"]["startTime"]
             if not (isinstance(start, str) and start):

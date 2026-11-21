@@ -436,13 +436,18 @@ def integration_server(
         if contract.clusters:  # each cluster's own Prometheus, none on a shared store
             found = [t for t in usage.targets(contract) if t.relay is None]
             off = {t.cluster for t in found if t.labels} | contract.shared_stores
-            stores = {t.cluster: (t.url, t.token) for t in found if t.cluster not in off}
+            stores = {
+                t.cluster: (t.url, usage.auth(t.token, t.user))
+                for t in found
+                if t.cluster not in off
+            }
             shared = [t.cluster for t in found if t.cluster in off]
             relayed = [c.name for c in contract.clusters if c.via == "relay"]
             server = prometheus.build_server(stores, True, shared=shared, relayed=relayed)
             return server, prometheus.ACCESS
         token = contract.secret(integration.token_secret) if integration.token_secret else None
-        return prometheus.build_server({"": (integration.url, token)}, False), prometheus.ACCESS
+        store = {"": (integration.url, usage.auth(token, integration.user))}
+        return prometheus.build_server(store, False), prometheus.ACCESS
     if isinstance(integration, Runbooks):
         return runbooks.build_server(contract.runbook_dirs), runbooks.ACCESS
     if isinstance(integration, Jira):

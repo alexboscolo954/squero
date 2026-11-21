@@ -11,7 +11,7 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from pydantic import SecretStr
 
-from squero import agent, contracts
+from squero import agent, contracts, usage
 from squero.config import Settings
 from squero.servers import prometheus
 from tests.conftest import make_contract
@@ -47,6 +47,13 @@ THREE = {
 }
 
 
+def header(a: httpx.Auth | None) -> str | None:
+    """The Authorization header an auth puts on a request (slice 19.1a)."""
+    return (
+        next(a.auth_flow(httpx.Request("GET", "http://x"))).headers["authorization"] if a else None
+    )
+
+
 def captured(monkeypatch: pytest.MonkeyPatch, c: contracts.Contract, settings: Settings) -> Any:
     got: dict[str, Any] = {}
     real = prometheus.build_server
@@ -67,10 +74,11 @@ def test_each_cluster_gets_its_own_prometheus_and_a_shared_store_none(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ) -> None:
     got, _ = captured(monkeypatch, contract(**THREE), settings)
-    stores = {
-        k: (url, t.get_secret_value() if t else None) for k, (url, t) in got["stores"].items()
+    stores = {k: (url, header(a)) for k, (url, a) in got["stores"].items()}
+    assert stores == {
+        "eu": ("http://eu", "Bearer eu-tok"),
+        "us": ("http://central", "Bearer c-tok"),
     }
-    assert stores == {"eu": ("http://eu", "eu-tok"), "us": ("http://central", "c-tok")}
     assert got["clustered"] is True and got["shared"] == ["lab"] and got["relayed"] == []
 
 
@@ -152,7 +160,7 @@ async def test_each_clusters_token_goes_only_to_its_own_prometheus(
         "Client",
         lambda **kw: real(transport=httpx.MockTransport(handler), **kw),
     )
-    stores = {"eu": ("http://eu", SecretStr("eu-tok")), "us": ("http://us", None)}
+    stores = {"eu": ("http://eu", usage.auth(SecretStr("eu-tok"))), "us": ("http://us", None)}
     async with Client(prometheus.build_server(stores, True)) as c:
         for cluster in ("eu", "us"):
             await c.call_tool("query", {"cluster": cluster, "promql": "up"})

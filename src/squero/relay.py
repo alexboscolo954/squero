@@ -560,7 +560,7 @@ def relay_server(
     tools = kubernetes.build_server(c, k8s_integration, s.tool_output_limit, apis)
     root.mount(tools, namespace="kubernetes")
     if s.prometheus_url:
-        store = {s.cluster: (s.prometheus_url, s.prometheus_token)}
+        store = {s.cluster: (s.prometheus_url, usage.auth(s.prometheus_token))}
         tested = {s.cluster: http} if http else None
         root.mount(prometheus.build_server(store, True, tested), namespace="prometheus")
         target = usage.Target(s.cluster, s.prometheus_url, s.prometheus_token, {}, s.namespaces)

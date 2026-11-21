@@ -8,6 +8,7 @@ import json
 import logging
 from typing import Any
 
+import httpx
 import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
@@ -168,8 +169,9 @@ def test_each_contract_uses_its_own_prometheus_credentials(
     seen: list[tuple[str, str]] = []
 
     class Recorder:
-        def __init__(self, base_url: str, headers: dict[str, str], **_: Any) -> None:
-            seen.append((base_url, headers.get("Authorization", "")))
+        def __init__(self, base_url: str, auth: Any, **_: Any) -> None:
+            sent = next(auth.auth_flow(httpx.Request("GET", base_url))) if auth else None
+            seen.append((base_url, sent.headers["Authorization"] if sent else ""))
 
     monkeypatch.setattr(prometheus.httpx, "Client", Recorder)
     for cid in ("demo-shop", "demo-bank"):
