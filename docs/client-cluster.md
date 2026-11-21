@@ -31,15 +31,27 @@ clusters:
 
 ## Installing the chart
 
-The Relay and the Actuator install from one Helm chart, `charts/squero` (Phase 18.1; published to ghcr from 18.1c, until then from a checkout of this repository). Create each part's namespace and token Secret first: the chart creates neither, so `helm uninstall` never deletes a token or the Actuator's ConfigMap (what it holds).
+The Relay and the Actuator install from one Helm chart, `squero` (Phase 18.1), published with each release after 0.61.0 at `oci://ghcr.io/alexboscolo954/charts/squero`, its version the release's (until that first release, `charts/squero` from a checkout of `main`). Create each part's namespace and token Secret first: the chart creates neither, so `helm uninstall` never deletes a token or the Actuator's ConfigMap (what it holds).
 
 ```bash
 kubectl create namespace squero-relay
 kubectl -n squero-relay create secret generic squero-relay \
   --from-literal=SQUERO_RELAY_TOKEN=<the Contract's relay_token_secret value>
-helm install squero charts/squero -n squero-relay \
+helm install squero oci://ghcr.io/alexboscolo954/charts/squero --version <X.Y.Z> -n squero-relay \
   --set relay.hub=wss://hub.example.com/relay --set relay.cluster=eu \
   --set 'namespaces={shop,orders}'
+```
+
+The image and the chart are signed with cosign keyless by the release's own GitHub Actions run (its OIDC identity, recorded in Sigstore's public log), and the image carries its SBOM and build provenance. Check both before installing, with cosign 3 or later:
+
+```bash
+for ref in ghcr.io/alexboscolo954/squero:<X.Y.Z> ghcr.io/alexboscolo954/charts/squero:<X.Y.Z>; do
+  cosign verify "$ref" \
+    --certificate-identity-regexp '^https://github.com/alexboscolo954/squero/\.github/workflows/ci\.yaml@refs/tags/v' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+done
+docker buildx imagetools inspect ghcr.io/alexboscolo954/squero:<X.Y.Z> --format '{{json .SBOM}}'        # per platform
+docker buildx imagetools inspect ghcr.io/alexboscolo954/squero:<X.Y.Z> --format '{{json .Provenance}}'
 ```
 
 `values.yaml` lists every setting, and `values.schema.json` refuses a key it doesn't know (a typo fails the install, as in a Contract). One list, `namespaces` (the Contract's namespaces on this cluster), feeds every RoleBinding, the Relay's `SQUERO_RELAY_NAMESPACES` and the Actuator's webhook. The Relay: `relay.hub`, `relay.cluster`, `relay.prometheusUrl`, `relay.writes` (evict pods and scale deployments, each still approved on the Hub), `relay.gitopsNamespaces` (read Argo CD and Flux objects there), `relay.alertsPort`, `relay.callSeconds`, and `relay.existingSecret` (its token and, if it has one, `SQUERO_RELAY_PROMETHEUS_TOKEN`). The Actuator: `actuator.enabled`, `actuator.hub` (`https://<domain>`), `actuator.interval`, `actuator.existingSecret` (its own token, never the Relay's), and its three optional grants, each on as before: `actuator.nodes` (list nodes, audit A3), `actuator.nodeEvents` (Events in `default`, 13.1a), `actuator.self` (its own pod, audit A4). No token is ever a value: Helm keeps values in the cluster, and they end up in shell history. The image is `ghcr.io/alexboscolo954/squero` at the chart's version unless `image.tag` says otherwise. Its objects have fixed names (the Actuator's webhook, Service and ConfigMap are all `squero-actuator`), so one release per cluster. The webhook's `caBundle` is the Actuator's own, set at its start: the chart never sets one, so a `helm upgrade` keeps it.

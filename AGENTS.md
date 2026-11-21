@@ -292,7 +292,17 @@ code, allowed environment variables, which are secrets), a snapshot of its tool 
      `deploy/hub/env.example` and `demo/deploy-smoke.sh` (`git grep -n 0.15.0` before and after to check).
   2. Commit `Version X.Y.Z: deploys and the Hub compose stack use the X.Y.Z image`.
   3. Push, tag `vX.Y.Z`, push the tag. The tag run builds and publishes the image
-     (`ghcr.io/alexboscolo954/squero:X.Y.Z`); wait for its `publish` job.
+     (`ghcr.io/alexboscolo954/squero:X.Y.Z`, with its SBOM and provenance) and the chart
+     (`oci://ghcr.io/alexboscolo954/charts/squero`, version X.Y.Z), signs both with cosign
+     keyless and verifies them; wait for its `publish` job. It refuses a tag that isn't
+     `Chart.yaml`'s version before it pushes anything. A failure after the image push: rerun
+     the job (each step can run twice); a bug in the job itself: a fix commit and a patch tag.
+     After the chart's first release, check it is public with no stored login:
+     `d=$(mktemp -d); DOCKER_CONFIG=$d HELM_REGISTRY_CONFIG=$d/r.json helm show chart oci://ghcr.io/alexboscolo954/charts/squero --version X.Y.Z`.
+     Refused (401/403/denied): the owner opens
+     https://github.com/users/alexboscolo954/packages/container/package/charts%2Fsquero,
+     Package settings (right column, bottom), Danger Zone, Change visibility, Public, types
+     `charts/squero` to confirm; then the same command again.
   4. Upgrade a running Hub by setting `SQUERO_IMAGE` in its `.env` and `docker compose up -d`.
      Migrations apply at startup.
 

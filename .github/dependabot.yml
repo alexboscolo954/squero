@@ -1,0 +1,6 @@
+# The publish job's actions are pinned to commits (Phase 18.1c): this keeps them current.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
