@@ -33,7 +33,7 @@ Read next, in this order when you need depth:
 | [`docs/client-cluster.md`](docs/client-cluster.md) | The Relay and the Actuator in a client's cluster, and their settings. |
 | [`docs/safety.md`](docs/safety.md) | The full safety model. |
 | [`docs/development.md`](docs/development.md) | Testing, evals and their results, MCP servers on their own, design notes. |
-| [`docs/roadmap.md`](docs/roadmap.md) | What is built, what is next ("## Next"), every decision, and "How every slice ships". It is the source of truth for project state. |
+| [`docs/roadmap.md`](docs/roadmap.md) | Where the project is, what is next ("## Next"), live checks owed, one row per phase, "How every slice ships", Deferred. Each phase has its own page in [`docs/roadmap/`](docs/roadmap) (`phase-NN.md`, `audit.md`), plus `decisions.md` and `releases.md`. The source of truth for project state. |
 | [`docs/adr/`](docs/adr) | Six decisions that are hard to reverse (0001 Category is a root-cause class, 0002 Hub and Relay with the Hub's own read/write list, 0003 Contract data in private git, 0004 standing approval for Sizings, 0005 Reflexes may raise limits, Sizings never do, 0006 Placement is a preference, never a requirement, and never moves a running pod, with one requirement for spot: an On-demand minimum is kept off spot nodes). |
 
 ## 2. Setup and commands
@@ -115,7 +115,7 @@ charts/squero/     The Helm chart of what runs in a client's cluster: the Relay 
                    reference its objects must equal.
 demo/              kind demo workloads, the lab (demo/lab), smoke scripts.
 console/           React app (Vite, TypeScript). Types are generated, not hand-written.
-docs/              roadmap.md, adr/, and the user guide (running-the-hub, contracts,
+docs/              roadmap.md and roadmap/ (a page per phase), adr/, and the user guide (running-the-hub, contracts,
                    optimizer, client-cluster, safety, development).
 runbooks/          Shared Runbooks (markdown) the agent can search.
 examples/          Example inputs.
@@ -185,7 +185,9 @@ by phase and number (for example 10.5b). A slice that changes behaviour follows
 7. **Update the docs**: the page in `docs/` the feature belongs to (Contract fields in
    `contracts.md`, `optimizer.md` or `client-cluster.md`; settings in `running-the-hub.md`'s
    configuration table), `CONTEXT.md`,
-   and the slice's lines in `docs/roadmap.md` (grilled, built, checked live).
+   the slice's entry in its phase page `docs/roadmap/phase-NN.md` (**What**, **Decided**,
+   **Built**, **Tests**, **Checked**, **Known limits**), and `docs/roadmap.md`'s "## Next",
+   live checks and phase row. Write every doc as section 6b says.
 8. **One-line commit subject.** CI must be green before the next slice.
 
 Non-obvious product decisions are *grilled* with the owner before they are built (the roadmap
@@ -195,6 +197,22 @@ offering concrete options with their trade-offs and a recommendation.
 **Live checks** (against a real cloud or cluster) are separate from the slice and need the
 owner's explicit yes on the exact cost before anything is created. Clean everything up
 afterwards and record the outcome in the roadmap.
+
+### 6b. Writing docs
+
+Docs are for humans first. Every Markdown file follows these rules:
+
+- A 3-5 line **In short:** summary at the top.
+- A heading at least every screen; small subsections with plain headings.
+- Paragraphs of 5 lines or fewer, one idea each, short sentences; the *Why:* on its own line.
+- Bullets and tables for lists, settings, options, conditions and limits. A field or
+  setting reference is a table (name, default, what it does).
+- An example (YAML, command) before the field-by-field explanation.
+- The terms exactly as `CONTEXT.md` defines them.
+- Keep the text of a heading other docs link to: its anchor is its slug.
+- A roadmap slice entry is short bullets under **What**, **Decided**, **Built**, **Tests**,
+  **Checked**, **Known limits** (omit an empty one). Tests and mutations are one line of
+  counts; the details live in the code and its tests. `docs/roadmap/phase-18.md` is the model.
 
 ## 7. Code conventions
 
@@ -326,5 +344,6 @@ code, allowed environment variables, which are secrets), a snapshot of its tool 
 
 ## 13. Where to look for the current state
 
-`docs/roadmap.md`: the "## Next" section names the next step, the phases list every slice with
-its grilled, built and checked-live notes, and "Deferred" lists what is parked on purpose.
+`docs/roadmap.md`: "## Next" names the next step, "Live checks still owed" what waits on a
+live check, the phase table links each phase's page (every slice with its decisions, build
+and live checks), and "Deferred" lists what is parked on purpose.

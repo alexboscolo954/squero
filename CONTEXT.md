@@ -1,304 +1,510 @@
 # Alert triage
 
-An agent investigates alerts, questions and scheduled checks for several Contracts, and backs every conclusion with evidence. It changes a Contract's systems only after the Operator approves: each change, or, under Automation, a Sizing policy once ([ADR 0004](docs/adr/0004-standing-approval-for-sizing.md)).
+**In short:** An agent investigates alerts, questions and scheduled checks for several Contracts, and backs every conclusion with evidence.
+It changes a Contract's systems only after the Operator approves: each change, or, under Automation, a Sizing policy once ([ADR 0004](docs/adr/0004-standing-approval-for-sizing.md)).
+This file is the glossary. Each entry gives the term in bold, its definition, then its details.
 
 ## Language
 
 ### Contracts
 
-**Contract**:
-One client engagement the agent works for: its clusters and integrations, its credentials, its Runbooks, its Data policy and where its Reports go. Nothing from one Contract (Alerts, tool results, Reports, knowledge) is ever visible while working on another.
-_Avoid_: Client, tenant, customer
+**Contract**: One client engagement the agent works for: its clusters and integrations, its credentials, its Runbooks, its Data policy and where its Reports go.
+- Nothing from one Contract (Alerts, tool results, Reports, knowledge) is ever visible while working on another.
+- _Avoid_: Client, tenant, customer
 
-**Operator**:
-The person who runs the agent across all Contracts. The Operator receives every Report and makes every Approval decision. If a Contract has a client channel, the Operator can send a Client report there, one Report at a time.
-_Avoid_: User, admin
+**Operator**: The person who runs the agent across all Contracts.
+- The Operator receives every Report and makes every Approval decision.
+- If a Contract has a client channel, the Operator can send a Client report there, one Report at a time.
+- _Avoid_: User, admin
 
-**Data policy**:
-A Contract's rules on what may be sent to the LLM. A Contract has no restrictions unless its Data policy says otherwise.
+**Data policy**: A Contract's rules on what may be sent to the LLM.
+- A Contract has no restrictions unless its Data policy says otherwise.
 
-**Integration**:
-One outside system a Contract turns on, such as its clusters, Prometheus or Runbooks. Its tools are what the agent can use while working for that Contract.
-_Avoid_: Toolset, plugin
+**Integration**: One outside system a Contract turns on, such as its clusters, Prometheus or Runbooks.
+- Its tools are what the agent can use while working for that Contract.
+- _Avoid_: Toolset, plugin
 
-**Hub**:
-The one always-on service that runs every Investigation for every Contract. It receives alerts and serves the Operator in Slack and the web console.
-_Avoid_: Server, backend
+**Hub**: The one always-on service that runs every Investigation for every Contract.
+- It receives alerts and serves the Operator in Slack and the web console.
+- _Avoid_: Server, backend
 
-**Hub MCP server**:
-The Operator's own MCP endpoint on the Hub, for an MCP client such as Claude Code on the Operator's devices. Each call is about one Contract and follows that Contract's Data policy. The Investigation agent never gets its tools.
-_Avoid_: Operator API, admin MCP
+**Hub MCP server**: The Operator's own MCP endpoint on the Hub, for an MCP client such as Claude Code on the Operator's devices.
+- Each call is about one Contract and follows that Contract's Data policy.
+- The Investigation agent never gets its tools.
+- _Avoid_: Operator API, admin MCP
 
-**Fleet**:
-Every Contract the Hub serves, as one console page with a row each (Phase 18.4): its Kill switch, its Agenda's counts by kind, its waste and requests cost in its own currency, its Idle and Unrequested GPUs, each cluster's Relay and Actuator with its version and Protocol. Totals only per currency, never converted. The Operator's view; nothing of one Contract reaches another's prompts, tools or notifications through it.
-_Avoid_: Dashboard, overview
+**Fleet**: Every Contract the Hub serves, as one console page with a row each (Phase 18.4).
+- Each row shows: its Kill switch, its Agenda's counts by kind, its waste and requests cost in its own currency, its Idle and Unrequested GPUs, and each cluster's Relay and Actuator with its version and Protocol.
+- Totals only per currency, never converted.
+- The Operator's view; nothing of one Contract reaches another's prompts, tools or notifications through it.
+- _Avoid_: Dashboard, overview
 
-**Agenda**:
-What the Operator should look at now in one Contract, ranked without a model in a fixed order of urgency: the Kill switch while it is on, pauses waiting for an Approval decision (soonest deadline first), failing Checks, data the Hub can't read (oldest first; a Relay that is offline counts), Bills outside their tolerance (biggest gap first), running Investigations, and the three Workloads whose waste costs most, leaving out each one with a current Approved Sizing on a cluster that runs an Actuator, applied or not: one line last counts those, as their waste is read again at the next run that sizes them. Across Contracts it gives only the counts, that line not among them.
-_Avoid_: Inbox, to-do, dashboard
+**Agenda**: What the Operator should look at now in one Contract, ranked without a model in a fixed order of urgency:
+- the Kill switch, while it is on;
+- pauses waiting for an Approval decision (soonest deadline first);
+- failing Checks;
+- data the Hub can't read (oldest first; a Relay that is offline counts);
+- Bills outside their tolerance (biggest gap first);
+- running Investigations;
+- the three Workloads whose waste costs most. It leaves out each one with a current Approved Sizing on a cluster that runs an Actuator, applied or not.
+  - One line last counts those, as their waste is read again at the next run that sizes them.
+- Across Contracts it gives only the counts, that line not among them.
+- _Avoid_: Inbox, to-do, dashboard
 
-**Stale notice**:
-The Hub's own Slack post, in a Contract's operator channel, when one of its reads has failed for 3 hours without a break: a cluster's Sizing reads, a Relay that is offline, or a cluster's Bill reads, as the Agenda lists them. One thread per cluster and kind, with a reminder a day while it fails and a reply when it reads again (a cluster taken out of the Contract ends quietly). Claimed in Postgres, so it is never posted twice. A Contract without Slack has only the Agenda.
-_Avoid_: Alert (that is what Alertmanager or Grafana sends the Hub), alarm
+**Stale notice**: The Hub's own Slack post, in a Contract's operator channel, when one of its reads has failed for 3 hours without a break: a cluster's Sizing reads, a Relay that is offline, or a cluster's Bill reads, as the Agenda lists them.
+- One thread per cluster and kind, with a reminder a day while it fails and a reply when it reads again (a cluster taken out of the Contract ends quietly).
+- Claimed in Postgres, so it is never posted twice.
+- A Contract without Slack has only the Agenda.
+- _Avoid_: Alert (that is what Alertmanager or Grafana sends the Hub), alarm
 
-**Proposed change**:
-A pull request the Hub opens on the contracts repo, from the Hub MCP server, editing one Contract's Sizing policy (a rule, a policy, the default) and nothing else. It is checked against the Contract the Hub loaded and validated before it opens, never touches `main`, and changes nothing until the Operator merges it and the Hub loads it again.
-_Avoid_: Proposed action (that is a paused tool call), patch
+**Proposed change**: A pull request the Hub opens on the contracts repo, from the Hub MCP server, editing one Contract's Sizing policy (a rule, a policy, the default) and nothing else.
+- It is checked against the Contract the Hub loaded and validated before it opens.
+- It never touches `main`, and changes nothing until the Operator merges it and the Hub loads it again.
+- _Avoid_: Proposed action (that is a paused tool call), patch
 
-**Direct**:
-A way to reach a Contract's cluster or integration where the Hub holds the credentials and calls its APIs itself. The default; a cluster reached through a Relay is never reached Direct.
+**Direct**: A way to reach a Contract's cluster or integration where the Hub holds the credentials and calls its APIs itself.
+- The default; a cluster reached through a Relay is never reached Direct.
 
-**Relay**:
-A small process inside a client's network that serves one of a Contract's clusters (the cluster is reached `via: relay`): it holds that cluster's credentials and runs its Kubernetes tools and its Prometheus queries, for the agent and for the Hub's own reads. It connects out to the Hub with a token bound to that Contract and cluster, so the client network accepts no inbound connections. The agent's reasoning, the allowlist and the approval gate stay in the Hub; cloud and vendor integrations stay Direct. Only tool calls and their results pass through the Relay. A Run that calls a Relay that isn't connected, or doesn't answer within the call timeout, ends Failed ("Relay offline"): its Report would otherwise read as if the cluster had been seen. The Actuator has its own token and connection, so the Relay never holds write access.
-_Avoid_: Satellite, agent
+**Relay**: A small process inside a client's network that serves one of a Contract's clusters (the cluster is reached `via: relay`): it holds that cluster's credentials and runs its Kubernetes tools and its Prometheus queries, for the agent and for the Hub's own reads.
+- It connects out to the Hub with a token bound to that Contract and cluster, so the client network accepts no inbound connections.
+- The agent's reasoning, the allowlist and the approval gate stay in the Hub; cloud and vendor integrations stay Direct.
+- Only tool calls and their results pass through the Relay.
+- A Run that calls a Relay that isn't connected, or doesn't answer within the call timeout, ends Failed ("Relay offline"): its Report would otherwise read as if the cluster had been seen.
+- The Actuator has its own token and connection, so the Relay never holds write access.
+- _Avoid_: Satellite, agent
 
-**Protocol**:
-The numbered version of what the Hub and a Relay, or the Hub and an Actuator, exchange, each part's counted apart from 1 (Phase 18.3). It rises only on a change an older part would misread (a field removed or renamed, or its meaning changed); an added optional field keeps it. The Hub accepts its own and the one before; an older or a newer one is refused, with an Agenda item saying which side to upgrade. Not the release version, which moves without the wire changing.
-_Avoid_: API version, release version (that is the image's)
+**Protocol**: The numbered version of what the Hub and a Relay, or the Hub and an Actuator, exchange, each part's counted apart from 1 (Phase 18.3).
+- It rises only on a change an older part would misread (a field removed or renamed, or its meaning changed); an added optional field keeps it.
+- The Hub accepts its own and the one before; an older or a newer one is refused, with an Agenda item saying which side to upgrade.
+- Not the release version, which moves without the wire changing.
+- _Avoid_: API version, release version (that is the image's)
 
 ### Input
 
-**Alert**:
-One firing instance of an alerting rule, identified by its labels.
-_Avoid_: Using "alert" for a whole notification
+**Alert**: One firing instance of an alerting rule, identified by its labels.
+- _Avoid_: Using "alert" for a whole notification
 
-**Alert group**:
-One Alertmanager notification, holding one or more Alerts that Alertmanager grouped together. The Alert group is the unit that gets triaged. It belongs to exactly one Contract, so two Contracts never share an Alert group. A re-sent Alert group starts a new Triage only when an Alert not seen before starts firing. A group that shrinks, or comes back unchanged, is a duplicate.
-_Avoid_: Notification, alert batch
+**Alert group**: One Alertmanager notification, holding one or more Alerts that Alertmanager grouped together.
+- The Alert group is the unit that gets triaged.
+- It belongs to exactly one Contract, so two Contracts never share an Alert group.
+- A re-sent Alert group starts a new Triage only when an Alert not seen before starts firing.
+- A group that shrinks, or comes back unchanged, is a duplicate.
+- _Avoid_: Notification, alert batch
 
-**Related alert group**:
-An Alert group that joined an open Triage of the same Contract instead of starting its own. It joins when the Triage's own Alert group still fires, the Triage started within the window (30 minutes by default) and did not fail, the two share a match label (such as `service` or `app`), and no scope label (`cluster`, `namespace`) differs. It is posted in the Triage's thread and costs no investigation. The Operator can still have it triaged separately: it then becomes that new Triage's own Alert group, and the two groups don't join each other again within the window. Only the Triage's own Alert group makes its Proposed actions Stale.
-_Avoid_: Incident, duplicate (a duplicate is a re-sent Alert group with nothing new)
+**Related alert group**: An Alert group that joined an open Triage of the same Contract instead of starting its own.
+- It joins when all of these hold:
+  - the Triage's own Alert group still fires;
+  - the Triage started within the window (30 minutes by default) and did not fail;
+  - the two share a match label (such as `service` or `app`);
+  - no scope label (`cluster`, `namespace`) differs.
+- It is posted in the Triage's thread and costs no investigation.
+- The Operator can still have it triaged separately: it then becomes that new Triage's own Alert group, and the two groups don't join each other again within the window.
+- Only the Triage's own Alert group makes its Proposed actions Stale.
+- _Avoid_: Incident, duplicate (a duplicate is a re-sent Alert group with nothing new)
 
-**Alert severity**:
-The severity label the rule author set on an Alert. The agent never changes it.
+**Alert severity**: The severity label the rule author set on an Alert.
+- The agent never changes it.
 
 ### Investigation
 
-**Investigation**:
-Work the agent does for one Contract. It is one of three kinds: a Triage, a Question or a Check.
+**Investigation**: Work the agent does for one Contract.
+- It is one of three kinds: a Triage, a Question or a Check.
 
-**Triage**:
-The Investigation of one Alert group, from receipt to final Report, including any pauses for approval.
-_Avoid_: Using "triage" for a single agent invocation
+**Triage**: The Investigation of one Alert group, from receipt to final Report, including any pauses for approval.
+- _Avoid_: Using "triage" for a single agent invocation
 
-**Question**:
-An Investigation the Operator asks for in their own words, in Slack or the web console. A Question only reads: it never proposes an action. A follow-up in the same thread, or on its console page, continues the same Question; each follow-up is kept with the Answer it replaced, so the Question's whole exchange can be shown.
+**Question**: An Investigation the Operator asks for in their own words, in Slack or the web console.
+- A Question only reads: it never proposes an action.
+- A follow-up in the same thread, or on its console page, continues the same Question.
+- Each follow-up is kept with the Answer it replaced, so the Question's whole exchange can be shown.
 
-**Check**:
-An Investigation that runs on a schedule or after a deploy, without an alert. The Operator writes what healthy means in the Check's prompt, and the agent's verdict is pass or fail. A passing Check is recorded quietly. A failing Check produces a Report and notifies the Operator like a Triage does, including Proposed actions. A Check whose Run fails without a verdict counts as failing.
+**Check**: An Investigation that runs on a schedule or after a deploy, without an alert.
+- The Operator writes what healthy means in the Check's prompt, and the agent's verdict is pass or fail.
+- A passing Check is recorded quietly.
+- A failing Check produces a Report and notifies the Operator like a Triage does, including Proposed actions.
+- A Check whose Run fails without a verdict counts as failing.
 
-**Open failure**:
-A Check's failure that the Operator has been told about and that hasn't passed since. Each later failing Run of that Check replies *still failing* in its thread instead of starting a new one, unless it needs an Approval decision. The first passing Run replies *recovered* and ends it.
+**Open failure**: A Check's failure that the Operator has been told about and that hasn't passed since.
+- Each later failing Run of that Check replies *still failing* in its thread instead of starting a new one, unless it needs an Approval decision.
+- The first passing Run replies *recovered* and ends it.
 
-**Deploy verification**:
-A Check that the Hub starts by itself after a deploy it sees in a Contract's cluster (a rollout, an ArgoCD sync, a Flux release), once a delay has passed, asking whether what was deployed is healthy and whether anything else in that namespace started failing since. Deploys in one namespace close together are verified in one Run. Opt-in per Contract. It has no Open failure: each deploy is verified once.
+**Deploy verification**: A Check that the Hub starts by itself after a deploy it sees in a Contract's cluster (a rollout, an ArgoCD sync, a Flux release), once a delay has passed.
+- It asks whether what was deployed is healthy, and whether anything else in that namespace started failing since.
+- Deploys in one namespace close together are verified in one Run.
+- Opt-in per Contract.
+- It has no Open failure: each deploy is verified once.
 
-**Run**:
-One uninterrupted stretch of agent work inside an Investigation. An Investigation without a Proposed action has one Run. Each Approval decision or Stale rejection starts another Run.
+**Run**: One uninterrupted stretch of agent work inside an Investigation.
+- An Investigation without a Proposed action has one Run.
+- Each Approval decision or Stale rejection starts another Run.
 
-**Report**:
-The structured result of a Triage or a failing Check: summary, Category, root cause, Evidence, Assessed severity and Recommendations.
-_Avoid_: Triage (for the output)
+**Report**: The structured result of a Triage or a failing Check: summary, Category, root cause, Evidence, Assessed severity and Recommendations.
+- _Avoid_: Triage (for the output)
 
-**Client report**:
-The copy of a Report that goes to the Contract's client channel, only when the Operator clicks to send it. It holds the summary, root cause, Assessed severity, what is affected and the Recommendations. It never holds Evidence, Executed actions, the Runbook used, or any approval control.
-_Avoid_: Client delivery (for the message)
+**Client report**: The copy of a Report that goes to the Contract's client channel, only when the Operator clicks to send it.
+- It holds the summary, root cause, Assessed severity, what is affected and the Recommendations.
+- It never holds Evidence, Executed actions, the Runbook used, or any approval control.
+- _Avoid_: Client delivery (for the message)
 
-**Answer**:
-The result of a Question: a direct reply backed by Evidence, with no Category or Assessed severity. A Question that finds a fault still ends with an Answer, which says so.
+**Answer**: The result of a Question: a direct reply backed by Evidence, with no Category or Assessed severity.
+- A Question that finds a fault still ends with an Answer, which says so.
 
-**Failed investigation**:
-An Investigation that ended without its Report or Answer because the agent could not finish. The Operator is told explicitly. Nothing partial is delivered.
-_Avoid_: Failed triage
+**Failed investigation**: An Investigation that ended without its Report or Answer because the agent could not finish.
+- The Operator is told explicitly.
+- Nothing partial is delivered.
+- _Avoid_: Failed triage
 
-**Evidence**:
-A finding from a tool result that supports a conclusion. A claim in a Report or an Answer without Evidence is not allowed.
+**Evidence**: A finding from a tool result that supports a conclusion.
+- A claim in a Report or an Answer without Evidence is not allowed.
 
-**Change**:
-Something that modified a Contract's systems before an alert: a rollout, a Helm release, a GitOps sync or a cloud activity log entry. The agent looks for Changes across the Contract's allowed scope, because the cause is often a Change to a different resource than the one alerting.
-_Avoid_: Deploy (for a Change that isn't one)
+**Change**: Something that modified a Contract's systems before an alert: a rollout, a Helm release, a GitOps sync or a cloud activity log entry.
+- The agent looks for Changes across the Contract's allowed scope, because the cause is often a Change to a different resource than the one alerting.
+- _Avoid_: Deploy (for a Change that isn't one)
 
-**Runbook**:
-A written procedure mapped to one or more alert names. One alert name can map to several Runbooks. A Runbook belongs to one Contract, or is part of Shared knowledge.
+**Runbook**: A written procedure mapped to one or more alert names.
+- One alert name can map to several Runbooks.
+- A Runbook belongs to one Contract, or is part of Shared knowledge.
 
-**Category**:
-The class of the root cause, not the failure mode (the alert name already says how it fails). When a rollout introduced the fault after an earlier revision that worked, the Category is `bad_rollout`, even if the fault itself is bad config or a bad image, and even when the rollout was of another workload the alerting one depends on. A workload broken since its first revision has no rollout to blame.
-Values: `bad_rollout`, `bad_config` (wrong or missing config, command or probe), `app_error` (a bug in the code, including memory leaks), `resource_limits` (limits too low for a healthy workload), `image_unavailable`, `capacity` (the cluster can't fit the workload), `node_problem`, `dependency_failure`, `unknown`.
+**Category**: The class of the root cause, not the failure mode (the alert name already says how it fails).
+- When a rollout introduced the fault after an earlier revision that worked, the Category is `bad_rollout`, even if the fault itself is bad config or a bad image, and even when the rollout was of another workload the alerting one depends on.
+- A workload broken since its first revision has no rollout to blame.
+- Values:
+  - `bad_rollout`
+  - `bad_config` (wrong or missing config, command or probe)
+  - `app_error` (a bug in the code, including memory leaks)
+  - `resource_limits` (limits too low for a healthy workload)
+  - `image_unavailable`
+  - `capacity` (the cluster can't fit the workload)
+  - `node_problem`
+  - `dependency_failure`
+  - `unknown`
 
-**Assessed severity**:
-The agent's judgment of actual impact, backed by evidence. It can disagree with the Alert severity.
+**Assessed severity**: The agent's judgment of actual impact, backed by evidence.
+- It can disagree with the Alert severity.
 
 ### Acting
 
-**Recommendation**:
-A next step written for a human. It is advice and never runs.
-_Avoid_: Action, recommended action
+**Recommendation**: A next step written for a human.
+- It is advice and never runs.
+- _Avoid_: Action, recommended action
 
-**Proposed action**:
-A tool call that would change a Contract's systems, paused until the Operator approves or rejects it.
-_Avoid_: Pending action, write
+**Proposed action**: A tool call that would change a Contract's systems, paused until the Operator approves or rejects it.
+- _Avoid_: Pending action, write
 
-**Stale**:
-A Proposed action is Stale once its Alert group resolves, or when no Approval decision arrives within the decision timeout. A Stale action is rejected automatically, and the Investigation still finishes.
+**Stale**: A Proposed action is Stale once its Alert group resolves, or when no Approval decision arrives within the decision timeout.
+- A Stale action is rejected automatically, and the Investigation still finishes.
 
-**Approval decision**:
-The Operator's approve or reject, covering every Proposed action in one pause together. A rejection can carry a reason, and the agent can propose a narrower action in the next Run.
+**Approval decision**: The Operator's approve or reject, covering every Proposed action in one pause together.
+- A rejection can carry a reason, and the agent can propose a narrower action in the next Run.
 
-**Executed action**:
-A Proposed action that the Operator approved and that the system then ran. The system records it from the tool calls that actually ran, marked as failed when the call errored. The agent never reports it.
-_Avoid_: Action taken
+**Executed action**: A Proposed action that the Operator approved and that the system then ran.
+- The system records it from the tool calls that actually ran, marked as failed when the call errored.
+- The agent never reports it.
+- _Avoid_: Action taken
 
-**Kill switch**:
-A Contract's stop for every change to its systems. While it is on, approving a Proposed action is refused (rejecting still works), and a change already approved is refused where it would run. The Operator turns it on from the Hub MCP server or the console, and only the console turns it off. Under Automation it also stops the Actuator ([ADR 0004](docs/adr/0004-standing-approval-for-sizing.md)).
-_Avoid_: Pause, freeze
+**Kill switch**: A Contract's stop for every change to its systems.
+- While it is on, approving a Proposed action is refused (rejecting still works), and a change already approved is refused where it would run.
+- The Operator turns it on from the Hub MCP server or the console, and only the console turns it off.
+- Under Automation it also stops the Actuator ([ADR 0004](docs/adr/0004-standing-approval-for-sizing.md)).
+- _Avoid_: Pause, freeze
 
 ### Knowledge
 
-**Similar incident**:
-A past Report from the same Contract that the agent finds, by its words or by meaning, and uses as a lead. It never comes from another Contract.
+**Similar incident**: A past Report from the same Contract that the agent finds, by its words or by meaning, and uses as a lead.
+- It never comes from another Contract.
 
-**Feedback**:
-The Operator's verdict on a finished Triage Report: right, or wrong with a correction. A correction, like a reason the Operator typed when rejecting a Proposed action, makes the agent propose a Teaching.
+**Feedback**: The Operator's verdict on a finished Triage Report: right, or wrong with a correction.
+- A correction, like a reason the Operator typed when rejecting a Proposed action, makes the agent propose a Teaching.
 
-**Teaching**:
-A lesson for future Investigations of one Contract, at most 500 characters, optionally for some alert names only. The agent proposes it from a correction or a rejection reason; the Operator approves (possibly editing it), rejects it, or writes one by hand. Only an approved Teaching is ever used, and it always stays in its own Contract. One that says what an approved Teaching already says is not proposed; one that contradicts an approved Teaching retires it when approved. The Operator can retire one at any time.
-_Avoid_: Memory, learning (for a single lesson)
+**Teaching**: A lesson for future Investigations of one Contract, at most 500 characters, optionally for some alert names only.
+- The agent proposes it from a correction or a rejection reason. The Operator approves it (possibly editing it), rejects it, or writes one by hand.
+- Only an approved Teaching is ever used, and it always stays in its own Contract.
+- One that says what an approved Teaching already says is not proposed.
+- One that contradicts an approved Teaching retires it when approved.
+- The Operator can retire one at any time.
+- _Avoid_: Memory, learning (for a single lesson)
 
-**Shared knowledge**:
-Knowledge the Operator writes that holds no client data, such as general SRE lessons and generic Runbooks. Every Contract can use it. The agent never writes to it, and a file that names a Contract is refused.
+**Shared knowledge**: Knowledge the Operator writes that holds no client data, such as general SRE lessons and generic Runbooks.
+- Every Contract can use it.
+- The agent never writes to it, and a file that names a Contract is refused.
 
 ### Optimization (planned, Phase 9+)
 
-**Workload**:
-What a Sizing is for: a Deployment, StatefulSet, DaemonSet, CronJob, Job or Rollout (or a pod with no owner), found by following each pod's owners. Its pods' usage is pooled per container, never summed, so a Sizing is per replica whatever the replica count.
+**Workload**: What a Sizing is for: a Deployment, StatefulSet, DaemonSet, CronJob, Job or Rollout (or a pod with no owner), found by following each pod's owners.
+- Its pods' usage is pooled per container, never summed, so a Sizing is per replica whatever the replica count.
 
-**Need**:
-The replicas a Workload with an autoscaler (an HPA, KEDA's included) needed at a time: its replicas then (those already there a sample before, after a scale-up), times the current value of the metric its HPA scales on over that metric's target, the largest over its metrics. Unlike the HPA's own desired replicas it reads below the HPA's minimum and above its maximum. The Hub keeps each hour's peak for 8 weeks. 0 with no replicas. Unknown where kube-state-metrics has no target or current value for it, and for a Workload with two HPAs. A vLLM Workload's Need (Phase 17.4) comes from vLLM's own metrics instead, with or without an HPA: its replicas that hour times its busiest KV cache usage over 0.8, rounded up, and at least one replica more in an hour when requests waited.
-_Avoid_: Demand, desired replicas (that is the HPA's own figure, never below its minimum)
+**Need**: The replicas a Workload with an autoscaler (an HPA, KEDA's included) needed at a time: its replicas then (those already there a sample before, after a scale-up), times the current value of the metric its HPA scales on over that metric's target, the largest over its metrics.
+- Unlike the HPA's own desired replicas it reads below the HPA's minimum and above its maximum.
+- The Hub keeps each hour's peak for 8 weeks.
+- 0 with no replicas.
+- Unknown where kube-state-metrics has no target or current value for it, and for a Workload with two HPAs.
+- A vLLM Workload's Need (Phase 17.4) comes from vLLM's own metrics instead, with or without an HPA: its replicas that hour times its busiest KV cache usage over 0.8, rounded up, and at least one replica more in an hour when requests waited.
+- _Avoid_: Demand, desired replicas (that is the HPA's own figure, never below its minimum)
 
-**Floor**:
-The minimum replicas the Hub computes for a Workload with an autoscaler: a low percentile of its hourly Needs over its Sizing policy's window (the 10th under production), rounded up, never below 2 unless the HPA's minimum already is. Shown against the HPA's minimum today: a saving when lower (the replicas it would no longer hold, at their Sizings), a risk when higher. A Workload that scales to zero gets none. A vLLM Workload without an HPA (Phase 17.4) gets one too, shown against its replica count, never below 2 unless it already runs fewer. Advice for the client's manifests: the Hub never writes an HPA. Once the client lowers the minimum toward a Floor the Hub showed, what it no longer holds is realized Savings, down to that Floor and no further.
-_Avoid_: minReplicas (that is the HPA's own setting), baseline
+**Floor**: The minimum replicas the Hub computes for a Workload with an autoscaler: a low percentile of its hourly Needs over its Sizing policy's window (the 10th under production), rounded up, never below 2 unless the HPA's minimum already is.
+- Shown against the HPA's minimum today: a saving when lower (the replicas it would no longer hold, at their Sizings), a risk when higher.
+- A Workload that scales to zero gets none.
+- A vLLM Workload without an HPA (Phase 17.4) gets one too, shown against its replica count, never below 2 unless it already runs fewer.
+- Advice for the client's manifests: the Hub never writes an HPA.
+- Once the client lowers the minimum toward a Floor the Hub showed, what it no longer holds is realized Savings, down to that Floor and no further.
+- _Avoid_: minReplicas (that is the HPA's own setting), baseline
 
-**Weekly profile**:
-A Workload's Floors by hour of the week: for each hour, the median of that hour's Need across the stored weeks (three at least), never below its Floor, shown as blocks of hours in the Contract's `sizing.timezone`, each starting `sizing.lead_time` early, and checked by its Backtest. For a KEDA Workload each block comes as a `cron` trigger to paste; an HPA has no schedule of its own.
-_Avoid_: schedule (the Hub schedules nothing), forecast
+**Weekly profile**: A Workload's Floors by hour of the week: for each hour, the median of that hour's Need across the stored weeks (three at least), never below its Floor.
+- It is shown as blocks of hours in the Contract's `sizing.timezone`, each starting `sizing.lead_time` early, and checked by its Backtest.
+- For a KEDA Workload each block comes as a `cron` trigger to paste; an HPA has no schedule of its own.
+- _Avoid_: schedule (the Hub schedules nothing), forecast
 
-**Backtest**:
-The check of a Weekly profile against a week it has not seen: the newest stored week replayed hour by hour against a profile built from the weeks before it (three at least, so four stored weeks in all). In each hour the Workload needed the larger of its Floor and its Need rounded up; the error is the replica-hours the profile was off by, too few plus too many, as a share of the replica-hours needed. Within the budget (20%) the profile shows with its error and what the too many would cost; over it the Workload shows "load isn't weekly enough" and keeps only its Floor. Before four weeks the profile shows as not backtested yet.
-_Avoid_: forecast accuracy, validation
+**Backtest**: The check of a Weekly profile against a week it has not seen: the newest stored week replayed hour by hour against a profile built from the weeks before it (three at least, so four stored weeks in all).
+- In each hour the Workload needed the larger of its Floor and its Need rounded up. The error is the replica-hours the profile was off by, too few plus too many, as a share of the replica-hours needed.
+- Within the budget (20%) the profile shows with its error and what the too many would cost.
+- Over it the Workload shows "load isn't weekly enough" and keeps only its Floor.
+- Before four weeks the profile shows as not backtested yet.
+- _Avoid_: forecast accuracy, validation
 
-**Room**:
-What a node has left: its allocatable CPU and memory less the requests of the pods on it, Running or Pending, in every namespace. The pods outside the Contract's namespaces count in it as one sum and one count per node, "not visible": never named, never split by namespace. A node's Room *after its DaemonSets* is its allocatable less only its DaemonSets' pods, the most a pod could ask there: no Sizing asks more than the largest such Room in its cluster (a cordoned node aside), and one that needs more carries the risk "needs a larger node". The cap never lowers a request.
-_Avoid_: free capacity, headroom (a Sizing policy's margin over usage)
+**Room**: What a node has left: its allocatable CPU and memory less the requests of the pods on it, Running or Pending, in every namespace.
+- The pods outside the Contract's namespaces count in it as one sum and one count per node, "not visible": never named, never split by namespace.
+- A node's Room *after its DaemonSets* is its allocatable less only its DaemonSets' pods, the most a pod could ask there.
+  - No Sizing asks more than the largest such Room in its cluster (a cordoned node aside).
+  - One that needs more carries the risk "needs a larger node".
+- The cap never lowers a request.
+- _Avoid_: free capacity, headroom (a Sizing policy's margin over usage)
 
-**Blocker**:
-What keeps a node from being removed: a pod on it that the cluster's autoscaler, or a person draining the node where the Contract names none, will not evict. Which pods those are depends on who removes nodes there: Cluster Autoscaler, Karpenter and `kubectl drain` each have their own rules (a PodDisruptionBudget allowing no disruption blocks all three). The Actuator reports the facts of such pods in its namespaces when they change (it checks every 5 minutes) and hourly at least, and the facts of its own pod, which the Hub judges by the same rules; the Hub applies the rules and gives each node a verdict: *blocked*, with the pods and why; *clear*, when every pod on it is known and none blocks; *unknown* otherwise (a report cut short, or pods the Hub can't see). Each Blocker comes with *the change that removes it*: what to change and what that costs, with a manifest to copy where the change adds something (an annotation, a PodDisruptionBudget), and words only where it would undo something set on purpose (a budget allowing no disruption, `safe-to-evict: "false"`, `do-not-disrupt`). Without a usable report (no Actuator, or its last one too old) the Hub goes by what Prometheus shows: a pod with no controller still blocks, a node is never clear, and a PodDisruptionBudget allowing no disruption is named without knowing which pods it covers. Read-only: the Hub evicts nothing for it.
-_Avoid_: unremovable node (the autoscaler's own word for its own verdict), pinned pod
+**Blocker**: What keeps a node from being removed: a pod on it that the cluster's autoscaler, or a person draining the node where the Contract names none, will not evict.
+- Which pods those are depends on who removes nodes there. Cluster Autoscaler, Karpenter and `kubectl drain` each have their own rules (a PodDisruptionBudget allowing no disruption blocks all three).
+- The Actuator reports the facts of such pods in its namespaces when they change (it checks every 5 minutes) and hourly at least, and the facts of its own pod, which the Hub judges by the same rules.
+- The Hub applies the rules and gives each node a verdict:
+  - *blocked*: with the pods and why;
+  - *clear*: when every pod on it is known and none blocks;
+  - *unknown*: otherwise (a report cut short, or pods the Hub can't see).
+- Each Blocker comes with *the change that removes it*: what to change and what that costs.
+  - Where the change adds something (an annotation, a PodDisruptionBudget), there is a manifest to copy.
+  - Where it would undo something set on purpose (a budget allowing no disruption, `safe-to-evict: "false"`, `do-not-disrupt`), there are words only.
+- Without a usable report (no Actuator, or its last one too old) the Hub goes by what Prometheus shows:
+  - a pod with no controller still blocks;
+  - a node is never clear;
+  - a PodDisruptionBudget allowing no disruption is named without knowing which pods it covers.
+- Read-only: the Hub evicts nothing for it.
+- _Avoid_: unremovable node (the autoscaler's own word for its own verdict), pinned pod
 
-**Node that could go**:
-A node the Hub's arithmetic says could be removed: its verdict is clear (no Blocker, every pod on it known), and each of its pods that would move fits, by its requests, in the Room of the other nodes that carry the same taints. An upper bound, shown as one ("up to 3 nodes"): tolerations and spread rules can't be seen. A moving pod fits only on a node that meets what it needs of one, as its cluster's Actuator reports it with the nodes' labels: its nodeSelector and required node affinity, and under Karpenter also its heaviest preferred node affinity terms (Karpenter's scheduler holds one as required while a new node could meet it). A node whose labels weren't reported takes none of the pods that need something of a node, and a cluster whose Actuator doesn't report what its pods need lists none, saying why; so does a cluster with Placement where no node shows the Pinned nodes' label, since a Pinned node would look like any other. Computed twice: with today's requests, and with the requests after the Sizings (a Sizing frees capacity; money is saved only when a node leaves). Priced at its capacity; a figure of its own, never summed with Savings or Waste. A blocked or unknown node is never one, nor a control-plane node, nor a Pinned node, and no pod is moved onto a Pinned node. Advice: the Hub removes no node.
-_Avoid_: removable node, consolidation candidate, node Savings
+**Node that could go**: A node the Hub's arithmetic says could be removed: its verdict is clear (no Blocker, every pod on it known), and each of its pods that would move fits, by its requests, in the Room of the other nodes that carry the same taints.
+- An upper bound, shown as one ("up to 3 nodes"): tolerations and spread rules can't be seen.
+- A moving pod fits only on a node that meets what it needs of one, as its cluster's Actuator reports it with the nodes' labels:
+  - its nodeSelector and required node affinity;
+  - under Karpenter, also its heaviest preferred node affinity terms (Karpenter's scheduler holds one as required while a new node could meet it).
+- A node whose labels weren't reported takes none of the pods that need something of a node.
+- A cluster whose Actuator doesn't report what its pods need lists none, saying why.
+- So does a cluster with Placement where no node shows the Pinned nodes' label, since a Pinned node would look like any other.
+- Computed twice: with today's requests, and with the requests after the Sizings (a Sizing frees capacity; money is saved only when a node leaves).
+- Priced at its capacity; a figure of its own, never summed with Savings or Waste.
+- A blocked or unknown node is never one, nor a control-plane node, nor a Pinned node, and no pod is moved onto a Pinned node.
+- Advice: the Hub removes no node.
+- _Avoid_: removable node, consolidation candidate, node Savings
 
-**Placement**:
-The Actuator's webhook adding, to a new pod of a Workload whose pods block a node for a reason set in their spec (`safe-to-evict: "false"`, `do-not-disrupt: "true"`, local storage or emptyDir), a preference for the cluster's Pinned nodes, and a toleration of their taint where the Contract names one: a preference, never a requirement, so a pod with no room there starts elsewhere. Never for a PodDisruptionBudget allowing no disruption or a timed `do-not-disrupt` (both come and go), a pod with no controller or a custom one's (no Workload the webhook can name), or a DaemonSet's. On when the Contract names the cluster's label; no approval per Workload; the pause annotation and the Kill switch stop it. A running pod is never moved for it: the Hub says which Workload to restart to free which node, once its Actuator places.
-_Avoid_: pinning, node affinity (the Kubernetes mechanism it uses)
+**Placement**: The Actuator's webhook adding, to a new pod of a Workload whose pods block a node for a reason set in their spec (`safe-to-evict: "false"`, `do-not-disrupt: "true"`, local storage or emptyDir):
+- a preference for the cluster's Pinned nodes;
+- and a toleration of their taint where the Contract names one.
+- It is a preference, never a requirement, so a pod with no room there starts elsewhere.
+- Never for a PodDisruptionBudget allowing no disruption or a timed `do-not-disrupt` (both come and go), a pod with no controller or a custom one's (no Workload the webhook can name), or a DaemonSet's.
+- On when the Contract names the cluster's label; no approval per Workload; the pause annotation and the Kill switch stop it.
+- A running pod is never moved for it: the Hub says which Workload to restart to free which node, once its Actuator places.
+- _Avoid_: pinning, node affinity (the Kubernetes mechanism it uses)
 
-**Pinned node**:
-A node carrying the cluster's Placement label (`placement.label` in the Contract), kept for the pods that can't move: its Blockers are expected, shown with no change to remove them, its verdict *pinned*. Never a Node that could go, nor where a moving pod is counted to land. Seen through kube-state-metrics, which shows a node label only when allowlisted.
-_Avoid_: placement node, blocker pool
+**Pinned node**: A node carrying the cluster's Placement label (`placement.label` in the Contract), kept for the pods that can't move.
+- Its Blockers are expected, shown with no change to remove them, and its verdict is *pinned*.
+- Never a Node that could go, nor where a moving pod is counted to land.
+- Seen through kube-state-metrics, which shows a node label only when allowlisted.
+- _Avoid_: placement node, blocker pool
 
-**Sizing**:
-The CPU and memory requests the Hub computes for one container of a Workload from its usage under a Sizing policy, with the risks it can't fix (a limit too low, throttling or OOM kills hiding real demand). Limits are kept. A container with less *history* than its policy needs (a day under production) is still *learning* and has none; its history is the time its cluster's Prometheus has usage for, from the container's first sample to its last in the policy's window, so a gap in Prometheus counts for nothing and a CronJob between its runs still counts. A Sizing whose history falls under what its policy needs (after a long gap) is learning again. Read-only unless the Operator approves it or the Workload is under Automation. A Sizing that would change a request an HPA divides by (a `Utilization` target on cpu or memory) is *held by its HPA*: the Actuator leaves that request alone, since changing it would change the replica count, until the HPA's target is an `AverageValue`, which the Hub gives as the same threshold in absolute terms. Its Waste still counts. A DaemonSet's CPU fits its busiest node: its target is the largest of each node's own percentile (its pods on that node over the window), as its memory, a peak, fits the busiest by construction. A DaemonSet's container, on a cluster that runs an Actuator, is also sized *per instance type*: its pods on nodes of one type get a Sizing of their own from their own usage, beside the container's pooled one, since one request for every node fits some and is too large or too small on the rest; a type with too little history is still learning. Only an Actuator can apply it: a DaemonSet has one pod template. It gives each pod its node's type's Sizing, and a pod on a type that has none yet its template's requests; one approval covers every type of the run it approves. On a cluster whose Actuator applies them, the container's pooled Sizing is not applied: it is shown for reference only.
-_Avoid_: Recommendation (that is advice for a human), rightsizing recommendation, node group (a cloud's own word)
+**Sizing**: The CPU and memory requests the Hub computes for one container of a Workload from its usage under a Sizing policy, with the risks it can't fix (a limit too low, throttling or OOM kills hiding real demand).
+- Limits are kept.
+- *Learning*: a container with less *history* than its policy needs (a day under production) is still *learning* and has none.
+  - Its history is the time its cluster's Prometheus has usage for, from the container's first sample to its last in the policy's window.
+  - So a gap in Prometheus counts for nothing, and a CronJob between its runs still counts.
+  - A Sizing whose history falls under what its policy needs (after a long gap) is learning again.
+- Read-only unless the Operator approves it or the Workload is under Automation.
+- *Held by its HPA*: a Sizing that would change a request an HPA divides by (a `Utilization` target on cpu or memory) is held by its HPA.
+  - The Actuator leaves that request alone, since changing it would change the replica count.
+  - This lasts until the HPA's target is an `AverageValue`, which the Hub gives as the same threshold in absolute terms.
+  - Its Waste still counts.
+- A DaemonSet's CPU fits its busiest node: its target is the largest of each node's own percentile (its pods on that node over the window), as its memory, a peak, fits the busiest by construction.
+- *Per instance type*: a DaemonSet's container, on a cluster that runs an Actuator, is also sized per instance type.
+  - Its pods on nodes of one type get a Sizing of their own from their own usage, beside the container's pooled one, since one request for every node fits some and is too large or too small on the rest.
+  - A type with too little history is still learning.
+  - Only an Actuator can apply it: a DaemonSet has one pod template.
+  - It gives each pod its node's type's Sizing, and a pod on a type that has none yet its template's requests.
+  - One approval covers every type of the run it approves.
+- On a cluster whose Actuator applies them, the container's pooled Sizing is not applied: it is shown for reference only.
+- _Avoid_: Recommendation (that is advice for a human), rightsizing recommendation, node group (a cloud's own word)
 
-**Approved Sizing**:
-One container's Sizing that the Operator approved from the Hub MCP server, kept with the exact requests approved, for the Actuator to apply. It is current, waiting to be applied, until a later Sizing of that container is stored, which supersedes it whatever its values and for good (a run that read the cluster without that container supersedes nothing): one superseded before the Actuator applied it never is. Once applied, the Actuator holds its requests until a later Approved Sizing of that container, Automation or a Revert; a later one that changes only one resource keeps the other's held value. Refused for a container that is learning or has no change, and while the Contract's Kill switch is on. Approving changes nothing in a cluster until the Actuator applies it.
-_Avoid_: Applied Sizing, Executed action (nothing ran)
+**Approved Sizing**: One container's Sizing that the Operator approved from the Hub MCP server, kept with the exact requests approved, for the Actuator to apply.
+- It is current, waiting to be applied, until a later Sizing of that container is stored.
+  - That later Sizing supersedes it whatever its values, and for good.
+  - A run that read the cluster without that container supersedes nothing.
+  - One superseded before the Actuator applied it never is.
+- Once applied, the Actuator holds its requests until a later Approved Sizing of that container, Automation or a Revert.
+  - A later one that changes only one resource keeps the other's held value.
+- Refused for a container that is learning or has no change, and while the Contract's Kill switch is on.
+- Approving changes nothing in a cluster until the Actuator applies it.
+- _Avoid_: Applied Sizing, Executed action (nothing ran)
 
-**Sizing policy**:
-How Sizings are computed: the percentile, the look-back window, headroom, minimums and maximums, and the limit strategy. Built-ins (production, high-availability, batch) mean the same in every Contract; a Contract's own policies, each a built-in with some settings changed, and the rules that pick one per container are in its `contract.yaml`. The policy `off` gives a container no Sizing.
+**Sizing policy**: How Sizings are computed: the percentile, the look-back window, headroom, minimums and maximums, and the limit strategy.
+- Built-ins (production, high-availability, batch) mean the same in every Contract.
+- A Contract's own policies, each a built-in with some settings changed, and the rules that pick one per container, are in its `contract.yaml`.
+- The policy `off` gives a container no Sizing.
 
-**Waste**:
-The requests above a Workload's Sizings, times its average pods: what the Sizings would free with headroom kept. A container that is learning, needs more, or is held by throttling or an OOM kill has none. Stored hourly with the Sizings and their risks. A DaemonSet's container whose Actuator applies its Sizings per instance type counts each type's pods against that type's own Sizing (a type still learning has none), and its requests cost what each type's pods ask.
-_Avoid_: Savings (that is waste priced, Phase 10), over-provisioning (for the number)
+**Waste**: The requests above a Workload's Sizings, times its average pods: what the Sizings would free with headroom kept.
+- A container that is learning, needs more, or is held by throttling or an OOM kill has none.
+- Stored hourly with the Sizings and their risks.
+- A DaemonSet's container whose Actuator applies its Sizings per instance type counts each type's pods against that type's own Sizing (a type still learning has none).
+  - Its requests cost what each type's pods ask.
+- _Avoid_: Savings (that is waste priced, Phase 10), over-provisioning (for the number)
 
-**Idle GPU**:
-A GPU a container requests whose busiest hour in its Sizing policy's window stays under 5% busy (DCGM's graphics engine activity where the exporter has it, its GPU utilization otherwise); memory used is shown, never counted. Counted per GPU and grouped by Workload by the share of the window each was held, so a pod that moved across GPUs counts as one, with its cost; a GPU still learning (fewer hours read than its policy's history), shared by time-slicing, or a MIG instance is not judged. Reported only, never actuated. Not Waste: a GPU has no Sizing, so its cost is a line of its own beside Waste.
-_Avoid_: GPU waste, unused GPU (a GPU no container requests is a node's, Phase 17.5)
+**Idle GPU**: A GPU a container requests whose busiest hour in its Sizing policy's window stays under 5% busy (DCGM's graphics engine activity where the exporter has it, its GPU utilization otherwise).
+- Memory used is shown, never counted.
+- Counted per GPU and grouped by Workload by the share of the window each was held, so a pod that moved across GPUs counts as one, with its cost.
+- A GPU still learning (fewer hours read than its policy's history), shared by time-slicing, or a MIG instance is not judged.
+- Reported only, never actuated.
+- Not Waste: a GPU has no Sizing, so its cost is a line of its own beside Waste.
+- _Avoid_: GPU waste, unused GPU (a GPU no container requests is a node's, Phase 17.5)
 
-**Unrequested GPU**:
-A GPU on a node that no container requests (Phase 17.5): counted per node and priced at the cluster's GPU rate, apart from Idle GPUs and Waste, since no Workload holds it. A node's question (could it go, or hold more), never a Workload's.
-_Avoid_: idle GPU (that is a requested one, unused), free GPU
+**Unrequested GPU**: A GPU on a node that no container requests (Phase 17.5).
+- Counted per node and priced at the cluster's GPU rate, apart from Idle GPUs and Waste, since no Workload holds it.
+- A node's question (could it go, or hold more), never a Workload's.
+- _Avoid_: idle GPU (that is a requested one, unused), free GPU
 
-**Automation**:
-The standing approval for one Workload: the Operator approves its Sizing policy once, in the contracts repo (`automate: true` on the rule that picks the policy, in a Contract whose cluster runs an Actuator), and the Actuator then applies its Sizings without asking: each run's newest, a change under 10% ignored, an increase at once, a decrease at most once a day per container. Three Rollbacks of the Workload in 7 days end it until the oldest of them is 7 days old; the Operator hears of it in Slack. A person stops it on one Workload with the pause annotation. Off by default.
-_Avoid_: Auto mode, Proposed action (a Sizing under Automation never pauses)
+**Automation**: The standing approval for one Workload: the Operator approves its Sizing policy once, in the contracts repo (`automate: true` on the rule that picks the policy, in a Contract whose cluster runs an Actuator).
+- The Actuator then applies its Sizings without asking: each run's newest, a change under 10% ignored, an increase at once, a decrease at most once a day per container.
+- Three Rollbacks of the Workload in 7 days end it until the oldest of them is 7 days old; the Operator hears of it in Slack.
+- A person stops it on one Workload with the pause annotation.
+- Off by default.
+- _Avoid_: Auto mode, Proposed action (a Sizing under Automation never pauses)
 
-**Actuator**:
-The process in a client cluster that applies approved Sizings, in place first, and reports what it did. It runs only what the Hub approved: every minute it pulls its cluster's desired state from the Hub with its own token, bound to one Contract's cluster, and nothing while the Kill switch is on. What it applied it holds: new pods of that Workload get the same requests until a person changes them in its template. Pods start unchanged when it is down. While the Hub is unreachable it keeps what it holds and changes nothing new. A Workload annotated `squero-actuator/pause: "true"` is left alone, as under the Kill switch. It resizes Deployments, StatefulSets, DaemonSets and Argo Rollouts. A CronJob's pods it never resizes: its webhook gives its next run's pods the held requests, and that first run is watched until it ends (7 days at most), a pod of it Failed or OOM-killed being a Rollback. A Job of no CronJob runs once, so it is never sent.
-_Avoid_: Agent, controller (alone)
+**Actuator**: The process in a client cluster that applies approved Sizings, in place first, and reports what it did.
+- It runs only what the Hub approved: every minute it pulls its cluster's desired state from the Hub with its own token, bound to one Contract's cluster, and nothing while the Kill switch is on.
+- What it applied it holds: new pods of that Workload get the same requests until a person changes them in its template.
+- Pods start unchanged when it is down.
+- While the Hub is unreachable it keeps what it holds and changes nothing new.
+- A Workload annotated `squero-actuator/pause: "true"` is left alone, as under the Kill switch.
+- It resizes Deployments, StatefulSets, DaemonSets and Argo Rollouts.
+- A CronJob's pods it never resizes. Its webhook gives its next run's pods the held requests, and that first run is watched until it ends (7 days at most). A pod of it Failed or OOM-killed is a Rollback.
+- A Job of no CronJob runs once, so it is never sent.
+- _Avoid_: Agent, controller (alone)
 
-**Actuation**:
-One outcome the Actuator reports for one container of a Workload: applied (every live pod of the Workload has the new requests, allocated by the kubelet; a pod whose node is gone is not counted), skipped, failed, rolled back (see Rollback), or handed back (a person changed the template's requests it held, or the Workload is gone: the Actuator lets go), with the reason and how many pods; or, changing nothing, an OOM kill it saw (`oom_killed`, see OOM kill); or a Step-up it made (`stepped_up`) or that ended (`step_ended`); or a Burst it made (`burst`) or that ended (`burst_ended`), or a container the Hub says is throttled of which it made none (`throttled`). The Hub keeps them as the Actuator's audit trail, each dated by the Actuator's clock but never later than the Hub received it, of a kind the Actuator resizes only, and at most 1,000 received from one cluster an hour (the rest refused, for the Actuator to send again later).
-_Avoid_: Executed action (that is a Proposed action the Operator approved)
+**Actuation**: One outcome the Actuator reports for one container of a Workload.
+- Changing the pods: applied (every live pod of the Workload has the new requests, allocated by the kubelet; a pod whose node is gone is not counted), skipped, failed, rolled back (see Rollback), or handed back (a person changed the template's requests it held, or the Workload is gone: the Actuator lets go), with the reason and how many pods.
+- Changing nothing: an OOM kill it saw (`oom_killed`, see OOM kill).
+- A Step-up it made (`stepped_up`) or that ended (`step_ended`).
+- A Burst it made (`burst`) or that ended (`burst_ended`), or a container the Hub says is throttled of which it made none (`throttled`).
+- The Hub keeps them as the Actuator's audit trail, each dated by the Actuator's clock but never later than the Hub received it, of a kind the Actuator resizes only.
+- At most 1,000 received from one cluster an hour; the rest are refused, for the Actuator to send again later.
+- _Avoid_: Executed action (that is a Proposed action the Operator approved)
 
-**Rollback**:
-The Actuator's own undo of a Sizing that made pods unhealthy within an hour of its resize (a container with its requests restarted or was OOM-killed, or a pod it resized stayed NotReady for 2 minutes; never a pod whose node is gone, which is NotReady or Failed through no Sizing, nor a container its node's own restart started again): every such pod back to its template's requests, in place and at once. Then no new Sizing of that container for 24 hours, doubling with each rollback within 7 days. Not while the Kill switch is on; the Operator hears of it in Slack at once.
-_Avoid_: Revert (that is the Operator's undo); a Deployment put back on an earlier revision (`kubectl rollout undo`), which `recent_changes` calls a `rollout undo`
+**Rollback**: The Actuator's own undo of a Sizing that made pods unhealthy within an hour of its resize.
+- What counts: a container with its requests restarted or was OOM-killed, or a pod it resized stayed NotReady for 2 minutes.
+- Never a pod whose node is gone, which is NotReady or Failed through no Sizing, nor a container its node's own restart started again.
+- The action: every such pod goes back to its template's requests, in place and at once.
+- Then no new Sizing of that container for 24 hours, doubling with each rollback within 7 days.
+- Not while the Kill switch is on; the Operator hears of it in Slack at once.
+- _Avoid_: Revert (that is the Operator's undo); a Deployment put back on an earlier revision (`kubectl rollout undo`), which `recent_changes` calls a `rollout undo`
 
-**Revert**:
-The Operator's undo of what the Actuator holds for a container, asked from the console's Automation page or the Hub MCP server (`revert_sizing`): its pods go back to their template's requests, in place, and the Actuator stops holding it. Automation of that container stops until the Operator approves one of its Sizings. Refused while the Kill switch is on. It drops the container's Step-up and its Burst with it, and is offered for a container that has only one of those.
-_Avoid_: Rollback (that is the Actuator's own undo of a Sizing that made pods unhealthy)
+**Revert**: The Operator's undo of what the Actuator holds for a container, asked from the console's Automation page or the Hub MCP server (`revert_sizing`).
+- Its pods go back to their template's requests, in place, and the Actuator stops holding it.
+- Automation of that container stops until the Operator approves one of its Sizings.
+- Refused while the Kill switch is on.
+- It drops the container's Step-up and its Burst with it, and is offered for a container that has only one of those.
+- _Avoid_: Rollback (that is the Actuator's own undo of a Sizing that made pods unhealthy)
 
-**Eviction window**:
-The days and hours, in the Contract's own timezone (its `actuator:` block), when the Actuator may evict a pod whose in-place resize is Infeasible: its node can never fit the new requests (the kubelet says so on Kubernetes 1.33 and 1.34; from 1.35 the API server refuses the resize at once), so that it starts again elsewhere with them. Eviction is off unless the Contract turns it on, and then needs at least one window. It goes through the Eviction API, so PodDisruptionBudgets hold; one pod at a time, at least 5 minutes apart, never another pod to make room, never a StatefulSet's, DaemonSet's or Argo Rollout's pod, never a pod of a Deployment with one replica or that no PodDisruptionBudget covers. Outside a window the rollout waits on that pod. A replacement not Ready within 10 minutes is a Rollback.
-_Avoid_: Maintenance window (it gates eviction only; resizes in place go on at any time)
+**Eviction window**: The days and hours, in the Contract's own timezone (its `actuator:` block), when the Actuator may evict a pod whose in-place resize is Infeasible.
+- Infeasible means its node can never fit the new requests. The kubelet says so on Kubernetes 1.33 and 1.34; from 1.35 the API server refuses the resize at once.
+- The pod then starts again elsewhere with the new requests.
+- Eviction is off unless the Contract turns it on, and then needs at least one window.
+- It goes through the Eviction API, so PodDisruptionBudgets hold.
+- One pod at a time, at least 5 minutes apart.
+- Never another pod to make room.
+- Never a StatefulSet's, DaemonSet's or Argo Rollout's pod.
+- Never a pod of a Deployment with one replica, or one that no PodDisruptionBudget covers.
+- Outside a window the rollout waits on that pod.
+- A replacement not Ready within 10 minutes is a Rollback.
+- _Avoid_: Maintenance window (it gates eviction only; resizes in place go on at any time)
 
-**Reflex**:
-A bounded, expiring change the Actuator makes on its own under Automation: memory step-up after an OOM kill, burst CPU headroom, startup CPU boost, rollback of a Sizing that made pods unhealthy.
+**Reflex**: A bounded, expiring change the Actuator makes on its own under Automation.
+- Its kinds: memory step-up after an OOM kill; burst CPU headroom; startup CPU boost; rollback of a Sizing that made pods unhealthy.
 
-**OOM kill**:
-A container ended by the kernel for want of memory, of two kinds the pod itself doesn't tell apart (`OOMKilled`, exit code 137 in both). *Node-level*: its node ran out of memory, whatever the container's limit (the kubelet says so in a `SystemOOM` Event on the node), or the container has no memory limit. *Container-limit*: any other, of a container with a memory limit: it reached its own limit or, which nothing on a pod or in an Event tells apart, one above it (its pod's, or the node's allocatable memory that all pods share). Where the Contract sets `reflexes.oom`, the Actuator tells which each kill of an automated container was and reports it as an Actuation, changing nothing; the memory step-up acts on it.
+**OOM kill**: A container ended by the kernel for want of memory, of two kinds the pod itself doesn't tell apart (`OOMKilled`, exit code 137 in both).
+- *Node-level*: its node ran out of memory, whatever the container's limit (the kubelet says so in a `SystemOOM` Event on the node), or the container has no memory limit.
+- *Container-limit*: any other, of a container with a memory limit. It reached its own limit or, which nothing on a pod or in an Event tells apart, one above it (its pod's, or the node's allocatable memory that all pods share).
+- Where the Contract sets `reflexes.oom`, the Actuator tells which each kill of an automated container was. It reports it as an Actuation, changing nothing. The memory step-up acts on it.
 
-**Step-up**:
-The Reflex for OOM kills: after a container-limit OOM kill of an automated container, the Actuator raises its memory limit and its memory request together, by one step (to the larger of 1.2 times and 100 MiB more, the same factor for both, so the pod's QoS class stays) on every pod of the Workload in place. Never past `max` times the limit in the Workload's template; one step a container every 10 minutes; a pod killed below the current step gets that step, not a further one. It takes the container's memory from any Sizing held for it, and a Sizing never undoes it. It ends by itself: `expires` after its last step unless the container's memory peak is still above its template's limit; or by a Revert, or a person's change to the template's memory. With the Startup boost and the Burst, the only times the Actuator changes a limit ([ADR 0005](docs/adr/0005-reflexes-may-raise-limits.md)).
-_Avoid_: bump, boost (that is the Startup boost)
+**Step-up**: The Reflex for OOM kills. After a container-limit OOM kill of an automated container, the Actuator raises its memory limit and its memory request together, by one step.
+- The step is the larger of 1.2 times and 100 MiB more, the same factor for both, so the pod's QoS class stays.
+- It is applied on every pod of the Workload in place.
+- Never past `max` times the limit in the Workload's template.
+- One step a container every 10 minutes.
+- A pod killed below the current step gets that step, not a further one.
+- It takes the container's memory from any Sizing held for it, and a Sizing never undoes it.
+- It ends by itself: `expires` after its last step, unless the container's memory peak is still above its template's limit.
+- It also ends by a Revert, or a person's change to the template's memory.
+- With the Startup boost and the Burst, these are the only times the Actuator changes a limit ([ADR 0005](docs/adr/0005-reflexes-may-raise-limits.md)).
+- _Avoid_: bump, boost (that is the Startup boost)
 
-**Startup boost**:
-The Reflex for a slow start: a new pod of an automated container whose Sizing rule sets `startup_boost` starts with its CPU limit times that factor (1.5 to 4), given by the Actuator's webhook at the pod's creation, and gets its own limit back in place once the pod is Ready, the container has run for 5 minutes, or it restarted, whichever is first. The CPU limit only: requests are untouched, so the pod is scheduled, and an HPA or the Cluster Autoscaler reads it, as without the boost. Not for a Guaranteed pod, a container without a CPU limit, or a CronJob's run; a restart never gets one.
-_Avoid_: Step-up (that is the memory Reflex for OOM kills), Burst (that is the CPU Reflex for throttling)
+**Startup boost**: The Reflex for a slow start.
+- A new pod of an automated container whose Sizing rule sets `startup_boost` starts with its CPU limit times that factor (1.5 to 4). The Actuator's webhook gives it at the pod's creation.
+- It gets its own limit back in place once the pod is Ready, the container has run for 5 minutes, or it restarted, whichever is first.
+- The CPU limit only: requests are untouched, so the pod is scheduled, and an HPA or the Cluster Autoscaler reads it, as without the boost.
+- Not for a Guaranteed pod, a container without a CPU limit, or a CronJob's run. A restart never gets one.
+- _Avoid_: Step-up (that is the memory Reflex for OOM kills), Burst (that is the CPU Reflex for throttling)
 
-**Burst**:
-The Reflex for CPU throttling: an automated container with a CPU limit, not Guaranteed, that was throttled in more than a quarter of its CPU periods over the hour before the Hub's hourly read gets its CPU limit raised by a quarter of its template's limit, a step each such read, on every pod in place and on new pods; requests untouched, never a CronJob's. Never past `max` times the limit in the Workload's template; a container's steps at least 45 minutes apart; at most 5 of the cluster's 10 Reflex steps an hour. It ends `expires` after its last step unless the container's CPU peak over that time stays above 90% of its template's limit, its pods then back to that limit in place; or by a Revert, or a person's change to the template's CPU limit. The Hub decides the trigger and reads the peak (the Actuator can't see throttling); the Actuator makes the change.
-_Avoid_: Startup boost (that is for a pod's start), Step-up (that is memory, after an OOM kill)
+**Burst**: The Reflex for CPU throttling.
+- An automated container with a CPU limit, not Guaranteed, that was throttled in more than a quarter of its CPU periods over the hour before the Hub's hourly read gets its CPU limit raised by a quarter of its template's limit.
+  - It takes one step each such read, on every pod in place and on new pods.
+  - Requests are untouched, and it is never a CronJob's.
+- Never past `max` times the limit in the Workload's template.
+- A container's steps are at least 45 minutes apart.
+- At most 5 of the cluster's 10 Reflex steps an hour.
+- It ends `expires` after its last step, unless the container's CPU peak over that time stays above 90% of its template's limit. Its pods then go back to that limit in place.
+- It also ends by a Revert, or a person's change to the template's CPU limit.
+- The Hub decides the trigger and reads the peak (the Actuator can't see throttling); the Actuator makes the change.
+- _Avoid_: Startup boost (that is for a pod's start), Step-up (that is memory, after an OOM kill)
 
-**List price**:
-What a cloud charges on demand per hour for an instance type in a region, from its public price list (USD unless the Contract asks for another currency, which only Azure's and GCP's catalogs give; no discounts). A cluster with no typed prices gets its nodes' list prices, split into a CPU and a GiB price by one weight, so they add back up to the nodes' price. A Spot node costs its spot list price where the cloud gives one (Azure's and GCP's catalogs; AWS's spot price history, read with the Contract's own credentials and averaged over the region's zones and the last day), else its on-demand list price at the cluster's spot discount.
+**List price**: What a cloud charges on demand per hour for an instance type in a region, from its public price list (USD unless the Contract asks for another currency, which only Azure's and GCP's catalogs give; no discounts).
+- A cluster with no typed prices gets its nodes' list prices, split into a CPU and a GiB price by one weight, so they add back up to the nodes' price.
+- A Spot node costs its spot list price where the cloud gives one: Azure's and GCP's catalogs, or AWS's spot price history, read with the Contract's own credentials and averaged over the region's zones and the last day.
+- Otherwise it costs its on-demand list price at the cluster's spot discount.
 
-**Spot node**:
-A node carrying the cluster's spot label (`spot.label` in the Contract; a node without it is on-demand), priced at the cluster's spot discount: the share of its on-demand price it costs (0.35: it pays 35%). The cluster's one CPU and one GiB price blend its spot and on-demand nodes, by size, each hour: a typed price is then the on-demand rate, a list price each spot node's at the discount. Every pod costs the cluster's blended price, wherever it runs; a Node that could go is priced at its own rate. Seen through kube-state-metrics, which shows a node label only when allowlisted; where no node shows it, every node is priced on-demand.
-_Avoid_: preemptible node, spot instance (the cloud's own words for the machine)
+**Spot node**: A node carrying the cluster's spot label (`spot.label` in the Contract; a node without it is on-demand), priced at the cluster's spot discount: the share of its on-demand price it costs (0.35: it pays 35%).
+- The cluster's one CPU and one GiB price blend its spot and on-demand nodes, by size, each hour. A typed price is then the on-demand rate; a list price, each spot node's at the discount.
+- Every pod costs the cluster's blended price, wherever it runs. A Node that could go is priced at its own rate.
+- Seen through kube-state-metrics, which shows a node label only when allowlisted. Where no node shows it, every node is priced on-demand.
+- _Avoid_: preemptible node, spot instance (the cloud's own words for the machine)
 
-**Spot ratio**:
-The share of a Workload's replicas steered to Spot nodes, set on the Sizing rule that picks it (`spot: {ratio, on_demand}`), for a Deployment or Rollout on a cluster that names its spot label and runs an Actuator; with its On-demand minimum it gives the replicas meant for each: on-demand the larger of the minimum and the share that isn't spot, rounded up (0.7 with 2: 10 replicas give 3 and 7, 4 give 2 and 2). A Workload with fewer than 2 replicas, or one that blocks a node, gets none on spot. It is the Operator's setting, not tied to Automation. A CronJob has none: its runs go on spot whole, by a rule naming `kind: CronJob` with `spot: true`, a run's retries off spot.
-_Avoid_: spot percentage, spot share
+**Spot ratio**: The share of a Workload's replicas steered to Spot nodes, set on the Sizing rule that picks it (`spot: {ratio, on_demand}`).
+- It applies to a Deployment or Rollout on a cluster that names its spot label and runs an Actuator.
+- With its On-demand minimum it gives the replicas meant for each: on-demand the larger of the minimum and the share that isn't spot, rounded up (0.7 with 2: 10 replicas give 3 and 7, 4 give 2 and 2).
+- A Workload with fewer than 2 replicas, or one that blocks a node, gets none on spot.
+- It is the Operator's setting, not tied to Automation.
+- A CronJob has none: its runs go on spot whole, by a rule naming `kind: CronJob` with `spot: true`, and a run's retries are off spot.
+- _Avoid_: spot percentage, spot share
 
-**On-demand minimum**:
-The replicas of a Workload under a Spot ratio kept off Spot nodes whatever the ratio, 1 or more, so no Workload is ever all on spot. Phase 14's Floor is another thing: the fewest replicas an autoscaler should keep.
-_Avoid_: on-demand floor, base capacity
+**On-demand minimum**: The replicas of a Workload under a Spot ratio kept off Spot nodes whatever the ratio, 1 or more, so no Workload is ever all on spot.
+- Phase 14's Floor is another thing: the fewest replicas an autoscaler should keep.
+- _Avoid_: on-demand floor, base capacity
 
-**Bill**:
-What the cloud says a cluster's compute cost each UTC day, read from its billing API (AWS Cost Explorer, Azure Cost Management or GCP's billing export in BigQuery, usage before credits, lines carrying the cluster's `billing` tag, spot ones included). The Hub sets it beside the estimate (the cluster's node-hours at its unit prices, a Spot node's hours at its own rate): within 5% it reconciles, else it is flagged; when fewer than 90% of the window's hours were sampled it gives the gap but no verdict, and so it does while GCP's export is still settling a day of the window (billed for fewer RAM GiB-hours than its nodes were sampled for, read less than 3 days after it ended, and not every day so). Beside it, what its spot lines cost against what the estimate prices its spot hours at, a spot price checked by the bill. A Bill never changes a shown cost.
+**Bill**: What the cloud says a cluster's compute cost each UTC day, read from its billing API (AWS Cost Explorer, Azure Cost Management or GCP's billing export in BigQuery).
+- It is usage before credits, on lines carrying the cluster's `billing` tag, spot ones included.
+- The Hub sets it beside the estimate (the cluster's node-hours at its unit prices, a Spot node's hours at its own rate).
+  - Within 5%, it reconciles; else it is flagged.
+  - When fewer than 90% of the window's hours were sampled, it gives the gap but no verdict.
+  - It does the same while GCP's export is still settling a day of the window (billed for fewer RAM GiB-hours than its nodes were sampled for, read less than 3 days after it ended, and not every day so).
+- Beside it, what its spot lines cost against what the estimate prices its spot hours at: a spot price checked by the bill.
+- A Bill never changes a shown cost.
 
-**Savings**:
-What Sizings would save (available: the waste's cost) or saved (realized), in the Contract's own unit prices, or in cores and GiB when it has none. Realized Savings are a request lowered to within 10% of a Sizing shown before; for a DaemonSet applied per instance type, each type's pods' request against that type's Sizing.
+**Savings**: What Sizings would save (available: the waste's cost) or saved (realized), in the Contract's own unit prices, or in cores and GiB when it has none.
+- Realized Savings are a request lowered to within 10% of a Sizing shown before.
+- For a DaemonSet applied per instance type, each type's pods' request is compared with that type's Sizing.
 
 ### Evaluation
 
-**Scenario**:
-A recorded Alert group or Question, the tool results captured from a real cluster, and the Expectation a correct Triage or Answer must meet.
+**Scenario**: A recorded Alert group or Question, the tool results captured from a real cluster, and the Expectation a correct Triage or Answer must meet.
 
-**Expectation**:
-What a passing Triage must contain: an allowed Category, root-cause keywords, a tool-call budget, and the Proposed actions it may make (none, by default). For a Question: keywords in the Answer, the tools its Evidence must cite, and a tool-call budget.
+**Expectation**: What a passing Triage must contain: an allowed Category, root-cause keywords, a tool-call budget, and the Proposed actions it may make (none, by default).
+- For a Question: keywords in the Answer, the tools its Evidence must cite, and a tool-call budget.
