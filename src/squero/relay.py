@@ -50,7 +50,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from squero import contracts, usage
+from squero import contracts, protocol, usage
 from squero.contracts import Contract
 from squero.models import AlertGroup
 from squero.servers import kubernetes, prometheus
@@ -504,7 +504,7 @@ def webhook(uplink: Uplink) -> Starlette:
 async def dial(url: str, token: str, server: FastMCP, uplink: Uplink | None = None) -> None:
     """Connect to the Hub and serve `server` over the socket until it closes; `uplink`'s
     alerts go over it meanwhile."""
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}", protocol.HEADER: str(protocol.OWN["Relay"])}
     uplink = uplink or Uplink()
     async with websockets.connect(url, additional_headers=headers, max_size=MAX_FRAME) as ws:
 
@@ -602,6 +602,8 @@ async def run(
             # 401 or 403 is the token; anything else (Caddy's 502 while the Hub is down) isn't
             hint = ": check the token" if code in (401, 403) else ""
             why = f"the Hub refused the connection ({code}){hint}"
+            if code == 426:  # slice 18.3: which side to upgrade
+                why = protocol.told("Relay", e.response.headers.get(protocol.HEADER))
         except (OSError, websockets.WebSocketException) as e:
             why = f"no connection to the Hub: {type(e).__name__}"
         if clock() - started > 60:

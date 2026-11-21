@@ -66,6 +66,7 @@ PodDisruptionBudget covers, is never evicted: its rollout fails as with eviction
 
 import base64
 import copy
+import importlib.metadata
 import json
 import logging
 import math
@@ -97,7 +98,7 @@ from kubernetes.utils.quantity import parse_quantity
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from squero import blockers
+from squero import blockers, protocol
 from squero.contracts import on_demand_of
 
 log = logging.getLogger("squero.actuator")
@@ -161,6 +162,9 @@ SHUTDOWN = "imminent node shutdown"  # in a pod's message, its reason Terminated
 CHURN = Decimal("0.10")  # under Automation, a change smaller than this is ignored (slice 12.5)
 LOWER_EVERY = 86400  # under Automation, a container's requests go down at most this often
 UNREACHABLE_SECONDS = 900  # the Hub unanswered this long: an Event says so
+# a 4xx that isn't the Hub's verdict on what was sent, so it is sent again: its token, its
+# Protocol (slice 18.3: until one side is upgraded), its hourly limit
+RESEND = (401, 403, 426, 429)
 PAUSE = "squero-actuator/pause"  # a workload annotated "true" is left alone
 # the Startup boost (slice 13.4): on a pod the webhook boosted, each boosted container's own
 # CPU limit (JSON, name to quantity), given back once the pod is Ready or this long started
@@ -2704,7 +2708,10 @@ class Actuator:
             r.raise_for_status()
             return Desired.model_validate_json(r.content)
         except httpx.HTTPStatusError as e:
-            log.warning("the Hub answered %s for the desired state", e.response.status_code)
+            if e.response.status_code == 426:  # slice 18.3: which side to upgrade
+                log.error("%s", protocol.told("Actuator", e.response.headers.get(protocol.HEADER)))
+            else:
+                log.warning("the Hub answered %s for the desired state", e.response.status_code)
         except (httpx.HTTPError, ValidationError) as e:
             log.warning("the Hub's desired state: %s", type(e).__name__)
         return None
@@ -2717,7 +2724,7 @@ class Actuator:
                 r.raise_for_status()
             except httpx.HTTPError as e:
                 code = e.response.status_code if isinstance(e, httpx.HTTPStatusError) else None
-                if code and 400 <= code < 500 and code not in (401, 403, 429):
+                if code and 400 <= code < 500 and code not in RESEND:
                     # the Hub's verdict on these reports, not an outage: resending never helps
                     log.error("the Hub refused %d reports (%d): dropped", len(batch), code)
                     del self.unsent[: len(batch)]
@@ -3135,7 +3142,7 @@ class Actuator:
             r.raise_for_status()
         except httpx.HTTPError as e:
             code = e.response.status_code if isinstance(e, httpx.HTTPStatusError) else None
-            if not (code and 400 <= code < 500 and code not in (401, 403, 429)):
+            if not (code and 400 <= code < 500 and code not in RESEND):
                 log.warning("reporting its Blockers to the Hub: %s", code or type(e).__name__)
                 self.blockers_due = now + BLOCKERS_RETRY
                 return
@@ -4353,6 +4360,15 @@ class Actuator:
         return out
 
 
+def hub_headers(token: SecretStr) -> dict[str, str]:
+    """On every call to the Hub: its token, and its Protocol and version (slice 18.3)."""
+    return {
+        "Authorization": f"Bearer {token.get_secret_value()}",
+        protocol.HEADER: str(protocol.OWN["Actuator"]),
+        protocol.VERSION: importlib.metadata.version("squero"),
+    }
+
+
 def main(s: ActuatorSettings) -> None:  # pragma: no cover - the cluster's own process
     config.load_incluster_config()  # type: ignore[no-untyped-call]
     single()
@@ -4360,8 +4376,7 @@ def main(s: ActuatorSettings) -> None:  # pragma: no cover - the cluster's own p
     apps = Apps(Calm(client.AppsV1Api()), custom, Calm(client.BatchV1Api()))
     check_version(client.VersionApi())
     cert, key = certificate(f"{WEBHOOK}.{s.namespace}.svc")
-    headers = {"Authorization": f"Bearer {s.token.get_secret_value()}"}
-    with httpx.Client(base_url=s.hub, headers=headers, timeout=15) as http:
+    with httpx.Client(base_url=s.hub, headers=hub_headers(s.token), timeout=15) as http:
         a = Actuator(http, core, apps, s.namespace, pod=s.pod)
         a.autoscaling, a.custom = Calm(client.AutoscalingV2Api()), custom
         a.policy = Calm(client.PolicyV1Api())

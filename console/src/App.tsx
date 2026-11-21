@@ -208,12 +208,14 @@ function KillSwitchBar({ contract }: { contract: string }) {
   );
 }
 
-/** Where to act on an Agenda item: its Investigation, its Workload, or the Cost page. */
+/** Where to act on an Agenda item: its Investigation, its Workload, the Cost page, or Health
+ * (a part whose Protocol the Hub refused: its version and Protocol there). */
 function link(contract: string, i: api.AgendaItem): string | null {
   const here = `contract=${encodeURIComponent(contract)}`;
   if (i.id) return page(i.id);
   if (i.workload) return `/app/?${here}&workload=${encodeURIComponent(i.workload)}`;
   if (i.kind === "bill") return `/app/?${here}&view=cost`;
+  if (i.kind === "protocol") return `/app/?${here}&view=health`;
   return null;
 }
 

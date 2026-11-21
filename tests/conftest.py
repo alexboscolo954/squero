@@ -16,7 +16,7 @@ from langchain.messages import AIMessage, ToolCall
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from pydantic import SecretStr
 
-from squero import agent, contracts
+from squero import agent, contracts, protocol
 from squero.config import Settings
 
 NOW = datetime.now(UTC)
@@ -25,6 +25,14 @@ NOW = datetime.now(UTC)
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+@pytest.fixture(autouse=True)
+def _forget_protocols() -> Iterator[None]:
+    """What parts last said (slice 18.3) is one process's memory: never another test's."""
+    protocol.SEEN.clear()
+    yield
+    protocol.SEEN.clear()
 
 
 DEMO_CONTRACTS = Path(__file__).parent.parent / "demo" / "contracts"

@@ -538,6 +538,7 @@ test("the Agenda lists what to look at now, in the Hub's order, each linking whe
         items: [
           { kind: "approval", title: "1 Proposed action wait for a decision: <b>pods</b>", at: 1_700_000_000, id: "t1", cluster: null, workload: null },
           { kind: "stale", title: "Sizing reads failing: down", at: 1_700_000_000, id: null, cluster: "kind", workload: null },
+          { kind: "protocol", title: "Actuator in kind speaks Protocol 3, this Hub 1: upgrade the Hub", at: 1_700_000_000, id: null, cluster: "kind", workload: null },
           { kind: "bill", title: "Bill +8.0% from the estimate", at: null, id: null, cluster: "aws", workload: null },
           { kind: "waste", title: "Waste: 2000m and 0Mi above its Sizings", at: null, id: null, cluster: "kind", workload: "kind/lab/Deployment/api" },
         ],
@@ -550,6 +551,7 @@ test("the Agenda lists what to look at now, in the Hub's order, each linking whe
   expect(items).toEqual([
     "1 Proposed action wait for a decision: <b>pods</b> (goes Stale 2023-11-14 22:13 UTC)",
     "kind: Sizing reads failing: down (2023-11-14 22:13 UTC)",
+    "kind: Actuator in kind speaks Protocol 3, this Hub 1: upgrade the Hub (2023-11-14 22:13 UTC)",
     "aws: Bill +8.0% from the estimate",
     "kind/lab/Deployment/api: Waste: 2000m and 0Mi above its Sizings",
   ]);
@@ -557,6 +559,7 @@ test("the Agenda lists what to look at now, in the Hub's order, each linking whe
   expect(hrefs).toEqual([
     "/app/?view=investigation&id=t1",
     null,
+    "/app/?contract=demo-shop&view=health",
     "/app/?contract=demo-shop&view=cost",
     "/app/?contract=demo-shop&workload=kind%2Flab%2FDeployment%2Fapi",
   ]);

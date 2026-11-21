@@ -56,6 +56,7 @@ from squero import (
     masking,
     notices,
     proposals,
+    protocol,
     related,
     relay,
     sizing,
@@ -69,6 +70,7 @@ from squero.models import AlertGroup, GrafanaAlertGroup, Investigation
 from squero.observability import PENDING_APPROVALS, TRIAGE_SECONDS, TRIAGES
 from squero.safety import redact, redact_capped
 from squero.servers import jira
+from squero.sizing import utc
 from squero.slack import (
     STATUS,
     Slack,
@@ -1620,12 +1622,32 @@ def create_app(
             ms = round(1000 * (time.monotonic() - start))
             return {"name": name, "ok": not detail, "ms": ms, "detail": redact_capped(detail, 300)}
 
-        # Each Relay: connected since when and its version, or offline since when (3.3b).
-        shown = [(cl.name, relays.state(c.id, cl.name)) for cl in c.clusters if cl.via == "relay"]
-        states = [
-            {"name": f"relay {name}", "ok": ok, "ms": 0, "detail": redact_capped(text, 300)}
-            for name, (ok, _, text) in shown
-        ]
+        # Each Relay: connected since when, its version and Protocol, or offline since when
+        # (3.3b, 18.3); each Actuator: when last seen, its version and Protocol (18.3).
+        states: list[dict[str, Any]] = []
+        for cl in c.clusters:
+            if cl.via == "relay":
+                ok, _, text = relays.state(c.id, cl.name)
+                seen = protocol.SEEN.get((c.id, cl.name, "Relay"))
+                if ok and seen and not seen.refused:
+                    text += f", Protocol {seen.protocol}"
+                elif seen and seen.refused:
+                    text += f"; {protocol.refusal('Relay', cl.name, seen.protocol)}"
+                states.append({"name": f"relay {cl.name}", "ok": ok, "ms": 0, "detail": text})
+            if cl.actuator_token_secret:
+                seen = protocol.SEEN.get((c.id, cl.name, "Actuator"))
+                if seen is None:
+                    ok, text = True, f"not seen since the Hub started at {utc(relays.started)}"
+                else:
+                    ok, text = not seen.refused, f"seen at {utc(seen.at)}"
+                    text += f", version {seen.version}" if seen.version else ""
+                    if seen.refused:
+                        text += f"; {protocol.refusal('Actuator', cl.name, seen.protocol)}"
+                    else:
+                        text += f", Protocol {seen.protocol}"
+                states.append({"name": f"actuator {cl.name}", "ok": ok, "ms": 0, "detail": text})
+        for s in states:
+            s["detail"] = redact_capped(s["detail"], 300)
         try:
             async with Client(mcp_factory(c).mcp) as client:
                 probed = await asyncio.gather(*(check(client, *p) for p in agent.probes(c)))
@@ -1670,6 +1692,11 @@ def create_app(
         if named is None:
             await ws.close(code=1008)  # before accept: the upgrade gets a 403
             return
+        # slice 18.3: a Protocol it doesn't accept is a 426 carrying its own, after the token
+        if protocol.see(*named, "Relay", ws.headers.get(protocol.HEADER), time.time()).refused:
+            own = {protocol.HEADER: str(protocol.OWN["Relay"])}
+            await ws.send_denial_response(Response(status_code=426, headers=own))
+            return
         await ws.accept()
 
         async def receive() -> str | None:
@@ -1680,12 +1707,25 @@ def create_app(
 
         await relays.hold(named, ws.send_text, receive, ws.close, relay_alert)
 
-    def actuator_of(creds: HTTPAuthorizationCredentials) -> tuple[str, contracts.Cluster]:
-        """The Contract and cluster an Actuator's token names (slice 12.1), or a 401."""
+    async def actuator_of(  # async: SEEN written on the event loop, not a threadpool
+        request: Request,
+        response: Response,
+        creds: HTTPAuthorizationCredentials = Depends(bearer),  # noqa: B008
+    ) -> tuple[str, contracts.Cluster]:
+        """The Contract and cluster an Actuator's token names (slice 12.1), or a 401; a 426
+        for a Protocol the Hub doesn't accept (slice 18.3), its version and Protocol noted,
+        and the Hub's own on every answer. A dependency, so both come before its body is
+        read: a body a newer Protocol changed is a 426, never a 422 it would drop."""
         named = relay.who(f"Bearer {creds.credentials}", actuator_tokens)
         if named is None:
             raise HTTPException(401, "invalid token")
         cid, name = named
+        own = {protocol.HEADER: str(protocol.OWN["Actuator"])}
+        response.headers.update(own)
+        said = request.headers.get(protocol.HEADER)
+        version = request.headers.get(protocol.VERSION)
+        if protocol.see(cid, name, "Actuator", said, time.time(), version).refused:
+            raise HTTPException(426, f"this Hub speaks Protocol {own[protocol.HEADER]}", own)
         return cid, next(cl for cl in by_id[cid].clusters if cl.name == name)
 
     async def rollbacks(cid: str, cluster: str) -> dict[tuple[str, ...], list[float]]:
@@ -1924,7 +1964,7 @@ def create_app(
 
     @app.get("/actuator/desired")
     async def actuator_desired(
-        creds: HTTPAuthorizationCredentials = Depends(bearer),  # noqa: B008
+        who: tuple[str, contracts.Cluster] = Depends(actuator_of),
         kinds: str = "Deployment",
         types: bool = False,
     ) -> actuator.Desired:
@@ -1940,7 +1980,7 @@ def create_app(
         Deployment's, so it gets Deployments' only. To one that says it knows `types`
         (slice 15.3b), a DaemonSet's Sizing goes with each instance type's, and each
         node's type with them; any other gets the one Sizing for every pod."""
-        cid, cluster = actuator_of(creds)
+        cid, cluster = who
         known = set(kinds.split(",")) & set(actuator.KINDS)
         if knows.get((cid, cluster.name)) != types:  # slice 15.3c: what its money goes by
             await store().actuator_types(cid, cluster.name, types, time.time())
@@ -2038,14 +2078,14 @@ def create_app(
     @app.post("/actuator/blockers", status_code=204)
     async def actuator_blockers(
         report: blockers.Report,
-        creds: HTTPAuthorizationCredentials = Depends(bearer),  # noqa: B008
+        who: tuple[str, contracts.Cluster] = Depends(actuator_of),
     ) -> None:
         """An Actuator's facts of the pods that may block a node's removal (slice 15.1b),
         sent when they change and hourly at least (audit A4), stored as its Contract's
         cluster's latest, by its token only. Refused whole: more pods than it may send, a
         namespace outside the cluster's (its own pod, `itself`, is outside them), a value
         no Actuator sends. Dated by the Hub's clock."""
-        cid, cluster = actuator_of(creds)
+        cid, cluster = who
         if len(report.pods) > blockers.MAX_PODS:
             raise HTTPException(413, f"at most {blockers.MAX_PODS} pods in a report")
         named = {p.namespace for p in report.pods} | set(report.namespaces)
@@ -2069,14 +2109,14 @@ def create_app(
     @app.post("/actuator/reports", status_code=204)
     async def actuator_reports(
         reports: list[actuator.Actuation],
-        creds: HTTPAuthorizationCredentials = Depends(bearer),  # noqa: B008
+        who: tuple[str, contracts.Cluster] = Depends(actuator_of),
     ) -> None:
         """An Actuator's Actuations, stored as its Contract's cluster's, by its token only;
         one naming a namespace outside the cluster's or a kind it doesn't resize (audit A7)
         is refused whole, as is one with a number that isn't one (slice 12.9c). Its
         Rollbacks are told after it is answered. Audit A7: at most `HOURLY_REPORTS` stored
         from the cluster an hour, the rest refused with 429, for the Actuator to send again."""
-        cid, cluster = actuator_of(creds)
+        cid, cluster = who
         if len(reports) > actuator.MAX_REPORTS:
             raise HTTPException(413, f"at most {actuator.MAX_REPORTS} reports at once")
         outside = sorted({r.namespace for r in reports} - set(cluster.namespaces))

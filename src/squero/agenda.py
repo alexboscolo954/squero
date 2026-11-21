@@ -1,9 +1,10 @@
 """The Agenda (slice 11.4): what the Operator should look at now in one Contract, from
 what the Hub already stores, ranked without a model in a fixed order of urgency: the
 Kill switch while it is on, pauses waiting for an Approval decision (they go Stale),
-failing Checks, data the Hub can't read (an offline Relay too), Bills outside their
-tolerance, running Investigations, and the Workloads whose waste costs most. Audit A6b:
-one with a current Approved Sizing on a cluster that runs an Actuator leaves that ranking,
+failing Checks, data the Hub can't read (an offline Relay too), a Relay or Actuator whose
+Protocol the Hub refused (slice 18.3: which side to upgrade), Bills outside their
+tolerance, running Investigations, and the Workloads whose waste costs most. Audit A6b: one
+with a current Approved Sizing on a cluster that runs an Actuator leaves that ranking,
 counted on one line last. The Hub MCP server's `now` and the console app's Workloads page
 show it.
 """
@@ -14,13 +15,21 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from squero import billing, notices
+from squero import billing, notices, protocol
 from squero.contracts import Contract
 from squero.sizing import show
 from squero.store import Store
 
 Kind = Literal[
-    "kill_switch", "approval", "check", "stale", "bill", "investigation", "waste", "approved"
+    "kill_switch",
+    "approval",
+    "check",
+    "stale",
+    "protocol",
+    "bill",
+    "investigation",
+    "waste",
+    "approved",
 ]
 WASTE_TOP = 3
 
@@ -92,6 +101,10 @@ async def of(st: Store, c: Contract, now: float) -> Agenda:
         for f in await notices.failing(st, c)
     ]
     items += sorted(stale, key=lambda i: i.at or inf)
+    for (cid, cluster, part), seen in sorted(protocol.SEEN.items()):
+        if cid == c.id and seen.refused and cluster in {cl.name for cl in c.clusters}:
+            title = protocol.refusal(part, cluster, seen.protocol)
+            items.append(Item(kind="protocol", title=title, at=seen.at, cluster=cluster))
     bills = await billing.report(st, c, now, 7)
     outside = [b for b in bills if b["within"] is False]
     for b in sorted(outside, key=lambda b: -abs(b["gap"])):

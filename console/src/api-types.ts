@@ -1376,7 +1376,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "kill_switch" | "approval" | "check" | "stale" | "bill" | "investigation" | "waste" | "approved";
+            kind: "kill_switch" | "approval" | "check" | "stale" | "protocol" | "bill" | "investigation" | "waste" | "approved";
             /** Title */
             title: string;
             /** Workload */
