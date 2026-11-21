@@ -64,6 +64,7 @@ jobs:
         run: |
           kubectl get pods -A -o wide
           kubectl -n squero logs deploy/squero --tail=100 || true
+          kubectl -n squero-relay logs deploy/squero-relay --tail=50 || true
 
   hub-smoke:
     # The Hub's compose stack (deploy/hub): health, the public boundary through

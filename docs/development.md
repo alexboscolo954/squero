@@ -14,7 +14,7 @@ How to test the project, how the evals score the agent, and how to run the MCP s
 |---|---|---|
 | Unit (no cluster, no LLM) | Tool behavior (Prometheus against a mocked API), redaction, allowlist, approval policy. **A rejected proposed action never reaches the Kubernetes API.** Webhook auth, dedup, approval over HTTP. Contract config: every validation rule, SOPS secrets that never print, one Contract's key never decrypting another's. | `make test` (needs `sops`) |
 | Integration (kind, CI) | Real tools find all three failures. The allowlist holds on a real API server. A scripted agent completes a triage through real tools. | `make integration` |
-| Deploy smoke (kind, CI) | The real image under the shipped manifests: starts hardened, auth rejects bad tokens, RBAC is least privilege for both modes | `make deploy-smoke` |
+| Deploy smoke (kind, CI) | The real image under the shipped manifests: starts hardened, auth rejects bad tokens, RBAC is least privilege for both modes, a Relay installed from the chart connects to the Hub | `make deploy-smoke` |
 | Evals (real LLM, recorded data) | Triage and Answer quality on scenarios recorded from the kind demo, replayed through the real MCP tool definitions | `uv run squero eval` |
 
 The scripted-model tests use LangChain's `GenericFakeChatModel`, so CI needs no API key. `make test` starts a throwaway Postgres in Docker (`make db`), and each test gets its own fresh database.

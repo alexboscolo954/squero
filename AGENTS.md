@@ -54,7 +54,7 @@ uv run ruff format src tests                      # fix formatting
 |---|---|---|
 | `make db` | Postgres (pgvector) on `localhost:55432`; each test gets its own fresh database | local and CI |
 | `make integration` | Real MCP tools against the kind demo (`pytest -m integration`) | CI; locally needs `make cluster demo` |
-| `make deploy-smoke` | The built image under the shipped manifests, RBAC checks | CI (kind) |
+| `make deploy-smoke` | The built image under the shipped manifests, RBAC checks, a Relay from the chart connected | CI (kind) |
 | `make hub-smoke` | The Hub's compose stack: health, public boundary, backups | CI (Docker) |
 | `make console-check` | The React console: `npm ci`, regenerate API types, typecheck, lint, test, build (in a Node container) | CI |
 | `make console-types` | Regenerate `console/openapi.json` and `console/src/api-types.ts` from the Hub's OpenAPI | after any API change |
