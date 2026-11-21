@@ -33,6 +33,10 @@ _Avoid_: Operator API, admin MCP
 What the Operator should look at now in one Contract, ranked without a model in a fixed order of urgency: the Kill switch while it is on, pauses waiting for an Approval decision (soonest deadline first), failing Checks, data the Hub can't read (oldest first; a Relay that is offline counts), Bills outside their tolerance (biggest gap first), running Investigations, and the three Workloads whose waste costs most, leaving out each one with a current Approved Sizing on a cluster that runs an Actuator, applied or not: one line last counts those, as their waste is read again at the next run that sizes them. Across Contracts it gives only the counts, that line not among them.
 _Avoid_: Inbox, to-do, dashboard
 
+**Stale notice**:
+The Hub's own Slack post, in a Contract's operator channel, when one of its reads has failed for 3 hours without a break: a cluster's Sizing reads, a Relay that is offline, or a cluster's Bill reads, as the Agenda lists them. One thread per cluster and kind, with a reminder a day while it fails and a reply when it reads again. Claimed in Postgres, so it is posted once. A Contract without Slack has only the Agenda.
+_Avoid_: Alert (that is what Alertmanager or Grafana sends the Hub), alarm
+
 **Proposed change**:
 A pull request the Hub opens on the contracts repo, from the Hub MCP server, editing one Contract's Sizing policy (a rule, a policy, the default) and nothing else. It is checked against the Contract the Hub loaded and validated before it opens, never touches `main`, and changes nothing until the Operator merges it and the Hub loads it again.
 _Avoid_: Proposed action (that is a paused tool call), patch
