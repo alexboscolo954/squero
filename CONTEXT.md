@@ -30,7 +30,7 @@ The Operator's own MCP endpoint on the Hub, for an MCP client such as Claude Cod
 _Avoid_: Operator API, admin MCP
 
 **Fleet**:
-Every Contract the Hub serves, as one console page with a row each (Phase 18.4): its Kill switch, its Agenda's counts by kind, its waste and requests cost in its own currency, its Idle and Unrequested GPUs. Totals only per currency, never converted. The Operator's view; nothing of one Contract reaches another's prompts, tools or notifications through it.
+Every Contract the Hub serves, as one console page with a row each (Phase 18.4): its Kill switch, its Agenda's counts by kind, its waste and requests cost in its own currency, its Idle and Unrequested GPUs, each cluster's Relay and Actuator with its version and Protocol. Totals only per currency, never converted. The Operator's view; nothing of one Contract reaches another's prompts, tools or notifications through it.
 _Avoid_: Dashboard, overview
 
 **Agenda**:

@@ -322,6 +322,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/fleet": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet
+         * @description Every Contract at once (slice 18.4): the Operator's view, read-only.
+         */
+        get: operations["fleet_api_v1_fleet_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/investigations/{investigation_id}": {
         parameters: {
             query?: never;
@@ -1052,6 +1072,76 @@ export interface components {
              * @default
              */
             correction: string;
+        };
+        /** Fleet */
+        Fleet: {
+            /** Rows */
+            rows: components["schemas"]["FleetRow"][];
+            /** Totals */
+            totals: components["schemas"]["FleetTotal"][];
+        };
+        /**
+         * FleetPart
+         * @description A cluster's Relay or Actuator as the Hub last heard it (slices 18.3, 18.4).
+         */
+        FleetPart: {
+            /** Cluster */
+            cluster: string;
+            /** Ok */
+            ok: boolean;
+            /**
+             * Part
+             * @enum {string}
+             */
+            part: "Relay" | "Actuator";
+            /** Text */
+            text: string;
+        };
+        /**
+         * FleetRow
+         * @description One Contract in the Fleet (slice 18.4), each value its own Contract's.
+         */
+        FleetRow: {
+            /** Agenda */
+            agenda: {
+                [key: string]: number;
+            };
+            cost?: components["schemas"]["Cost"] | null;
+            /** Currency */
+            currency?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Id */
+            id: string;
+            idle_gpus?: components["schemas"]["IdleGpus"] | null;
+            /** Kill Switch */
+            kill_switch: boolean;
+            /** Name */
+            name: string;
+            /**
+             * Parts
+             * @default []
+             */
+            parts: components["schemas"]["FleetPart"][];
+            unrequested_gpus?: components["schemas"]["UnrequestedGpus"] | null;
+        };
+        /**
+         * FleetTotal
+         * @description One currency's sums over the Contracts priced in it: never converted.
+         */
+        FleetTotal: {
+            /** Contracts */
+            contracts: number;
+            /** Currency */
+            currency: string;
+            /** Idle Gpus */
+            idle_gpus: number;
+            /** Requests */
+            requests: number;
+            /** Unrequested Gpus */
+            unrequested_gpus: number;
+            /** Waste */
+            waste: number;
         };
         /**
          * Floor
@@ -2729,6 +2819,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_api_v1_fleet_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Fleet"];
                 };
             };
         };

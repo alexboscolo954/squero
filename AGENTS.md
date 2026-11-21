@@ -96,6 +96,8 @@ src/squero/
                    from the Hub and resizes pods in place.
   blockers.py      Blockers (15.1b): the Actuator's report of the pods that may keep a node
                    from being removed, each autoscaler's rules, a node's verdict.
+  protocol.py      Protocol (18.3): each Relay's and Actuator's number, the Hub accepting
+                   its own and the one before, a refusal's wording, what each part last said.
   notices.py       Stale notices (audit A14): a read failing 3 hours, posted, reminded daily,
                    closed when it reads again; the Agenda's source of failing reads too.
   billing.py       Cloud bills (AWS Cost Explorer, Azure Cost Management, GCP's BigQuery
@@ -155,7 +157,7 @@ examples/          Example inputs.
 Use the terms in `CONTEXT.md` exactly and do not invent synonyms: Contract, Operator,
 Integration, Hub, Alert, Alert group, Investigation, Triage, Question, Check, Report,
 Evidence, Runbook, Category, Recommendation, Proposed action, Approval decision, Executed
-action, Teaching, Workload, Sizing, Sizing policy, Waste, Idle GPU, Unrequested GPU, Stale notice, Automation, Actuator, Actuation, Revert, Reflex, Step-up, Startup boost, Burst, OOM kill, Need, Floor, Weekly profile, Backtest, Room, Blocker, Node that could go, Placement, Pinned node, Spot node, Spot ratio, On-demand minimum, Protocol,
+action, Teaching, Workload, Sizing, Sizing policy, Waste, Idle GPU, Unrequested GPU, Stale notice, Automation, Actuator, Actuation, Revert, Reflex, Step-up, Startup boost, Burst, OOM kill, Need, Floor, Weekly profile, Backtest, Room, Blocker, Node that could go, Placement, Pinned node, Spot node, Spot ratio, On-demand minimum, Protocol, Fleet,
 List price, Bill, Savings, Scenario, Expectation. A *Sizing* is machine output for a
 Workload; a *Recommendation* is human advice in a Report, so do not mix them.
 

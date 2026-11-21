@@ -1790,6 +1790,194 @@
         "title": "FeedbackIn",
         "type": "object"
       },
+      "Fleet": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/FleetRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "totals": {
+            "items": {
+              "$ref": "#/components/schemas/FleetTotal"
+            },
+            "title": "Totals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows",
+          "totals"
+        ],
+        "title": "Fleet",
+        "type": "object"
+      },
+      "FleetPart": {
+        "description": "A cluster's Relay or Actuator as the Hub last heard it (slices 18.3, 18.4).",
+        "properties": {
+          "cluster": {
+            "title": "Cluster",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "part": {
+            "enum": [
+              "Relay",
+              "Actuator"
+            ],
+            "title": "Part",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "part",
+          "text",
+          "ok"
+        ],
+        "title": "FleetPart",
+        "type": "object"
+      },
+      "FleetRow": {
+        "description": "One Contract in the Fleet (slice 18.4), each value its own Contract's.",
+        "properties": {
+          "agenda": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Agenda",
+            "type": "object"
+          },
+          "cost": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Cost"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "idle_gpus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdleGpus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kill_switch": {
+            "title": "Kill Switch",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parts": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/FleetPart"
+            },
+            "title": "Parts",
+            "type": "array"
+          },
+          "unrequested_gpus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UnrequestedGpus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kill_switch",
+          "agenda"
+        ],
+        "title": "FleetRow",
+        "type": "object"
+      },
+      "FleetTotal": {
+        "description": "One currency's sums over the Contracts priced in it: never converted.",
+        "properties": {
+          "contracts": {
+            "title": "Contracts",
+            "type": "integer"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "idle_gpus": {
+            "title": "Idle Gpus",
+            "type": "number"
+          },
+          "requests": {
+            "title": "Requests",
+            "type": "number"
+          },
+          "unrequested_gpus": {
+            "title": "Unrequested Gpus",
+            "type": "number"
+          },
+          "waste": {
+            "title": "Waste",
+            "type": "number"
+          }
+        },
+        "required": [
+          "currency",
+          "contracts",
+          "waste",
+          "requests",
+          "idle_gpus",
+          "unrequested_gpus"
+        ],
+        "title": "FleetTotal",
+        "type": "object"
+      },
       "Floor": {
         "description": "A Workload with an autoscaler (slice 14.1b): its Floor against its HPA's minimum.",
         "properties": {
@@ -5741,6 +5929,25 @@
           }
         },
         "summary": "Workloads"
+      }
+    },
+    "/api/v1/fleet": {
+      "get": {
+        "description": "Every Contract at once (slice 18.4): the Operator's view, read-only.",
+        "operationId": "fleet_api_v1_fleet_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Fleet"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Fleet"
       }
     },
     "/api/v1/investigations/{investigation_id}": {

@@ -16,8 +16,12 @@ import { TeachingsPage } from "./Teachings";
 import { AutomationPage } from "./Automation";
 import { ChecksPage, HealthPage } from "./Checks";
 import { ContractsPage } from "./Contracts";
+import { FleetPage } from "./Fleet";
 import { NodesPage } from "./Nodes";
 import { amount, change, cores, cpu, gib, memory, money, pct, rank, when } from "./format";
+
+/** The pages across every Contract: no Contract picker, no Kill switch bar. */
+const ACROSS = ["contracts", "fleet"];
 
 /** Where each cluster's price comes from, for a Contract priced from cloud list prices. */
 function PriceNotes({ notes }: { notes?: { cluster: string; source: string; note: string }[] }) {
@@ -127,7 +131,8 @@ export default function App() {
         ) : null}
         {view === "investigation" && id && <InvestigationPage id={id} />}
         {view === "contracts" && <ContractsPage />}
-        {view !== "investigation" && view !== "contracts" && contracts.length > 1 && (
+        {view === "fleet" && <FleetPage />}
+        {view !== "investigation" && !ACROSS.includes(view) && contracts.length > 1 && (
           <label>
             Contract{" "}
             <select
@@ -143,7 +148,7 @@ export default function App() {
             </select>
           </label>
         )}
-        {shown && view !== "investigation" && view !== "contracts" && <KillSwitchBar contract={shown} />}
+        {shown && view !== "investigation" && !ACROSS.includes(view) && <KillSwitchBar contract={shown} />}
         {shown && workloadsView && <AgendaPanel contract={shown} />}
         {data && workloadsView && <Page contract={shown} data={data} />}
         {shown && view === "investigations" && <InvestigationList contract={shown} />}
@@ -163,6 +168,7 @@ function Header({ here, current }: { here: string; current: (v: string) => "page
     <header>
       <a className="brand" href="/app/">squero</a>
       <nav>
+        <a href="/app/?view=fleet" aria-current={current("fleet")}>Fleet</a>
         <a href="/app/?view=contracts" aria-current={current("contracts")}>Contracts</a>
         <a href={`/app/?${here}&view=investigations`} aria-current={current("investigations") ?? current("investigation")}>
           Investigations

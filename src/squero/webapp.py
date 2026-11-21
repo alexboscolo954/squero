@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
-from squero import actuator, agenda, billing, listprices, sizing, usage
+from squero import actuator, agenda, billing, listprices, protocol, relay, sizing, usage
 from squero.console import (
     COOKIE,
     CORRECTION_LIMIT,
@@ -43,7 +43,7 @@ from squero.console import (
 )
 from squero.contracts import Contract, Jira
 from squero.models import Answer, CheckResult, Investigation, TriageReport
-from squero.safety import redact
+from squero.safety import redact, redact_capped
 from squero.store import Store
 from squero.teachings import LIMIT as TEACHING_LIMIT
 from squero.teachings import section
@@ -624,6 +624,46 @@ class ContractSummary(BaseModel):
     name: str
 
 
+class FleetPart(BaseModel):
+    """A cluster's Relay or Actuator as the Hub last heard it (slices 18.3, 18.4)."""
+
+    cluster: str
+    part: Literal["Relay", "Actuator"]
+    text: str  # its version and Protocol, or why there are none
+    ok: bool  # False: offline, or its Protocol refused
+
+
+class FleetRow(BaseModel):
+    """One Contract in the Fleet (slice 18.4), each value its own Contract's."""
+
+    id: str
+    name: str
+    kill_switch: bool
+    agenda: dict[str, int]  # its Agenda's counts by kind, as `now()` gives them
+    currency: str | None = None  # None: no prices, so no money
+    cost: Cost | None = None  # a month of its waste and its requests
+    idle_gpus: IdleGpus | None = None
+    unrequested_gpus: UnrequestedGpus | None = None  # summed over its clusters
+    parts: list[FleetPart] = []
+    error: str | None = None  # why this row couldn't be read: the others still are
+
+
+class FleetTotal(BaseModel):
+    """One currency's sums over the Contracts priced in it: never converted."""
+
+    currency: str
+    contracts: int
+    waste: float
+    requests: float
+    idle_gpus: float  # a month, of the rows with a GPU price
+    unrequested_gpus: float
+
+
+class Fleet(BaseModel):
+    rows: list[FleetRow]
+    totals: list[FleetTotal]
+
+
 class ContractOverview(ContractSummary):
     """A Contract at a glance (slice 11.7a): where it runs, where it talks, which model,
     and this month's model spend against its budget."""
@@ -1014,6 +1054,89 @@ async def nodes_of(st: Store, c: Contract, now: float) -> Nodes:
     return Nodes.model_validate({"currency": currency, "clusters": clusters})
 
 
+def parts_of(c: Contract, relays: relay.Relays) -> list[FleetPart]:
+    """Each cluster's Relay and Actuator: version and Protocol as last heard (18.3)."""
+    out = []
+    for cl in c.clusters:
+        named: list[Literal["Relay", "Actuator"]] = []
+        named += ["Relay"] if cl.via == "relay" else []
+        named += ["Actuator"] if cl.actuator_token_secret else []
+        for part in named:
+            seen = protocol.SEEN.get((c.id, cl.name, part))
+            if seen and seen.refused:
+                text, ok = protocol.refusal(part, cl.name, seen.protocol), False
+            elif part == "Relay":
+                ok, _, said = relays.state(c.id, cl.name)
+                live = relays.live.get((c.id, cl.name))
+                version = live.version if live and live.version else "version unknown"
+                text = f"Relay {version}, Protocol {seen.protocol if seen else 1}"
+                text = text if ok else f"Relay {said}"
+            elif seen:
+                text, ok = (
+                    f"Actuator {seen.version or 'version unknown'}, Protocol {seen.protocol}",
+                    True,
+                )
+            else:
+                text, ok = "Actuator not seen since the Hub started", True
+            out.append(FleetPart(cluster=cl.name, part=part, text=text, ok=ok))
+    return out
+
+
+async def fleet_row(st: Store, c: Contract, now: float, relays: relay.Relays) -> FleetRow:
+    """One Contract's row, or its error: one Contract failing never hides the others."""
+    row = FleetRow(id=c.id, name=c.name, kill_switch=False, agenda={})
+    try:
+        row.kill_switch = await st.kill_switch(c.id) is not None
+        row.agenda = agenda.counts(await agenda.of(st, c, now))
+        # ponytail: agenda.of reads the Workloads too; pass them in if the page gets slow
+        w = await workloads_of(st, c, now)
+        row.currency, row.cost, row.idle_gpus = w.currency, w.cost, w.gpus
+        clusters = (await nodes_of(st, c, now)).clusters
+        found = [
+            x.unrequested_gpus for x in clusters if x.unrequested_gpus and x.unrequested_gpus.gpus
+        ]
+        if found:
+            costs = [u.cost for u in found]
+            priced = None if None in costs else sum(x for x in costs if x is not None)
+            gpus, nodes = sum(u.gpus for u in found), sum(u.nodes for u in found)
+            row.unrequested_gpus = UnrequestedGpus(gpus=gpus, nodes=nodes, cost=priced)
+        row.parts = parts_of(c, relays)
+    except Exception as e:
+        log.exception("fleet: contract %s", c.id)
+        row.error = redact_capped(f"{type(e).__name__}: {e}", 300)
+    return row
+
+
+async def fleet_of(
+    st: Store, contracts: list[Contract], now: float, relays: relay.Relays = relay.HUB
+) -> Fleet:
+    """Every Contract the Hub serves, a row each, and one line of totals per currency
+    (slice 18.4): computed on each load, each Contract in turn, as `now()` does."""
+    rows = [await fleet_row(st, c, now, relays) for c in sorted(contracts, key=lambda c: c.id)]
+    totals: dict[str, FleetTotal] = {}
+    for r in rows:
+        if r.error or not r.currency or not r.cost:
+            continue
+        t = totals.setdefault(
+            r.currency,
+            FleetTotal(
+                currency=r.currency,
+                contracts=0,
+                waste=0,
+                requests=0,
+                idle_gpus=0,
+                unrequested_gpus=0,
+            ),
+        )
+        t.contracts += 1
+        t.waste += r.cost.waste
+        t.requests += r.cost.requests
+        # a GPU without a price: shown so on its row, left out of the sum
+        t.idle_gpus += (r.idle_gpus.cost or 0) if r.idle_gpus else 0
+        t.unrequested_gpus += (r.unrequested_gpus.cost or 0) if r.unrequested_gpus else 0
+    return Fleet(rows=rows, totals=[totals[k] for k in sorted(totals)])
+
+
 async def workloads_of(st: Store, c: Contract, now: float) -> Workloads:
     """The Contract's latest Sizings, ranked: the Workloads page's and the Hub MCP
     server's (slice 11.1a)."""
@@ -1138,6 +1261,11 @@ def router(
             )
             for c in sorted(by_id.values(), key=lambda c: c.id)
         ]
+
+    @api.get("/fleet")
+    async def fleet() -> Fleet:
+        """Every Contract at once (slice 18.4): the Operator's view, read-only."""
+        return await fleet_of(store(), list(by_id.values()), now())
 
     @api.get("/contracts/{contract_id}/workloads")
     async def workloads(contract_id: str) -> Workloads:

@@ -1181,6 +1181,63 @@ test("the Contracts page lists every Contract with its spend against its budget"
   expect(screen.queryByText("Turn on the Kill switch")).toBeNull(); // no one Contract here
 });
 
+test("the Fleet lists every Contract in its own currency, totals per currency, read-only", async () => {
+  history.replaceState(null, "", "/app/?view=fleet");
+  const idle = { idle: 1.5, of: 8, cost: 100, not_judged: {}, text: "1.5 of 8 GPUs idle, 100.00 USD/month" };
+  answer({
+    "/api/v1/contracts": [200, [{ id: "bank", name: "Bank" }, { id: "shop", name: "Shop" }]],
+    "/api/v1/fleet": [
+      200,
+      {
+        rows: [
+          {
+            id: "bank", name: "Bank", kill_switch: true, agenda: { kill_switch: 1, protocol: 1 }, currency: "EUR",
+            cost: { waste: 36.5, requests: 73 }, idle_gpus: { ...idle, cost: null, text: "1.5 of 8 GPUs idle (no GPU price: set `gpu` in its prices)" }, unrequested_gpus: { gpus: 1.256, nodes: 1, cost: null },
+            parts: [
+              { cluster: "eu", part: "Relay", text: "Relay 0.63.0, Protocol 1", ok: true },
+              { cluster: "eu", part: "Actuator", text: "Actuator in eu speaks Protocol 3, this Hub 1: upgrade the Hub", ok: false },
+            ],
+            error: null,
+          },
+          { id: "dark", name: "Dark", kill_switch: false, agenda: {}, currency: null, cost: null, idle_gpus: null, unrequested_gpus: null, parts: [], error: null },
+          { id: "gone", name: "<b>Gone</b>", kill_switch: false, agenda: {}, parts: [], error: "RuntimeError: Prometheus unreachable" },
+          {
+            id: "shop", name: "Shop", kill_switch: false, agenda: { waste: 3 }, currency: "USD", cost: { waste: 10, requests: 20 },
+            idle_gpus: idle, unrequested_gpus: { gpus: 1, nodes: 1, cost: 40 }, parts: [], error: null,
+          },
+        ],
+        totals: [
+          { currency: "EUR", contracts: 1, waste: 36.5, requests: 73, idle_gpus: 0, unrequested_gpus: 0 },
+          { currency: "USD", contracts: 1, waste: 10, requests: 20, idle_gpus: 100, unrequested_gpus: 40 },
+        ],
+      },
+    ],
+  });
+  const { container: page } = render(<App />);
+  await screen.findByText("Fleet", { selector: "h1" });
+  const rows = [...page.querySelectorAll(".fleet tbody tr")].map((tr) => tr.textContent);
+  expect(rows).toEqual([
+    "Bankonkill_switch 1, protocol 136.50 EUR/month73.00 EUR/month1.5 of 8 GPUs idle (no GPU price: set `gpu` in its prices)1.26 on 1 nodes, no GPU price" +
+      "eu: Relay 0.63.0, Protocol 1eu: Actuator in eu speaks Protocol 3, this Hub 1: upgrade the Hub",
+    "Darkoffnothingno pricesno prices---",
+    "<b>Gone</b>Couldn't read it: RuntimeError: Prometheus unreachable",
+    "Shopoffwaste 310.00 USD/month20.00 USD/month1.5 of 8 GPUs idle, 100.00 USD/month1 on 1 nodes, 40.00 USD/month-",
+  ]);
+  const totals = [...page.querySelectorAll(".fleet tfoot tr")].map((tr) => tr.textContent);
+  expect(totals).toEqual([
+    "Total, EUR (1 Contract)36.50 EUR/month73.00 EUR/month0.00 EUR/month0.00 EUR/month",
+    "Total, USD (1 Contract)10.00 USD/month20.00 USD/month100.00 USD/month40.00 USD/month",
+  ]);
+  expect(page.querySelector(".fleet .bad")?.textContent).toBe("on"); // its Kill switch
+  expect([...page.querySelectorAll(".fleet div.bad")].map((d) => d.textContent)).toEqual([
+    "eu: Actuator in eu speaks Protocol 3, this Hub 1: upgrade the Hub",
+  ]);
+  expect(screen.getByText("Bank").closest("a")?.getAttribute("href")).toBe("/app/?contract=bank");
+  expect(page.querySelector(".fleet b")).toBeNull(); // Hub text is text
+  expect(screen.queryByText("Turn on the Kill switch")).toBeNull(); // read-only, no one Contract
+  expect(page.querySelector("main select")).toBeNull(); // no Contract picker
+});
+
 const HELD = {
   namespace: "shop", kind: "Deployment", container: "app", automated: true, resumes: null, stopped: false,
   reverting: false, revertable: true, outcome: "applied", cpu: 0.115, memory: 96 * 2 ** 20, pods: 3, reason: "3 of 3 pods resized", at: 1_700_000_000,

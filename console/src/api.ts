@@ -91,6 +91,8 @@ export const followUp = (id: string, question: string) =>
 
 export type ContractOverview = Schemas["ContractOverview"];
 export const overview = () => get<ContractOverview[]>("/overview");
+export type Fleet = Schemas["Fleet"];
+export const fleet = () => get<Fleet>("/fleet");
 
 export type Teachings = Schemas["Teachings"];
 export type Teaching = Schemas["Teaching"];
