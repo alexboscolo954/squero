@@ -29,6 +29,10 @@ _Avoid_: Server, backend
 The Operator's own MCP endpoint on the Hub, for an MCP client such as Claude Code on the Operator's devices. Each call is about one Contract and follows that Contract's Data policy. The Investigation agent never gets its tools.
 _Avoid_: Operator API, admin MCP
 
+**Fleet**:
+Every Contract the Hub serves, as one console page with a row each (Phase 18.4): its Kill switch, its Agenda's counts by kind, its waste and requests cost in its own currency, its Idle and Unrequested GPUs. Totals only per currency, never converted. The Operator's view; nothing of one Contract reaches another's prompts, tools or notifications through it.
+_Avoid_: Dashboard, overview
+
 **Agenda**:
 What the Operator should look at now in one Contract, ranked without a model in a fixed order of urgency: the Kill switch while it is on, pauses waiting for an Approval decision (soonest deadline first), failing Checks, data the Hub can't read (oldest first; a Relay that is offline counts), Bills outside their tolerance (biggest gap first), running Investigations, and the three Workloads whose waste costs most, leaving out each one with a current Approved Sizing on a cluster that runs an Actuator, applied or not: one line last counts those, as their waste is read again at the next run that sizes them. Across Contracts it gives only the counts, that line not among them.
 _Avoid_: Inbox, to-do, dashboard
@@ -47,6 +51,10 @@ A way to reach a Contract's cluster or integration where the Hub holds the crede
 **Relay**:
 A small process inside a client's network that serves one of a Contract's clusters (the cluster is reached `via: relay`): it holds that cluster's credentials and runs its Kubernetes tools and its Prometheus queries, for the agent and for the Hub's own reads. It connects out to the Hub with a token bound to that Contract and cluster, so the client network accepts no inbound connections. The agent's reasoning, the allowlist and the approval gate stay in the Hub; cloud and vendor integrations stay Direct. Only tool calls and their results pass through the Relay. A Run that calls a Relay that isn't connected, or doesn't answer within the call timeout, ends Failed ("Relay offline"): its Report would otherwise read as if the cluster had been seen. The Actuator has its own token and connection, so the Relay never holds write access.
 _Avoid_: Satellite, agent
+
+**Protocol**:
+The numbered version of what the Hub and a Relay, or the Hub and an Actuator, exchange, each part's counted apart from 1 (Phase 18.3). It rises only on a change an older part would misread (a field removed or renamed, or its meaning changed); an added optional field keeps it. The Hub accepts its own and the one before; an older or a newer one is refused, with an Agenda item saying which side to upgrade. Not the release version, which moves without the wire changing.
+_Avoid_: API version, release version (that is the image's)
 
 ### Input
 
