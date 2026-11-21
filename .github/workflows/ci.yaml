@@ -17,7 +17,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.0
       - run: uv sync --locked
       - run: .github/install-sops.sh
-      - uses: azure/setup-helm@v4   # the tests render the chart (Phase 18.1a)
+      - uses: azure/setup-helm@v5   # the tests render the chart (Phase 18.1a)
         with:
           version: v3.17.3
       - run: make lint
@@ -42,7 +42,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.0
       - run: uv sync --locked
       - run: .github/install-sops.sh
-      - uses: azure/setup-helm@v4   # actuator-smoke installs the chart (Phase 18.1a)
+      - uses: azure/setup-helm@v5   # actuator-smoke installs the chart (Phase 18.1a)
         with:
           version: v3.17.3
       - uses: helm/kind-action@v1
@@ -92,7 +92,7 @@ jobs:
     # Its actions pinned to commits (it signs as the release); .github/dependabot.yml bumps them.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           version: v3.17.3
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
