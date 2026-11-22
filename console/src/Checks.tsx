@@ -3,6 +3,8 @@
 // and Hub text: shown as text.
 import { useEffect, useState } from "react";
 import * as api from "./api";
+import { Card } from "./ui/card";
+import { cn } from "./ui/cn";
 import { when } from "./format";
 import { page } from "./Investigations";
 
@@ -30,7 +32,7 @@ export function ChecksPage({ contract }: { contract: string }) {
   if (!data) return null;
   return (
     <>
-      <h1>{contract}: Checks</h1>
+      <h1 className="sr-only">{contract}: Checks</h1>
       {data.checks.length === 0 ? (
         <p className="hint">No Checks scheduled.</p>
       ) : (
@@ -126,28 +128,22 @@ export function HealthPage({ contract }: { contract: string }) {
   const spent = data.spent_usd >= 1 ? data.spent_usd.toFixed(2) : data.spent_usd.toFixed(4);
   return (
     <>
-      <h1>{contract}: Health</h1>
+      <h1 className="sr-only">{contract}: Health</h1>
       <p className="hint">Each check is one read through the Contract's own tools, run now.</p>
-      <table className="investigations">
-        <thead>
-          <tr>
-            <th>Integration</th>
-            <th>Status</th>
-            <th>Time</th>
-            <th>Error</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.integrations.map((p) => (
-            <tr key={p.name}>
-              <td>{p.name}</td>
-              <td className={p.ok ? undefined : "bad"}>{p.ok ? "ok" : "FAILING"}</td>
-              <td className="hint nowrap">{p.ms} ms</td>
-              <td className="text">{p.detail}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4">
+        {data.integrations.map((p) => (
+          <Card key={p.name} className={cn("flex flex-col gap-2 p-4", p.ok ? "" : "border-bad")}>
+            <div className="flex items-center gap-2">
+              <h2 className="m-0 mr-auto text-sm font-semibold">{p.name}</h2>
+              <span className={p.ok ? "rounded-full bg-saving/15 px-2 py-0.5 text-xs font-medium text-saving" : "bad"}>
+                {p.ok ? "ok" : "FAILING"}
+              </span>
+            </div>
+            <p className="hint nowrap m-0">{p.ms} ms</p>
+            {p.detail && <p className="text m-0 text-sm">{p.detail}</p>}
+          </Card>
+        ))}
+      </div>
       <section className="panel">
         <p>
           Last successful Investigation:{" "}

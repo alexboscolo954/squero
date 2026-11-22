@@ -15,7 +15,7 @@ export function ContractsPage() {
   if (!rows) return null;
   return (
     <>
-      <h1>Contracts</h1>
+      <h1 className="sr-only">Contracts</h1>
       {rows.length === 0 ? (
         <p className="hint">No Contracts loaded.</p>
       ) : (

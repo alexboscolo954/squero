@@ -6,6 +6,7 @@
 // it is after.
 import { useEffect, useState } from "react";
 import * as api from "./api";
+import { Badge } from "./ui/badge";
 import { when } from "./format";
 
 export const page = (id: string) => `/app/?view=investigation&id=${encodeURIComponent(id)}`;
@@ -33,6 +34,7 @@ function AskForm({ contract }: { contract: string }) {
         />
       </p>
       <button
+        className="primary"
         onClick={() => {
           setFailed("");
           api.ask(contract, question).then(
@@ -61,7 +63,7 @@ export function InvestigationList({ contract }: { contract: string }) {
   if (!rows) return null;
   return (
     <>
-      <h1>{contract}: Investigations</h1>
+      <h1 className="sr-only">{contract}: Investigations</h1>
       <AskForm contract={contract} />
       <p className="hint">Newest first. Passing Checks are left out.</p>
       {rows.length === 0 ? (
@@ -81,7 +83,9 @@ export function InvestigationList({ contract }: { contract: string }) {
               <tr key={t.id}>
                 <td className="hint">{when(t.started)}</td>
                 <td>{t.kind}</td>
-                <td>{state(t)}</td>
+                <td>
+                  <Badge tone={t.failed ? "bad" : t.status === "done" ? "good" : "muted"}>{state(t)}</Badge>
+                </td>
                 <td>
                   <a href={page(t.id)}>{t.title}</a>
                 </td>
@@ -191,14 +195,14 @@ export function InvestigationPage({ id }: { id: string }) {
             <pre key={n}>{p}</pre>
           ))}
           <p>
-            <button onClick={() => act(api.decide(t.id, t.deadline!, true, ""))}>Approve</button>
+            <button className="primary" onClick={() => act(api.decide(t.id, t.deadline!, true, ""))}>Approve</button>
           </p>
           <p>
             <label>
               Reason (the agent reads it){" "}
               <input value={reason} onChange={(e) => setReason(e.target.value)} size={50} />
             </label>{" "}
-            <button onClick={() => act(api.decide(t.id, t.deadline!, false, reason))}>Reject</button>
+            <button className="danger" onClick={() => act(api.decide(t.id, t.deadline!, false, reason))}>Reject</button>
           </p>
         </section>
       )}
@@ -255,7 +259,7 @@ export function InvestigationPage({ id }: { id: string }) {
               onChange={(e) => setMore(e.target.value)}
             />
           </p>
-          <button onClick={() => act(api.followUp(t.id, more).then((x) => (setMore(""), x)))}>Follow up</button>{" "}
+          <button className="primary" onClick={() => act(api.followUp(t.id, more).then((x) => (setMore(""), x)))}>Follow up</button>{" "}
           <span className="hint">The agent keeps this Question's earlier exchange.</span>
         </section>
       )}
@@ -408,7 +412,7 @@ export function TokenPage() {
   const [failed, setFailed] = useState("");
   return (
     <>
-      <h1>Approver token</h1>
+      <h1 className="sr-only">Approver token</h1>
       <p>
         Your Tailscale identity says who you are. To see anything else here, and to approve, reject
         or ask, the console also needs <code>SQUERO_APPROVER_TOKEN</code>, once per browser: it stays as
@@ -427,7 +431,7 @@ export function TokenPage() {
           Approver token{" "}
           <input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} />
         </label>{" "}
-        <button type="submit">Save</button>
+        <button type="submit" className="primary">Save</button>
       </form>
       {failed && <p className="notice">Couldn't: {failed}</p>}
     </>

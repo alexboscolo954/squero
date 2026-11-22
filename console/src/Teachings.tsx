@@ -35,8 +35,8 @@ function Proposed({ t, act, limit }: { t: api.Teaching; act: Act; limit: number 
         />
       </p>
       <p>
-        <button onClick={() => act((c) => api.decideTeaching(c, t.id, true, text))}>Approve this text</button>{" "}
-        <button onClick={() => act((c) => api.decideTeaching(c, t.id, false, ""))}>Reject</button>
+        <button className="primary" onClick={() => act((c) => api.decideTeaching(c, t.id, true, text))}>Approve this text</button>{" "}
+        <button className="danger" onClick={() => act((c) => api.decideTeaching(c, t.id, false, ""))}>Reject</button>
       </p>
     </section>
   );
@@ -66,7 +66,7 @@ export function TeachingsPage({ contract }: { contract: string }) {
   };
   return (
     <>
-      <h1>{contract}: Teachings</h1>
+      <h1 className="sr-only">{contract}: Teachings</h1>
       <p className="hint">
         Lessons for this Contract's future Investigations. Only approved ones are used, and never by
         another Contract.
@@ -109,7 +109,7 @@ export function TeachingsPage({ contract }: { contract: string }) {
                   {t.decided_by}, {when(t.decided_at)}
                 </td>
                 <td>
-                  <button onClick={() => act((c) => api.retireTeaching(c, t.id))}>Retire</button>
+                  <button className="danger" onClick={() => act((c) => api.retireTeaching(c, t.id))}>Retire</button>
                 </td>
               </tr>
             ))}
@@ -135,6 +135,7 @@ export function TeachingsPage({ contract }: { contract: string }) {
           />
         </p>
         <button
+          className="primary"
           onClick={() =>
             act((c) => api.writeTeaching(c, text, alerts.split(","))).then((ok) => {
               if (ok) {

@@ -2,7 +2,7 @@
 
 **In short:** the console works but looks like raw HTML: a link bar, headings and bare forms. This phase gives it a real dashboard design, in the style of ScaleOps' product UI, without changing what any page does. It is built next, before Phase 19 continues.
 
-**Status:** grilled 2026-11-21; 21.1, 21.2, 21.3a and 21.3b built.
+**Status:** built 2026-11-21 (21.1 to 21.4). Owed: a look at the light theme, and the release that puts it on the mini PC's Hub.
 
 **Goal:** a console the Operator is glad to open every day: a sidebar, an Overview dashboard, and every page laid out as number tiles, charts and tables in cards.
 
@@ -14,7 +14,7 @@
 | [21.2](#212-the-overview) | The Overview dashboard | ✅ built |
 | [21.3a](#213-the-optimizer-pages) | Workloads and Cost restyled | ✅ built |
 | 21.3b | Nodes, Automation and Fleet restyled | ✅ built |
-| 21.4 | The triage pages restyled: Investigations, Teachings, Checks, Health, Contracts | ⏳ |
+| [21.4](#214-the-triage-pages) | The triage pages restyled: Investigations, Teachings, Checks, Health, Contracts | ✅ built |
 
 ## Why this phase exists
 
@@ -148,3 +148,14 @@ Two rounds, all answers the recommended ones.
 - Lists as tables with status badges; a Report's page as cards (findings, Evidence, Proposed actions with their Approval buttons).
 - Forms (a Question, a Teaching) as proper form cards.
 - Health as status tiles per integration and part.
+
+**Built (2026-11-21):**
+- The pages' own fields and buttons in the shell's look, once, in `styles.css`: inputs, selects and text areas with the theme's border and focus ring; buttons outlined, `primary` (the accent) for the action that goes ahead (Ask, Approve, Follow up, Approve this text, Add, Save) and `danger` (red outline) for Reject and Retire; panels, details and tables with rounded corners.
+- Investigations: each status a badge (done green, failed red, the rest grey).
+- Health: each integration a tile with its time and error, a failing one framed red with "FAILING"; spend, config and the Hub's settings in panels as before.
+- Teachings, Checks, Contracts and the token page: their titles for screen readers only, the header naming the page.
+- Choice made while building, for the owner to confirm: Contracts and Checks stay tables (in the shell's table look), not cards.
+
+**Tests:** 3 in `Triage.test.tsx` (the status badges' colours, the Health tiles and the failing frame, the primary and danger buttons); the 67 earlier tests unchanged. 5 mutations, all caught.
+
+**Checked:** in Chrome on a local build with the Hub's CSP and sample data: Teachings (the page of the owner's screenshot), Health and Investigations; no CSP violation. Dark theme only.
