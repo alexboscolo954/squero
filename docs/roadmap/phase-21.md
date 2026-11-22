@@ -2,7 +2,7 @@
 
 **In short:** the console works but looks like raw HTML: a link bar, headings and bare forms. This phase gives it a real dashboard design, in the style of ScaleOps' product UI, without changing what any page does. It is built next, before Phase 19 continues.
 
-**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6a to 21.6e built (2026-11-22), not released; 21.6f grilled: one release, 0.66.0, after it. Owed: a look at the light theme and at every page with real data.
+**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6 built (2026-11-22), 21.6a to 21.6f, not released: 0.66.0 on the owner's word. Owed: a look at the light theme and at every page with real data.
 
 **Goal:** a console the Operator is glad to open every day: a sidebar, an Overview dashboard, and every page laid out as number tiles, charts and tables in cards.
 
@@ -22,7 +22,7 @@
 | [21.6c](#216-density-and-layout-after-a-live-reference) | Tables: bars in cells, a Total row, numbers in mono | ✅ built |
 | [21.6d](#216d-to-216f-the-same-pattern-on-every-page) | Nodes and Automation in the page pattern | ✅ built |
 | [21.6e](#216d-to-216f-the-same-pattern-on-every-page) | Investigations and an Investigation's page | ✅ built |
-| [21.6f](#216d-to-216f-the-same-pattern-on-every-page) | Checks, Health, Teachings, Contracts, Approver token, the Workload detail, Cost's lines | ⬜ next |
+| [21.6f](#216d-to-216f-the-same-pattern-on-every-page) | Checks, Health, Teachings, Contracts, Approver token, the Workload detail, Cost's lines | ✅ built |
 
 ## Why this phase exists
 
@@ -374,3 +374,24 @@ Two rounds, all answers the recommended ones.
 - The figures count the list, not every Investigation the Contract ever had.
 - Not seen in a browser: a page with related alert groups, Report feedback or the Jira line (tested before, their text unchanged), a narrow window.
 - No API change, no eval rerun, no isolation test.
+
+**Built 21.6f (2026-11-22):**
+- **Checks:** four figures (Checks, failing now, Deploy verifications passed and failed); the two tables each in a card under its title; a verdict as a badge around its link (passed green, failed red, any other word neutral). "Failing now" counts Checks with an Open failure; the Deploy figures count each row's own word, so a Run that failed by its status counts as failed.
+- **Health:** three figures: how many are ok now with a meter (the Hub's list holds integrations, Relays and Actuators, so the figure says "Ok now", not "Integrations ok"), the model spend with a meter where a budget is set, the last successful Investigation. No budget draws no meter; $0 of a budget an empty one; over budget a full one, the share in words. (A Contract's budget is above 0 by its model.) The "ok" pill is the status green; it was the Savings accent. The config and the settings stay collapsed, as the Hub sends them.
+- **Teachings:** three figures (waiting for review, approved, left out of prompts); the approved, the form and the past each in a card under its title. The buttons and the left-out notice are as they were.
+- **Contracts:** two figures (the Contracts with how many have a model budget, the model spend over all of them, in USD); the table in a card; a meter under a spend that has a budget.
+- **Approver token:** the form in a card.
+- **Workloads:** the autoscaled Workloads in a card; the price lines in a card under the figures; a picked Workload's detail now has the Card's 10 px radius (a utility kept it at 12 px after 21.6e), its request and Sizing line in mono.
+- **Cost:** the price, Bill and comparison lines in one card under the figures, each line and its notice style as it was; the card's title names only what it holds ("Prices, Bills", "The comparison"). A Bill is never a figure.
+
+**Tests:** 2 new (Checks counted by the row's own word, a running one neutral, nothing at all; Health's meter without a budget, at $0, over budget) and 8 extended (Checks, Health, Teachings, Contracts, the token page, Cost's card by what it holds and absent when empty, Workloads' price card present and absent). 88 console tests. 16 mutations: 15 caught (one after a tighter assertion), 1 an equivalent mutant (a guard for a budget of 0, which a Contract can't have; removed).
+
+**Checked:** in Chrome with the Hub's CSP and the tests' own sample data, on the final build: Checks, Health, Teachings, Contracts, the token page (not typed in), a picked Workload's detail with its charts, Workloads with its price card and the autoscaled Workloads card, Cost with its card of price and Bill lines, the Overview and the Fleet in dark; Health in light (tokens set by hand). The browser console read from the first page load: no error, no CSP refusal.
+
+**Known limits:**
+- Not seen in a browser: the Cost page while comparing (tested), a narrow window, any page but Health in light.
+- Light touches, for the owner to judge before the release: a picked Workload's detail got only the radius and a mono line; Cost's realized line is as it was; Teachings and the token page have no counts in the title row; a Deploy verification that has not run shows its state as plain text.
+- A container's chart legend picked up the small uppercase heads of 21.6a (it is a table).
+- No API change, no eval rerun, no isolation test.
+
+**21.6, whole:** every page of the console now follows one pattern. Not released: 0.66.0 waits for the owner's word.

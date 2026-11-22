@@ -323,6 +323,8 @@ Anything else gets a 403. That includes a tagged device, which has no user.
   - **Automation** (slice 21.6d): figures of the containers' states, one state each (on, off, stopped by a Revert, ended by rollbacks), counting the containers its Actuators reported on in 90 days; chips All, On and Not on, kept in the address; each last outcome a badge.
 - **Investigations, Teachings, Checks, Health, Contracts** (slice 21.4): statuses as coloured badges, each integration's Health a tile (a failing one framed red), the action that goes ahead a filled button and Reject or Retire a red-outlined one.
   - **Investigations** (slice 21.6e): figures and filter chips over the list, the table in a card; an Investigation's page opens with a header card and its figures. See [Investigations](#investigations).
+  - **Checks, Health, Teachings, Contracts, Approver token** (slice 21.6f): figures on top, every table in a card under its title, a verdict as a badge, a meter under a model spend that has a budget, the token form in a card. See each page's section below.
+  - **Workloads and Cost** (slice 21.6f): a picked Workload's detail and the autoscaled Workloads each in a card; the price lines (Workloads), and the price, Bill and comparison lines (Cost), in one card under the figures, each line as it was; the card is named for what it holds.
 - **The look** (slice 21.5a): Hanken Grotesk and JetBrains Mono, served by the Hub itself; one accent (a teal-green) with the Savings in it and every other figure in ink; status colours only on badges; charts with the Sizings as their one coloured line, redrawn when the system changes theme; a flat block while a page loads; turning the Kill switch off asks first ("Yes, turn it off"), turning it on never does.
 - **Density** (slice 21.6a): 13 px text, 36 px table rows, small uppercase labels on figures, table heads and sidebar groups; each figure in its own card, with a thin meter where it is a share and a footnote.
 - **Numbers** (slice 21.6c): quantities and money in tables are in JetBrains Mono, so their digits line up, and never break from their unit; dates and names are not. A table too wide for its window scrolls sideways inside its card.
@@ -476,6 +478,8 @@ Actions, each recorded as `console:<login>`:
 
 The page warns when the approved Teachings don't all fit in a prompt.
 
+On top (slice 21.6f), three figures: waiting for review, approved, and left out of prompts.
+
 A drafted text is model output. The page shows and edits it as plain text.
 
 ### Checks and Health
@@ -490,6 +494,17 @@ A drafted text is model output. The page shows and edits it as plain text.
 - the last skip, with its reason.
 
 It also lists the latest Deploy verifications: where, which changes, when due, and their Run's verdict or why skipped.
+
+On top (slice 21.6f), four figures:
+
+| Figure | Counts |
+|---|---|
+| Checks | the scheduled Checks |
+| Failing now | Checks with an Open failure, not those whose last Run failed |
+| Deploy verifications passed | of the latest listed, those whose Run passed |
+| Deploy verifications failed | those whose Run failed, by its verdict or its status |
+
+A verdict is a badge: passed green, failed red, any other word neutral.
 
 **Health** (`view=health`) checks the Contract shown only, now. It makes one cheap read per integration. Each read uses that integration's own tools and credentials. Examples:
 
@@ -506,6 +521,8 @@ Health shows:
 - this month's model spend against its budget;
 - the Contract's config, with only the names of its secrets;
 - the Hub's settings, with every secret masked.
+
+Three of these are figures on top (slice 21.6f): how many of the integrations, Relays and Actuators are ok now, with a meter; the model spend, with a meter where a budget is set; the last successful Investigation. The config and the settings stay collapsed until opened.
 
 ### Questions and Contracts
 
@@ -529,9 +546,11 @@ Health shows:
 - its clusters;
 - its operator channel;
 - its model;
-- this month's model spend against its budget.
+- this month's model spend against its budget, with a meter where a budget is set.
 
 Each row links to its own pages.
+
+On top (slice 21.6f), two figures: the Contracts, with how many have a model budget, and the model spend this month over all of them. It is in USD, whatever a Contract's own prices, and is never added to a Contract's costs.
 
 **Fleet** (`/app/?view=fleet`, `GET /api/v1/fleet`, from 0.63.0) lists every Contract at once. It is read-only, with one row per Contract. Each row links to that Contract's Workloads.
 

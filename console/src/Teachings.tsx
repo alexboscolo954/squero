@@ -1,9 +1,11 @@
 // Teachings (slice 11.6a): a Contract's review queue, its approved and past Teachings,
 // and one the Operator writes. A drafted Teaching is model text: shown as text, and
-// edited as plain text before it is approved.
+// edited as plain text before it is approved. The page pattern (slice 21.6f): figures on top,
+// the approved and the past Teachings each in a card.
+import { GraduationCap, Hourglass, Scissors } from "lucide-react";
 import { useEffect, useState } from "react";
 import * as api from "./api";
-import { Skeleton } from "./ui/card";
+import { Card, Figures, Skeleton, Tile } from "./ui/card";
 import { when } from "./format";
 import { page } from "./Investigations";
 
@@ -67,6 +69,11 @@ export function TeachingsPage({ contract }: { contract: string }) {
   };
   return (
     <>
+      <Figures className="mb-4">
+        <Tile icon={Hourglass} label="Waiting for review" value={String(data.proposed.length)} />
+        <Tile icon={GraduationCap} label="Approved" value={String(data.approved.length)} note="used in this Contract's Investigations" />
+        <Tile icon={Scissors} label="Left out of prompts" value={String(data.left_out)} note="approved, over a prompt's limit" />
+      </Figures>
       <p className="hint">
         Lessons for this Contract's future Investigations. Only approved ones are used, and never by
         another Contract.
@@ -85,11 +92,13 @@ export function TeachingsPage({ contract }: { contract: string }) {
       ) : (
         data.proposed.map((t) => <Proposed key={t.id} t={t} act={act} limit={data.limit} />)
       )}
-      <h2>Approved</h2>
+      <Card className="mt-4 p-0">
+      <h2 className="m-0 px-4 pt-4 pb-3">Approved</h2>
       {data.approved.length === 0 ? (
-        <p className="hint">None.</p>
+        <p className="hint m-0 px-4 pb-4">None.</p>
       ) : (
-        <table>
+        <div className="overflow-x-auto">
+        <table className="rounded-none border-x-0 border-b-0">
           <thead>
             <tr>
               <th>#</th>
@@ -115,9 +124,11 @@ export function TeachingsPage({ contract }: { contract: string }) {
             ))}
           </tbody>
         </table>
+        </div>
       )}
-      <h2>Write one</h2>
+      </Card>
       <section className="panel">
+        <h2>Write one</h2>
         <p>
           <label>
             For alerts (comma-separated; empty: every alert){" "}
@@ -148,9 +159,10 @@ export function TeachingsPage({ contract }: { contract: string }) {
           Add, approved
         </button>
       </section>
+      <section className="panel">
       <h2>Rejected and retired</h2>
       {data.past.length === 0 ? (
-        <p className="hint">None.</p>
+        <p className="hint m-0">None.</p>
       ) : (
         <ul>
           {data.past.map((t) => (
@@ -160,6 +172,7 @@ export function TeachingsPage({ contract }: { contract: string }) {
           ))}
         </ul>
       )}
+      </section>
     </>
   );
 }

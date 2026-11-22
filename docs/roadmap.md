@@ -12,11 +12,11 @@ This page says where the project is and what comes next. Each phase has its own 
 - **Phase 17 (GPU and LLM inference):** built on fixtures; the paid GPU check is deferred.
 - **Phase 19 (Integrations breadth):** grilled; 1 of 8 slices built (19.1a).
 - **Phase 20 (JVM, Spark and batch):** not grilled yet.
-- **Phase 21 (Console design):** 21.1 to 21.4 in 0.64.0, 21.5 in 0.65.0 (2026-11-22); 21.6a to 21.6e built, not released; 21.6f grilled.
+- **Phase 21 (Console design):** 21.1 to 21.4 in 0.64.0, 21.5 in 0.65.0 (2026-11-22); 21.6 (the page pattern on every page) built, not released.
 
 ## Next
 
-1. **21.6f:** Checks, Health, Teachings, Contracts, Approver token, the Workload detail and Cost's lines in the page pattern, then the 0.66.0 release (see [Phase 21](roadmap/phase-21.md#216d-to-216f-the-same-pattern-on-every-page)).
+1. **Release 0.66.0**, on the owner's word: all of 21.6 (see [Phase 21](roadmap/phase-21.md)).
 2. **19.1b:** `sigv4` auth for Amazon Managed Prometheus, then 19.1c, 19.2, … in [Phase 19](roadmap/phase-19.md)'s order.
 3. The paid GPU check when the quota allows, and the phase's done-when on real GPUs (see [Phase 17](roadmap/phase-17.md)).
 
@@ -60,7 +60,7 @@ This page says where the project is and what comes next. Each phase has its own 
 | [18](roadmap/phase-18.md) | Platform: signed chart, Protocol, Fleet | ✅ done (0.62.0, 0.63.0; 18.1d after 0.63.0) |
 | [19](roadmap/phase-19.md) | Integrations breadth | 🔨 1 of 8 slices |
 | [20](roadmap/phase-20.md) | JVM, Spark and batch | ⏳ grill before building |
-| [21](roadmap/phase-21.md) | Console design: sidebar, Overview, ScaleOps-style pages | 🔨 21.6f grilled; 21.6a to 21.6e built, not released |
+| [21](roadmap/phase-21.md) | Console design: sidebar, Overview, ScaleOps-style pages | ✅ built; 21.6 not released (21.1 to 21.5 in 0.64.0, 0.65.0) |
 
 Releases and dates for every version: [releases](roadmap/releases.md). Decisions that shaped the whole project: [decisions](roadmap/decisions.md).
 

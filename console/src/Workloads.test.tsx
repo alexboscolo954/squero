@@ -73,6 +73,7 @@ test("the table shows request → Sizing, the policies and Automation; chips and
   fireEvent.change(screen.getByLabelText("Search Workloads"), { target: { value: "nothing" } });
   expect(screen.getByText("No Workload matches.")).toBeTruthy();
   expect(screen.getByText(/Automation is changed by a pull request/)).toBeTruthy();
+  expect(screen.queryByText("Prices", { selector: "h2" })).toBeNull(); // no price notes: no card
 });
 
 test("a bar's share: of the largest row shown, or of the request a Sizing keeps; none without one", () => {
@@ -92,7 +93,8 @@ test("cells carry bars and the Total row adds the rows shown, money and cores ap
   const priced = (w: api.Workload, waste: number) => ({ ...w, cost: { waste, requests: waste * 2 } });
   const data = {
     contract: "shop", clusters: { kind: { at: 1_700_000_000, error: null, since: null } }, total: { cpu: 0, memory: 0 },
-    currency: "EUR", cost: { waste: 150, requests: 300 }, learning: [], excluded: [], prices: [],
+    currency: "EUR", cost: { waste: 150, requests: 300 }, learning: [], excluded: [],
+    prices: [{ cluster: "kind", source: "list", note: "list price of 2 x aws m5.large" }],
     gpus: { idle: 0, of: 1, cost: null, text: "0 of 1 GPUs idle" },
     workloads: [
       priced(workload("api", "shop", [box("app", true, [1, 0.25])]), 100),
@@ -128,4 +130,8 @@ test("cells carry bars and the Total row adds the rows shown, money and cores ap
   fireEvent.change(screen.getByLabelText("Search Workloads"), { target: { value: "nothing" } });
   expect(document.querySelector("tfoot")).toBeNull();
   expect(screen.getByText(/Bars: under Savings, the row's share of the largest shown/)).toBeTruthy();
+  // slice 21.6f: where the prices come from, in a card under the figures
+  const note = screen.getByText("kind: list price of 2 x aws m5.large");
+  expect([note.className, note.closest("section")?.querySelector("h2")?.textContent]).toEqual(["hint", "Prices"]);
+  expect(screen.getByText("Waste a month").compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });

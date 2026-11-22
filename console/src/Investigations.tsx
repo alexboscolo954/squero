@@ -493,8 +493,8 @@ export function TokenPage() {
   const [token, setToken] = useState("");
   const [failed, setFailed] = useState("");
   return (
-    <>
-      <p>
+    <Card className="max-w-2xl">
+      <p className="mt-0">
         Your Tailscale identity says who you are. To see anything else here, and to approve, reject
         or ask, the console also needs <code>SQUERO_APPROVER_TOKEN</code>, once per browser: it stays as
         a cookie that proves the token without holding it.
@@ -515,6 +515,6 @@ export function TokenPage() {
         <button type="submit" className="primary">Save</button>
       </form>
       {failed && <p className="notice">Couldn't: {failed}</p>}
-    </>
+    </Card>
   );
 }

@@ -404,6 +404,9 @@ test("the Cost page says where each cluster's price comes from, as text", async 
   expect(await screen.findByText(/list price of 3 x aws/)).toBeTruthy();
   expect(page.querySelector("i")).toBeNull();
   expect(screen.getByText(/eu: list price/).className).toBe("hint");
+  // slice 21.6f: the lines sit in one card under its title, each as it was
+  expect(screen.getByText(/eu: list price/).closest("section")?.querySelector("h2")?.textContent).toBe("Prices"); // named for what it holds
+  expect(screen.getByText("Savings available", { selector: "p" }).compareDocumentPosition(screen.getByText(/eu: list price/)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy(); // under the figures
   expect(screen.getByText(/kind: no list price/).className).toBe("notice");
 });
 
@@ -468,6 +471,7 @@ test("comparing shows each group's change, a group gone since and what was left 
   expect(bars(gone)).toEqual([]); // nothing left of it: no bar
   expect(screen.getAllByText("-18.25 USD/month").length).toBeGreaterThan(0); // the Savings'
   expect(screen.getByText("kind: compared with its run of 1970-01-02 00:00 UTC")).toBeTruthy();
+  expect(screen.getByText(/compared with its run of/).closest("section")?.querySelector("h2")?.textContent).toBe("The comparison");
   expect(screen.getByText(/eu: no run that old, oldest 1970-01-03 00:00 UTC/)).toBeTruthy();
   expect(screen.getByText(/kind\/lab\/StatefulSet\/db\/db/)).toBeTruthy();
   const calls = (fetch as unknown as { mock: { calls: string[][] } }).mock.calls.map((c) => c[0]);
@@ -528,6 +532,7 @@ test("the Cost page sets a cluster's AWS bill beside its estimate, flagged outsi
   const eu = screen.getByText(/<b>eu<\/b> bill .*\+10.4% \(outside 5%\)/); // text, never markup
   expect(eu.className).toBe("notice");
   expect(screen.getByText(/us bill .*no bill for 2 of 7 days yet/).className).toBe("notice");
+  expect(screen.getByText(/us bill /).closest("section")?.querySelector("h2")?.textContent).toBe("Bills");
   const lab = screen.getByText(/lab bill .*-45.0% \(no verdict\): the estimate rests on 92 of 168 sampled hours/);
   expect(lab.className).toBe("notice"); // a gap without a verdict is no "within"
   // slice 16.4b: the bill's spot part beside the estimate's
@@ -545,6 +550,8 @@ test("a Contract with no billed cluster shows no bill line and no error", async 
   expect(screen.queryByText(/ bill \(/)).toBeNull();
   expect(screen.queryByText(/404/)).toBeNull();
   expect(document.querySelector("tfoot")).toBeNull(); // no group, no Total row
+  expect(screen.queryByText(/^(Prices|Bills|The comparison)/, { selector: "h2" })).toBeNull(); // nothing to say: no empty card
+  expect([...document.querySelectorAll("main h2")].map((h) => h.textContent)).not.toContain(""); // nor a card with no title
 });
 
 test("the Cost page draws CPU and memory over time from its own read (21.6b)", async () => {
@@ -936,6 +943,7 @@ test("the token page posts the token and says when it is wrong", async () => {
   expect(await screen.findByText("Couldn't: that is not the approver token")).toBeTruthy();
   expect(sent).toEqual([{ token: "guess" }]);
   expect(screen.queryByText(/paste it/)).toBeNull(); // the token page needs no cookie
+  expect(input.closest("section")?.querySelector("form")).toBeTruthy(); // the form in a card (21.6f)
 });
 
 function acting(answers: Record<string, [number, unknown]>, sent: [string, unknown][]) {
@@ -1054,6 +1062,13 @@ test("Teachings show the queue as text, and approving sends the text as edited",
   expect(screen.getByText("Your words: it was the node")).toBeTruthy();
   expect(screen.getByText(/2 approved Teachings don't fit in a prompt/)).toBeTruthy();
   expect(screen.getByText(/#2 rejected by slack:U1: ignore it/)).toBeTruthy();
+  // slice 21.6f: figures on top; the approved and the past each in a card under its title
+  expect(figure("Waiting for review")).toBe("Waiting for review1");
+  expect(figure("Approved")).toBe("Approved1used in this Contract's Investigations");
+  expect(figure("Left out of prompts")).toBe("Left out of prompts2approved, over a prompt's limit");
+  expect(screen.getByText("restart the cache").closest("section")?.querySelector("h2")?.textContent).toBe("Approved");
+  expect(screen.getByText(/#2 rejected/).closest("section")?.querySelector("h2")?.textContent).toBe("Rejected and retired");
+  expect(screen.getByLabelText("New Teaching").closest("section")?.querySelector("h2")?.textContent).toBe("Write one");
   fireEvent.change(box, { target: { value: "check the node first" } });
   fireEvent.click(screen.getByText("Approve this text"));
   expect(await screen.findByText("check the node first")).toBeTruthy();
@@ -1124,6 +1139,37 @@ test("Checks show each one's last Run and Open failure, and Deploy verifications
   expect(screen.getByText("skipped: <b>Kill switch</b> on")).toBeTruthy(); // as text
   expect(page.querySelector("main b")).toBeNull();
   expect(screen.getByText("Deployment/api 4")).toBeTruthy();
+  // slice 21.6f: figures on top, a verdict a badge around its link, each table in a card with its title
+  expect(figure("Checks")).toBe("Checks2scheduled");
+  expect(figure("Failing now")).toBe("Failing now1Checks with an Open failure"); // by its Open failure, not its last Run
+  expect(figure("Deploy verifications passed")).toBe("Deploy verifications passed1of the latest 2");
+  expect(figure("Deploy verifications failed")).toBe("Deploy verifications failed0"); // a skipped one has no verdict
+  expect(screen.getByText("failed").parentElement?.className).toContain("text-bad");
+  expect(screen.getByText("passed").parentElement?.className).toContain("text-ok");
+  const titles = [...page.querySelectorAll("table.investigations")].map((t) => t.closest("section")?.querySelector("h2")?.textContent);
+  expect(titles).toEqual(["Checks", "Deploy verifications"]);
+  expect(screen.getByText("2 Checks").parentElement?.previousElementSibling?.tagName).toBe("H1");
+  expect(screen.getByText("2 Deploy verifications")).toBeTruthy();
+});
+
+test("Checks: a Run that failed without a verdict counts as failed; one still running is neutral; nothing at all shows no figures", async () => {
+  history.replaceState(null, "", "/app/?view=checks");
+  const deploy = (id: string, run_status: string, passed: boolean | null) => ({ ...CHECKS.deploys[1], investigation_id: id, run_status, passed });
+  answer({
+    "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]],
+    "/api/v1/contracts/demo-shop/checks": [200, { checks: [], deploys: [deploy("a", "failed", null), deploy("b", "running", null), deploy("c", "done", false)] }],
+  });
+  render(<App />);
+  expect(await screen.findByText("running")).toBeTruthy();
+  expect(figure("Deploy verifications failed")).toBe("Deploy verifications failed2"); // the row's own word, twice
+  expect(figure("Deploy verifications passed")).toBe("Deploy verifications passed0of the latest 3");
+  expect(screen.getByText("running").parentElement?.className).toContain("text-muted");
+  expect(screen.getByText("No Checks scheduled.").closest("section")?.querySelector("h2")?.textContent).toBe("Checks");
+  cleanup();
+  answer({ "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]], "/api/v1/contracts/demo-shop/checks": [200, { checks: [], deploys: [] }] });
+  render(<App />);
+  expect(await screen.findByText("No Checks scheduled.")).toBeTruthy();
+  expect(screen.queryByText("Failing now")).toBeNull();
 });
 
 test("Nodes shows each node's Room, the Contract's pods by name and the rest as a sum", async () => {
@@ -1340,9 +1386,38 @@ test("Health shows each integration now, the error as text, spend against the bu
   expect(screen.getByText("<img src=x> timed out")).toBeTruthy();
   expect(page.querySelector("main img")).toBeNull();
   expect(screen.getByText("OOM").getAttribute("href")).toBe("/app/?view=investigation&id=t1");
-  expect(screen.getByText("Model spend this month: $2.50 of $10.00 (25%)")).toBeTruthy();
+  // slice 21.6f: the spend, the integrations and the last good Investigation as figures
+  expect(figure("Model spend this month")).toBe("Model spend this month$2.50of $10.00 (25%)");
+  expect(figure("Ok now")).toBe("Ok now1 of 2integrations, Relays and Actuators");
+  expect(figure("Last successful Investigation")).toBe("Last successful Investigation2023-11-14 22:13 UTCOOM");
+  const meter = (label: string) =>
+    (screen.getByText(label, { selector: "main p" }).parentElement?.querySelector("[aria-hidden] > div") as HTMLElement | null)?.style.width;
+  expect([meter("Ok now"), meter("Model spend this month")]).toEqual(["50%", "25%"]);
+  expect(screen.getByText("ok").className).toContain("text-ok"); // the status green, never the Savings accent
+  expect(screen.getByText("2 checked").parentElement?.previousElementSibling?.tagName).toBe("H1"); // the title row
   expect(screen.getByText(/prometheus-token loaded, jira-token MISSING/)).toBeTruthy();
   expect(screen.getByText(/approver_token: '\*\*\*\*\*\*\*\*\*\*'/)).toBeTruthy();
+  expect(screen.getByText(/prometheus-token loaded/).closest("details")?.open).toBe(false); // still collapsed
+});
+
+test("Health without a budget draws no meter; $0 of a budget an empty one; over budget a full one; no Investigation says none yet", async () => {
+  history.replaceState(null, "", "/app/?view=health");
+  const health = (spent_usd: number, budget_usd: number | null) =>
+    ({ integrations: [], last: null, config: "", secrets: {}, hub: "", spent_usd, budget_usd });
+  const meter = () =>
+    (screen.getByText("Model spend this month").parentElement?.querySelector("[aria-hidden] > div") as HTMLElement | null)?.style.width;
+  const show = async (spent: number, budget: number | null) => {
+    cleanup();
+    answer({ "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]], "/api/v1/contracts/demo-shop/health": [200, health(spent, budget)] });
+    render(<App />);
+    await screen.findByText("Model spend this month");
+    return [figure("Model spend this month"), meter()];
+  };
+  expect(await show(0.0052, null)).toEqual(["Model spend this month$0.0052no budget set", undefined]);
+  expect(figure("Last successful Investigation")).toBe("Last successful Investigationnone yet");
+  expect(figure("Ok now")).toBe("Ok now0 of 0integrations, Relays and Actuators"); // none configured: no meter
+  expect(await show(0, 10)).toEqual(["Model spend this month$0.0000of $10.00 (0%)", "0%"]);
+  expect(await show(15, 10)).toEqual(["Model spend this month$15.00of $10.00 (150%)", "100%"]); // over: a full meter, the share in words
 });
 
 test("asking a Question posts it for the Contract shown, and a refusal shows the Hub's words", async () => {
@@ -1439,6 +1514,13 @@ test("the Contracts page lists every Contract with its spend against its budget"
   ]);
   expect(screen.getByText("bank").closest("a")?.getAttribute("href")).toBe("/app/?contract=bank");
   expect(screen.queryByText("Turn on the Kill switch")).toBeNull(); // no one Contract here
+  // slice 21.6f: figures on top, the table in a card, a meter under a spend with a budget
+  expect(figure("Contracts")).toBe("Contracts21 with a model budget");
+  expect(figure("Model spend this month")).toBe("Model spend this month$2.51all Contracts, in USD"); // 2.5 + 0.0052
+  const meters = [...page.querySelectorAll(".investigations tbody tr")].map((tr) => (tr.querySelector(".bar > div") as HTMLElement | null)?.style.width);
+  expect(meters).toEqual(["25%", undefined]); // no budget: no meter
+  expect(page.querySelector("table.investigations")?.closest("section")).toBeTruthy();
+  expect(screen.getByText("2 Contracts").parentElement?.previousElementSibling?.tagName).toBe("H1");
 });
 
 test("the Fleet lists every Contract in its own currency, totals per currency, read-only", async () => {

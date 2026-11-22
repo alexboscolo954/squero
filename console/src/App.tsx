@@ -218,8 +218,8 @@ function Floors({ data, cluster, namespace }: { data: Workloads; cluster: string
   if (floors.length === 0) return null;
   const total = data.floors_total;
   return (
-    <section className="floors">
-      <h3>Autoscaled Workloads</h3>
+    <Card className="floors">
+      <h2 className="m-0 mb-2 text-[15px]">Autoscaled Workloads</h2>
       {total && total.workloads > 0 && (
         <p className="total">
           Floors: {total.workloads}{" "}
@@ -326,7 +326,7 @@ function Floors({ data, cluster, namespace }: { data: Workloads; cluster: string
           </li>
         ))}
       </ul>
-    </section>
+    </Card>
   );
 }
 
@@ -395,7 +395,6 @@ function Page({ contract, data }: { contract: string; data: Workloads }) {
         })}
       </ul>
       {clusters.length === 0 && <NoSizings contract={contract} />}
-      <PriceNotes notes={data.prices} />
       <PageTools>
         <span>{clusters.length} cluster{clusters.length === 1 ? "" : "s"}</span>
         <span>{data.workloads.length} workload{data.workloads.length === 1 ? "" : "s"}</span>
@@ -417,6 +416,13 @@ function Page({ contract, data }: { contract: string; data: Workloads }) {
           : "Waste: requests above the Sizings; a core ranks like 4 GiB."}
         {data.gpus && " Idle GPUs: busiest hour under 5% busy, each GPU by the share of the window it was held; beside the waste, never in it."}
       </p>
+      {/* Where the prices come from, in a card under the figures (slice 21.6f): each line as it was. */}
+      {(data.prices ?? []).length > 0 && (
+        <section className="panel m-0">
+          <h2>Prices</h2>
+          <PriceNotes notes={data.prices} />
+        </section>
+      )}
       <Card className="flex flex-col gap-3 p-0">
         <div className="filters flex flex-wrap items-center gap-3 px-4 pt-4">
           <Chips
@@ -575,6 +581,12 @@ function CostPage({
   const shown = (g: { cost?: { requests: number; waste: number } | null; requests: { cpu?: number; memory?: number }; waste: { cpu?: number; memory?: number } }, key: "requests" | "waste") =>
     currency && g.cost ? money(g.cost[key], currency) : `${cores(g[key].cpu ?? 0)}, ${gib(g[key].memory ?? 0)}`;
   const cmp = data.compare;
+  const basis = [
+    (data.prices ?? []).length > 0 && "Prices",
+    (bills?.clusters ?? []).length > 0 && "Bills",
+    cmp && "the comparison",
+  ].filter(Boolean) as string[];
+  if (basis[0] === "the comparison") basis[0] = "The comparison";
   // One scale per column: money when priced, else cores and GiB as one number (slice 21.6c).
   const size = (g: Allocation["groups"][number], key: "requests" | "waste") =>
     currency && g.cost ? g.cost[key] : weigh(g[key]);
@@ -610,19 +622,6 @@ function CostPage({
       {data.warnings.map((w) => (
         <p key={w} className="notice">{w}</p>
       ))}
-      <PriceNotes notes={data.prices} />
-      <BillLines bills={bills} />
-      {cmp &&
-        Object.entries(cmp.clusters).map(([cluster, c]) => (
-          <p key={cluster} className={c.at == null ? "notice" : "hint"}>
-            {c.at == null
-              ? `${cluster}: no run that old, oldest ${when(c.oldest)}; left out of the change`
-              : `${cluster}: compared with its run of ${when(c.at)}`}
-          </p>
-        ))}
-      {cmp && cmp.left_out.length > 0 && (
-        <p className="notice">Left out of the change, requests or labels unknown then: {cmp.left_out.join(", ")}</p>
-      )}
       <Figures>
         <Tile icon={PiggyBank} label="Savings available" value={shown(data.total, "waste")} tone="saving" note={cmp ? change(cmp.change, "waste", currency) : undefined} />
         <Tile icon={Coins} label="Requests" value={shown(data.total, "requests")} note={cmp ? change(cmp.change, "requests", currency) : undefined} />
@@ -632,6 +631,26 @@ function CostPage({
         Requests in the Contract's namespaces, not the nodes; the available Savings is what the requests above the
         Sizings cost.
       </p>
+      {/* What the figures rest on, in one card under them (slice 21.6f): each line as it was,
+          the title naming only what the card holds. */}
+      {basis.length > 0 && (
+        <section className="panel m-0">
+          <h2>{basis.join(", ")}</h2>
+          <PriceNotes notes={data.prices} />
+          <BillLines bills={bills} />
+          {cmp &&
+            Object.entries(cmp.clusters).map(([cluster, c]) => (
+              <p key={cluster} className={c.at == null ? "notice" : "hint"}>
+                {c.at == null
+                  ? `${cluster}: no run that old, oldest ${when(c.oldest)}; left out of the change`
+                  : `${cluster}: compared with its run of ${when(c.at)}`}
+              </p>
+            ))}
+          {cmp && cmp.left_out.length > 0 && (
+            <p className="notice">Left out of the change, requests or labels unknown then: {cmp.left_out.join(", ")}</p>
+          )}
+        </section>
+      )}
       <Card>
         <Realized data={data.realized} />
       </Card>
@@ -722,7 +741,7 @@ function Realized({ data }: { data: Allocation["realized"] }) {
 
 function Detail({ contract, workload, currency }: { contract: string; workload: Workload; currency?: string | null }) {
   return (
-    <section className="detail rounded-xl">
+    <section className="detail">
       <h2>{workload.kind}/{workload.name}</h2>
       <p className="hint">
         Waste: {cores(workload.waste.cpu ?? 0)} CPU, {gib(workload.waste.memory ?? 0)} memory
@@ -747,7 +766,7 @@ function ContainerDetail({ contract, c }: { contract: string; c: Container }) {
       <h3>
         {c.container} <span className="hint">({c.policy})</span>
       </h3>
-      <p>
+      <p className="num whitespace-normal">
         CPU {c.cpu?.action ?? "-"} {cpu(c.cpu?.current)} → {cpu(c.cpu?.target)}; memory{" "}
         {c.memory?.action ?? "-"} {memory(c.memory?.current)} → {memory(c.memory?.target)}
       </p>
