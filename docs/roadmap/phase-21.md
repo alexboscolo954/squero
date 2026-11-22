@@ -2,7 +2,7 @@
 
 **In short:** the console works but looks like raw HTML: a link bar, headings and bare forms. This phase gives it a real dashboard design, in the style of ScaleOps' product UI, without changing what any page does. It is built next, before Phase 19 continues.
 
-**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6 built (2026-11-22), not released. Owed: a look at the light theme and at every page with real data.
+**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6a to 21.6c built (2026-11-22), not released; 21.6d to 21.6f grilled: one release, 0.66.0, after 21.6f. Owed: a look at the light theme and at every page with real data.
 
 **Goal:** a console the Operator is glad to open every day: a sidebar, an Overview dashboard, and every page laid out as number tiles, charts and tables in cards.
 
@@ -20,6 +20,9 @@
 | [21.6a](#216-density-and-layout-after-a-live-reference) | Denser type, a title row on every page, figures in cards, uppercase small labels | ✅ built |
 | [21.6b](#216-density-and-layout-after-a-live-reference) | The Overview as a grid of cards | ✅ built |
 | [21.6c](#216-density-and-layout-after-a-live-reference) | Tables: bars in cells, a Total row, numbers in mono | ✅ built |
+| [21.6d](#216d-to-216f-the-same-pattern-on-every-page) | Nodes and Automation in the page pattern | ⬜ next |
+| [21.6e](#216d-to-216f-the-same-pattern-on-every-page) | Investigations and an Investigation's page | ⬜ |
+| [21.6f](#216d-to-216f-the-same-pattern-on-every-page) | Checks, Health, Teachings, Contracts, Approver token, the Workload detail, Cost's lines | ⬜ |
 
 ## Why this phase exists
 
@@ -301,3 +304,33 @@ Two rounds, all answers the recommended ones.
 - For the owner's eye: the numbers are 12 px mono beside 13 px text, and the Savings column carries more of the accent than before.
 - No API change, no eval rerun, no isolation test.
 
+## 21.6d to 21.6f The same pattern on every page
+
+**Why:** after 21.6c the owner asked whether the new look reaches every page. It does not: Overview, Workloads, Cost and Fleet carry it; the other nine got only the shared type and frame. "I don't want only half the Hub looking good."
+
+**What the other pages show today** (seen in Chrome with sample data, 2026-11-22):
+- The tables of Investigations, Checks, Contracts and Teachings' Approved sit on the page's ground, not in a card.
+- No figures on Nodes, Automation, Investigations, Checks, Health, Teachings or Contracts.
+- Nodes is mostly sentences, and since 21.6c's no-wrap numbers its table is wider than its card at a 1,500 px window: "Could be removed" needs a sideways scroll.
+- An Investigation's page has no title row; its facts are one line of small text.
+
+**Decided (grill, 2026-11-22, all recommended):**
+- **One page pattern everywhere:** the title row with counts, a row of figure cards, then the content in cards, every table inside a card with a title. Statuses are badges everywhere.
+- **Done already:** Overview, Workloads, Cost, Fleet. **Redone:** the nine others, plus the parts of Workloads and Cost not opened in 21.6 (a picked Workload's detail, Cost's bill and realized lines).
+- **Figures**, only from what each page already reads, no new API:
+
+  | Page | Figures |
+  |---|---|
+  | Nodes | Nodes read, could go now, could go after the Sizings, spot nodes, clusters not read |
+  | Automation | On, off, stopped by a Revert, ended by rollbacks (the page's own states) |
+  | Investigations | Waiting for you, running, failed, of the list's latest 100. No "done": the list leaves out passing Checks |
+  | Checks | Checks, failing now, Deploy verifications passed and failed |
+  | Health | Integrations ok with a meter, model spend this month (a meter where a budget is set), the last successful Investigation |
+  | Teachings | Waiting for review, approved, left out of prompts |
+  | Contracts | Contracts, model spend this month, a meter per row where a budget is set |
+
+- **Nodes:** each cluster's facts as a label-and-value list, every caveat word for word; the table narrowed so "Could be removed" fits; no bars (21.6c's decision stands).
+- **Filter chips**, kept in the address as Workloads' are: Investigations by kind and status; Automation by All, On, Not on.
+- **An Investigation's page:** a header card (title, status badge, kind, Contract, start time) and figures (tokens, cost, tool calls, masked names). Approve, Reject with its reason and the Stale deadline stay exactly as they are.
+- **Slices:** 21.6d Nodes and Automation; 21.6e Investigations and an Investigation's page; 21.6f Checks, Health, Teachings, Contracts, Approver token, the Workload detail and Cost's lines. Each checked in Chrome on every page it touches.
+- **Release:** one, 0.66.0, after 21.6f, so the mini PC's Hub never shows half of it.
