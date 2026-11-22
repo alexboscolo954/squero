@@ -2,7 +2,7 @@
 
 **In short:** the console works but looks like raw HTML: a link bar, headings and bare forms. This phase gives it a real dashboard design, in the style of ScaleOps' product UI, without changing what any page does. It is built next, before Phase 19 continues.
 
-**Status:** grilled 2026-11-21; nothing built yet.
+**Status:** grilled 2026-11-21; 21.1 built.
 
 **Goal:** a console the Operator is glad to open every day: a sidebar, an Overview dashboard, and every page laid out as number tiles, charts and tables in cards.
 
@@ -10,7 +10,7 @@
 
 | Slice | What | Status |
 |---|---|---|
-| 21.1 | The shell: sidebar, header, Contract switcher, Kill switch, design tokens and components | ⏳ |
+| [21.1](#211-the-shell) | The shell: sidebar, header, Contract switcher, Kill switch, design tokens and components | ✅ built |
 | 21.2 | The Overview dashboard | ⏳ |
 | 21.3 | The optimizer pages restyled: Workloads, Cost, Nodes, Automation, Fleet | ⏳ |
 | 21.4 | The triage pages restyled: Investigations, Teachings, Checks, Health, Contracts | ⏳ |
@@ -62,8 +62,26 @@ Two rounds, all answers the recommended ones.
 **What:** the frame every page sits in.
 - Tailwind and shadcn/ui set up in `console/`, design tokens for the colours, both themes.
 - The sidebar (grouped, collapsible), the header with the Contract switcher and the Kill switch.
-- Shared components: number tile, chart card, table card with chips and search, badge, pill, "before → after" cell.
+- The shared components (number tile, chart card, table card with chips and search, badge, pill, "before → after" cell) come with the first page that uses them: 21.2 and 21.3.
 - Every existing page moved into the shell unchanged inside.
+
+**Built (2026-11-21):**
+- Tailwind CSS 4 (theme and utilities, without its reset, so the pages' own rules still hold) and shadcn/ui's helpers (`clsx`, `tailwind-merge`, `class-variance-authority`) and `lucide-react` icons, each pinned and at least a week old.
+- `styles.css`: the colours as tokens for both themes (money, saving, waste, request, usage, the accent, the sidebar's); the pages' old rules in a `legacy` layer, so a utility always wins over them.
+- `Shell.tsx`: the sidebar in its four groups, the Contract switcher at its top (a name alone with one Contract), "Collapse" to icons (remembered; a browser that refuses storage still works), the header naming the Contract and the page.
+- The Kill switch in the header, on a Contract's own pages only: a red-outlined "Turn on the Kill switch", or a red line under the header while it is on.
+- `ui/button.tsx`, the one component the shell uses.
+
+**Choices made while building, for the owner to confirm:**
+- The shared components arrive with the first page that uses them (21.2, 21.3), not ahead of it.
+- The header is not a heading: each page keeps its own `h1` until 21.3 and 21.4 restyle it.
+- Icons from `lucide-react`.
+- The Contract switcher shows on every page but one Investigation's, whose address names no Contract: there the header names none either.
+- The page is wider: 1280 px, from 1120.
+
+**Tests:** 7 in `Shell.test.tsx` (links with and without the Contract, the groups, an Investigation under Investigations, the header, the switcher, the remembered collapse, refused storage) and one in `App.test.tsx` (the Kill switch on a Contract's pages only); 4 existing tests scoped to the page. 14 mutations, 13 caught, 1 equivalent (the token page returns before the Kill switch is decided; the redundant check was removed).
+
+**Checked:** in Chrome on a local build with a stub API and the Hub's CSP: the sidebar, the collapse, the switcher, the Kill switch off and on, and the Teachings page (with the tests' Teachings) inside the frame; no CSP violation. The dark theme only: the light one was not viewed. The old `container` class of a Workload's detail renamed `one-container`, since Tailwind's utility of that name would have narrowed it.
 
 ### 21.2 The Overview
 

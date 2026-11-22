@@ -283,6 +283,18 @@ Anything else gets a 403. That includes a tagged device, which has no user.
 
 ### The look
 
+- **A sidebar** groups the pages (from 0.64.0, slice 21.1):
+
+  | Group | Pages |
+  |---|---|
+  | Overview | Fleet |
+  | Optimization | Workloads, Cost, Nodes, Automation |
+  | Investigations | Investigations, Teachings, Checks, Health |
+  | Settings | Contracts, Approver token |
+
+  - The Contract switcher is at its top; a Contract's pages link with the one picked.
+  - "Collapse" at its bottom shrinks it to icons. The browser remembers it.
+- **The header** names the Contract and the page. On a Contract's own pages it has the Kill switch: "Turn on the Kill switch", or, while it is on, a red line saying since when and by whom, with "Turn it off".
 - The app uses one stylesheet and the app's own scripts.
 - The Hub serves them behind the same identity.
 - No script, font or file comes from anywhere else. So the page's `default-src 'self'` policy stays strict.

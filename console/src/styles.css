@@ -1,75 +1,111 @@
-/* The console's look: its colours, light and dark. */
+/* The console's look (Phase 21). Tailwind's theme and utilities, without its reset; the pages'
+   own rules sit in the `legacy` layer, so a utility always wins over them. */
+@layer theme, legacy, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* The colours, light and dark (following the system). The meanings follow ScaleOps' product UI:
+   money indigo, savings green, waste pink, request amber, usage blue; the accent is squero's.
+   ponytail: one palette per theme; tune these values, never the components. */
 :root {
-  --bg: #f6f7f9; --panel: #fff; --text: #1c2128; --muted: #5d6673; --line: #dfe3e8;
-  --accent: #2f6fde; --bad: #b42323; --bad-bg: #fbe6e6; --wait: #8a5a00; --wait-bg: #fdf1d8;
+  --bg: #f3f4f6; --panel: #fff; --text: #111827; --muted: #6b7280; --line: #e5e7eb;
+  --accent: #0e7490; --accent-bg: #e0f2f5;
+  --bad: #c0262d; --bad-bg: #fde8e8; --wait: #8a5a00; --wait-bg: #fdf1d8;
+  --rail: #0f1216; --rail-text: #c9ced6; --rail-muted: #7b8490; --rail-hover: #1b2027;
+  --money: #5b5bd6; --saving: #10b77f; --waste: #e5486e; --waste-bg: #fbe3ea;
+  --request: #e0a526; --usage: #3b82f6;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #111418; --panel: #181c21; --text: #e3e7ec; --muted: #98a2ae; --line: #2b3139;
-    --accent: #6ea2ff; --bad: #ff8080; --bad-bg: #3a1c1c; --wait: #f2c26b; --wait-bg: #382a10;
+    --bg: #0b0d10; --panel: #15181d; --text: #e5e7eb; --muted: #9ca3af; --line: #262b33;
+    --accent: #38bdd8; --accent-bg: #10303a;
+    --bad: #ff7b7b; --bad-bg: #3a1c1c; --wait: #f2c26b; --wait-bg: #382a10;
+    --rail: #07090b; --rail-text: #c9ced6; --rail-muted: #6b7480; --rail-hover: #14181d;
+    --money: #8b8bf5; --saving: #34d399; --waste: #f47b98; --waste-bg: #3b1722;
+    --request: #f2c04a; --usage: #60a5fa;
     color-scheme: dark;
   }
 }
-* { box-sizing: border-box; }
-body {
-  margin: 0; background: var(--bg); color: var(--text);
-  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+@theme inline {
+  --color-page: var(--bg);
+  --color-panel: var(--panel);
+  --color-ink: var(--text);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-bg: var(--accent-bg);
+  --color-bad: var(--bad);
+  --color-bad-bg: var(--bad-bg);
+  --color-rail: var(--rail);
+  --color-rail-text: var(--rail-text);
+  --color-rail-muted: var(--rail-muted);
+  --color-rail-hover: var(--rail-hover);
+  --color-money: var(--money);
+  --color-saving: var(--saving);
+  --color-waste: var(--waste);
+  --color-waste-bg: var(--waste-bg);
+  --color-request: var(--request);
+  --color-usage: var(--usage);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-header {
-  display: flex; align-items: center; gap: 1.5rem; padding: 0.75rem 1rem;
-  background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap;
+
+/* The pages' own rules, until 21.3 and 21.4 move each page to the components. */
+@layer legacy {
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  h1 { font-size: 1.4rem; margin: 0.5rem 0; }
+  h2 { font-size: 1.15rem; margin: 0 0 0.5rem; }
+  h3 { font-size: 1rem; margin: 0.75rem 0 0.25rem; }
+  .hint { color: var(--muted); font-size: 0.85rem; }
+  .notice { background: var(--wait-bg); color: var(--wait); padding: 0.75rem 1rem; border-radius: 6px; }
+  .clusters { list-style: none; padding: 0; margin: 0 0 0.5rem; color: var(--muted); }
+  .clusters .stale { color: var(--bad); }
+  .filters { display: flex; gap: 1rem; margin: 0.5rem 0; flex-wrap: wrap; }
+  select { font: inherit; padding: 0.2rem 0.4rem; }
+  button, input, textarea { font: inherit; }
+  table {
+    width: 100%; border-collapse: collapse; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+  }
+  th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th {
+    font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em;
+    color: var(--muted); background: var(--bg);
+  }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover td, tbody tr.picked td { background: var(--bg); }
+  button.link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
+  .chip {
+    display: inline-block; margin: 0 0.25rem 0.25rem 0; padding: 0 0.45rem; border-radius: 999px;
+    background: var(--bad-bg); color: var(--bad); font-size: 0.8rem;
+  }
+  .detail {
+    margin-top: 1.25rem; padding: 1rem; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 6px;
+  }
+  .risks { padding-left: 1rem; }
+  .range { display: flex; gap: 0.5rem; margin: 0.5rem 0; }
+  .range button { font: inherit; padding: 0.2rem 0.6rem; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--text); cursor: pointer; }
+  .range button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; }
+  .chart { min-width: 0; }
+  .text { white-space: pre-wrap; }
+  .panel {
+    margin: 1rem 0; padding: 0.75rem 1rem; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 6px;
+  }
+  .panel.waiting { background: var(--wait-bg); }
+  .meta { color: var(--muted); }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .investigations tbody tr { cursor: default; }
+  table + h2 { margin-top: 1.25rem; }
+  .bad { color: var(--bad); font-weight: 600; }
+  .nowrap { white-space: nowrap; }
 }
-header .brand { font-weight: 700; color: var(--text); font-size: 1.05rem; }
-header nav { display: flex; flex-wrap: wrap; gap: 1rem; }
-header nav a[aria-current="page"] { font-weight: 600; color: var(--text); }
-main { max-width: 1120px; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
-h1 { font-size: 1.4rem; margin: 0.5rem 0; }
-h2 { font-size: 1.15rem; margin: 0 0 0.5rem; }
-h3 { font-size: 1rem; margin: 0.75rem 0 0.25rem; }
-.hint { color: var(--muted); font-size: 0.85rem; }
-.notice { background: var(--wait-bg); color: var(--wait); padding: 0.75rem 1rem; border-radius: 6px; }
-.clusters { list-style: none; padding: 0; margin: 0 0 0.5rem; color: var(--muted); }
-.clusters .stale { color: var(--bad); }
-.filters { display: flex; gap: 1rem; margin: 0.5rem 0; flex-wrap: wrap; }
-select { font: inherit; padding: 0.2rem 0.4rem; }
-table {
-  width: 100%; border-collapse: collapse; background: var(--panel);
-  border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
-}
-th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-th {
-  font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em;
-  color: var(--muted); background: var(--bg);
-}
-tbody tr { cursor: pointer; }
-tbody tr:hover td, tbody tr.picked td { background: var(--bg); }
-button.link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
-.chip {
-  display: inline-block; margin: 0 0.25rem 0.25rem 0; padding: 0 0.45rem; border-radius: 999px;
-  background: var(--bad-bg); color: var(--bad); font-size: 0.8rem;
-}
-.detail {
-  margin-top: 1.25rem; padding: 1rem; background: var(--panel);
-  border: 1px solid var(--line); border-radius: 6px;
-}
-.risks { padding-left: 1rem; }
-.range { display: flex; gap: 0.5rem; margin: 0.5rem 0; }
-.range button { font: inherit; padding: 0.2rem 0.6rem; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--text); cursor: pointer; }
-.range button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; }
-.chart { min-width: 0; }
-.text { white-space: pre-wrap; }
-.panel {
-  margin: 1rem 0; padding: 0.75rem 1rem; background: var(--panel);
-  border: 1px solid var(--line); border-radius: 6px;
-}
-.panel.waiting { background: var(--wait-bg); }
-.meta { color: var(--muted); }
-pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-.investigations tbody tr { cursor: default; }
-table + h2 { margin-top: 1.25rem; }
-.bad { color: var(--bad); font-weight: 600; }
-.nowrap { white-space: nowrap; }

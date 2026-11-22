@@ -6,7 +6,9 @@
 // The Agenda (slice 11.4): what to look at now, most urgent first, above the Workloads.
 // Investigations and the approver token page (slice 11.5a): Investigations.tsx.
 // Automation and Revert (slice 12.6b): Automation.tsx.
+// The frame around every page (slice 21.1): Shell.tsx.
 // Everything from the API is rendered as text.
+import { Power } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import * as api from "./api";
 import type { Allocation, Bills, Container, Point, Workload, Workloads } from "./api";
@@ -19,8 +21,10 @@ import { ContractsPage } from "./Contracts";
 import { FleetPage } from "./Fleet";
 import { NodesPage } from "./Nodes";
 import { amount, change, cores, cpu, gib, memory, money, pct, rank, when } from "./format";
+import { Shell } from "./Shell";
+import { Button } from "./ui/button";
 
-/** The pages across every Contract: no Contract picker, no Kill switch bar. */
+/** The pages across every Contract: no Kill switch. */
 const ACROSS = ["contracts", "fleet"];
 
 /** Where each cluster's price comes from, for a Contract priced from cloud list prices. */
@@ -106,21 +110,21 @@ export default function App() {
     else if (workloadsView) api.workloads(shown).then(setData, setError);
   }, [shown, costView, workloadsView, by, compare]);
   const here = shown ? `contract=${encodeURIComponent(shown)}` : "";
-  const current = (v: string) => (view === v ? "page" : undefined);
+  const pick = (id: string) => {
+    setBy(""); // another Contract may not have this grouping
+    setContract(id);
+  };
+  const ofOne = shown && view !== "investigation" && !ACROSS.includes(view); // the token page has none
+  const frame = { view, here, contracts, shown, onContract: pick };
   if (view === "token")
     return (
-      <>
-        <Header here={here} current={current} />
-        <main>
-          <TokenPage />
-        </main>
-      </>
+      <Shell {...frame}>
+        <TokenPage />
+      </Shell>
     );
 
   return (
-    <>
-      <Header here={here} current={current} />
-      <main>
+    <Shell {...frame} actions={ofOne ? <KillSwitch contract={shown} /> : null}>
         {error instanceof api.NeedsToken ? (
           <p className="notice">
             This browser hasn't got the approver token yet: <a href={error.tokenUrl}>paste it</a>,
@@ -132,23 +136,6 @@ export default function App() {
         {view === "investigation" && id && <InvestigationPage id={id} />}
         {view === "contracts" && <ContractsPage />}
         {view === "fleet" && <FleetPage />}
-        {view !== "investigation" && !ACROSS.includes(view) && contracts.length > 1 && (
-          <label>
-            Contract{" "}
-            <select
-              value={shown}
-              onChange={(e) => {
-                setBy(""); // another Contract may not have this grouping
-                setContract(e.target.value);
-              }}
-            >
-              {contracts.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          </label>
-        )}
-        {shown && view !== "investigation" && !ACROSS.includes(view) && <KillSwitchBar contract={shown} />}
         {shown && workloadsView && <AgendaPanel contract={shown} />}
         {data && workloadsView && <Page contract={shown} data={data} />}
         {shown && view === "investigations" && <InvestigationList contract={shown} />}
@@ -158,37 +145,13 @@ export default function App() {
         {shown && view === "health" && <HealthPage contract={shown} />}
         {shown && view === "nodes" && <NodesPage contract={shown} />}
         {allocation && costView && <CostPage data={allocation} bills={bills} setBy={setBy} compare={compare} setCompare={setCompare} />}
-      </main>
-    </>
-  );
-}
-
-function Header({ here, current }: { here: string; current: (v: string) => "page" | undefined }) {
-  return (
-    <header>
-      <a className="brand" href="/app/">squero</a>
-      <nav>
-        <a href="/app/?view=fleet" aria-current={current("fleet")}>Fleet</a>
-        <a href="/app/?view=contracts" aria-current={current("contracts")}>Contracts</a>
-        <a href={`/app/?${here}&view=investigations`} aria-current={current("investigations") ?? current("investigation")}>
-          Investigations
-        </a>
-        <a href={`/app/?${here}&view=teachings`} aria-current={current("teachings")}>Teachings</a>
-        <a href={`/app/?${here}&view=checks`} aria-current={current("checks")}>Checks</a>
-        <a href={`/app/?${here}&view=health`} aria-current={current("health")}>Health</a>
-        <a href={`/app/?${here}`} aria-current={current("")}>Workloads</a>
-        <a href={`/app/?${here}&view=cost`} aria-current={current("cost")}>Cost</a>
-        <a href={`/app/?${here}&view=nodes`} aria-current={current("nodes")}>Nodes</a>
-        <a href={`/app/?${here}&view=automation`} aria-current={current("automation")}>Automation</a>
-        <a href="/app/?view=token" aria-current={current("token")}>Approver token</a>
-      </nav>
-    </header>
+    </Shell>
   );
 }
 
 /** The Contract's Kill switch: on stops every change to its systems; only here does it go
  * off again (the Hub MCP server can only turn it on). */
-function KillSwitchBar({ contract }: { contract: string }) {
+function KillSwitch({ contract }: { contract: string }) {
   const [state, setState] = useState<api.KillSwitch | null>(null);
   const [failed, setFailed] = useState("");
   useEffect(() => {
@@ -199,18 +162,26 @@ function KillSwitchBar({ contract }: { contract: string }) {
   if (!state) return null;
   const act = (change: (c: string) => Promise<api.KillSwitch>) =>
     change(contract).then(setState, (e: Error) => setFailed(e.message));
+  const couldnt = failed && <span className="text-sm text-bad">Couldn't: {failed}</span>;
+  // On, it takes a line of its own under the header's: nothing on the page may hide it.
   return state.on ? (
-    <p className="notice">
-      Kill switch on since {when(state.since)} ({state.by}): approving is refused and no change
-      to this Contract's systems runs.{" "}
-      <button onClick={() => act(api.turnOffKillSwitch)}>Turn it off</button>
-      {failed && ` Couldn't: ${failed}`}
-    </p>
+    <div role="status" className="order-last flex basis-full flex-wrap items-center gap-3 rounded-md bg-red-700 px-4 py-2 text-sm text-white">
+      <Power className="size-4 shrink-0" aria-hidden="true" />
+      <p className="m-0 mr-auto">
+        Kill switch on since {when(state.since)} ({state.by}): approving is refused and no change
+        to this Contract's systems runs.
+      </p>
+      <Button size="sm" variant="outline" onClick={() => act(api.turnOffKillSwitch)}>Turn it off</Button>
+      {couldnt}
+    </div>
   ) : (
-    <p>
-      <button onClick={() => act(api.turnOnKillSwitch)}>Turn on the Kill switch</button>
-      {failed && ` Couldn't: ${failed}`}
-    </p>
+    <>
+      {couldnt}
+      <Button size="sm" variant="danger-outline" onClick={() => act(api.turnOnKillSwitch)}>
+        <Power aria-hidden="true" />
+        Turn on the Kill switch
+      </Button>
+    </>
   );
 }
 
@@ -656,7 +627,7 @@ function ContainerDetail({ contract, c }: { contract: string; c: Container }) {
     api.history(contract, c, days).then((h) => setPoints(h.points), () => setPoints([]));
   }, [contract, c, days]);
   return (
-    <div className="container">
+    <div className="one-container">
       <h3>
         {c.container} <span className="hint">({c.policy})</span>
       </h3>

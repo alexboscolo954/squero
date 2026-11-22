@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Point, Workloads } from "./api";
 import App from "./App";
@@ -216,7 +216,7 @@ test("Workloads rank by waste, a core like 4 GiB", async () => {
   });
   render(<App />);
   await screen.findByText("Deployment/memory-heavy");
-  const names = screen.getAllByRole("button").map((b) => b.textContent);
+  const names = within(screen.getByRole("main")).getAllByRole("button").map((b) => b.textContent);
   expect(names.slice(0, 2)).toEqual(["Deployment/memory-heavy", "Deployment/cpu-heavy"]);
   expect(screen.getByText(/Learning: kind\/lab\/StatefulSet\/db\/app \(24 h of 72 h\)/)).toBeTruthy();
 });
@@ -238,7 +238,7 @@ test("with prices, Workloads rank by the monthly cost of their waste and show it
   });
   render(<App />);
   await screen.findByText("Deployment/memory-heavy");
-  const names = screen.getAllByRole("button").map((b) => b.textContent);
+  const names = within(screen.getByRole("main")).getAllByRole("button").map((b) => b.textContent);
   expect(names.slice(0, 2)).toEqual(["Deployment/cpu-heavy", "Deployment/memory-heavy"]);
   expect(screen.getByText("1,234.50 EUR/month")).toBeTruthy();
   expect(screen.getByText("1,219.17 EUR/month")).toBeTruthy();
@@ -525,6 +525,28 @@ test("the Kill switch shows who turned it on, and only here does it go off", asy
   fireEvent.click(screen.getByText("Turn on the Kill switch"));
   expect(await screen.findByText("Turn it off")).toBeTruthy();
   expect(sent).toEqual(["GET", "DELETE", "POST"]);
+});
+
+test("the Kill switch is on a Contract's own pages only, never across Contracts or on one Investigation", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const path = url.split("?")[0];
+      if (path.endsWith("/kill-switch")) return new Response(JSON.stringify({ on: false }), { status: 200 });
+      const body = path === "/api/v1/contracts" ? [{ id: "demo-shop", name: "demo-shop" }] : {};
+      return new Response(JSON.stringify(body), { status: path === "/api/v1/contracts" ? 200 : 404 });
+    }),
+  );
+  for (const view of ["fleet", "contracts", "token", "investigation&id=i1"]) {
+    history.replaceState(null, "", `/app/?contract=demo-shop&view=${view}`);
+    render(<App />);
+    await new Promise((r) => setTimeout(r, 20)); // the Contracts' and the Kill switch's fetches
+    expect(screen.queryByText("Turn on the Kill switch")).toBeNull();
+    cleanup();
+  }
+  history.replaceState(null, "", "/app/?contract=demo-shop&view=teachings");
+  render(<App />);
+  expect(await screen.findByText("Turn on the Kill switch")).toBeTruthy();
 });
 
 test("the Agenda lists what to look at now, in the Hub's order, each linking where to act", async () => {
@@ -961,7 +983,7 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
   expect(edge?.textContent).toContain("Autoscaler: none named in the Contract.");
   expect(edge?.textContent).toContain("node series would cross Contracts");
   expect(edge?.querySelector("table")).toBeNull();
-  expect(screen.getByText("Nodes", { selector: "nav a" }).getAttribute("aria-current")).toBe("page");
+  expect(screen.getByText("Nodes", { selector: "nav a span" }).closest("a")?.getAttribute("aria-current")).toBe("page");
   expect(kind?.querySelector(".placement")).toBeNull(); // no Placement: nothing said of it
   expect(kind?.querySelector(".spot")).toBeNull(); // no spot label: nothing said of it
 });
@@ -1232,7 +1254,7 @@ test("the Fleet lists every Contract in its own currency, totals per currency, r
   expect([...page.querySelectorAll(".fleet div.bad")].map((d) => d.textContent)).toEqual([
     "eu: Actuator in eu speaks Protocol 3, this Hub 1: upgrade the Hub",
   ]);
-  expect(screen.getByText("Bank").closest("a")?.getAttribute("href")).toBe("/app/?contract=bank");
+  expect(screen.getByText("Bank", { selector: "main a" }).getAttribute("href")).toBe("/app/?contract=bank");
   expect(page.querySelector(".fleet b")).toBeNull(); // Hub text is text
   expect(screen.queryByText("Turn on the Kill switch")).toBeNull(); // read-only, no one Contract
   expect(page.querySelector("main select")).toBeNull(); // no Contract picker
@@ -1348,12 +1370,12 @@ test("idle GPUs show beside the waste, per Workload and per GPU, as text (slice 
   expect(screen.getByText("Idle GPUs", { selector: "th" })).toBeTruthy();
   const cells = [...page.querySelectorAll("tbody tr")].map((tr) => tr.children[6]?.textContent);
   expect(cells).toEqual(["-", idle.text]); // ranked by waste: plain first
-  const listed = [...page.querySelectorAll(".container details li")].map((li) => li.textContent);
+  const listed = [...page.querySelectorAll(".one-container details li")].map((li) => li.textContent);
   expect(listed).toEqual([
     "GPU-<b>a</b> on n1 (trainer-0): idle, busiest hour 1% by engine over 168 h, held 100% of the window, memory peak 1024Mi",
     "GPU-b on n1 (trainer-1): unread over 0 h, held 100% of the window",
   ]);
-  expect(page.querySelector(".container details b")).toBeNull();
+  expect(page.querySelector(".one-container details b")).toBeNull();
 });
 
 test("a Contract without GPUs has no Idle GPUs line or column", async () => {
