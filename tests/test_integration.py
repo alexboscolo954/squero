@@ -48,14 +48,23 @@ def by_app(pods: list[dict[str, Any]], app: str) -> list[dict[str, Any]]:
 
 async def test_finds_all_three_failures(live: contracts.Contract) -> None:
     async with Client(k8s(live)) as c:
-        for _ in range(60):  # reports' first OOM kill may still be to come (CI, 2026-11-11)
+        # Wait for both: reports' first OOM kill may still be to come (CI, 2026-11-11), and a
+        # checkout pod can show its restarts before its last exit (CI, 2026-11-22: KeyError 'app').
+        def crashed(pods: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [
+                p
+                for p in by_app(pods, "checkout")
+                if p["restarts"] >= 2 and p["last_terminated"].get("app")
+            ]
+
+        for _ in range(60):
             pods = (await tool(c, "list_pods", cluster="kind", namespace="demo"))["result"]
-            if by_app(pods, "reports")[0]["last_terminated"].get("app"):
+            if by_app(pods, "reports")[0]["last_terminated"].get("app") and crashed(pods):
                 break
             await anyio.sleep(2)
 
-        crashing = [p for p in by_app(pods, "checkout") if p["restarts"] >= 2]
-        assert crashing, pods
+        crashing = crashed(pods)
+        assert crashing, by_app(pods, "checkout")
         assert crashing[0]["last_terminated"]["app"]["exit_code"] == 1
 
         # Killed at its memory limit: OOMKilled, or Error with SIGKILL's 137 when the runtime
