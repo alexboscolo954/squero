@@ -2,7 +2,7 @@
 
 **In short:** the console works but looks like raw HTML: a link bar, headings and bare forms. This phase gives it a real dashboard design, in the style of ScaleOps' product UI, without changing what any page does. It is built next, before Phase 19 continues.
 
-**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6 grilled (2026-11-22); 21.6a built. Owed: a look at the light theme and at every page with real data.
+**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6 grilled (2026-11-22); 21.6a and 21.6b built. Owed: a look at the light theme and at every page with real data.
 
 **Goal:** a console the Operator is glad to open every day: a sidebar, an Overview dashboard, and every page laid out as number tiles, charts and tables in cards.
 
@@ -18,8 +18,8 @@
 | [21.5a](#215-refinement-after-two-design-skills) | Tokens, font, sidebar, header, buttons, badges, tables, focus and motion | ✅ built |
 | [21.5b](#215-refinement-after-two-design-skills) | Number tiles, charts, empty and loading states; the checklist on every page | ✅ built |
 | [21.6a](#216-density-and-layout-after-a-live-reference) | Denser type, a title row on every page, figures in cards, uppercase small labels | ✅ built |
-| [21.6b](#216-density-and-layout-after-a-live-reference) | The Overview as a grid of cards | ⬜ next |
-| [21.6c](#216-density-and-layout-after-a-live-reference) | Tables: bars in cells, a Total row, numbers in mono | ⬜ |
+| [21.6b](#216-density-and-layout-after-a-live-reference) | The Overview as a grid of cards | ✅ built |
+| [21.6c](#216-density-and-layout-after-a-live-reference) | Tables: bars in cells, a Total row, numbers in mono | ⬜ next |
 
 ## Why this phase exists
 
@@ -254,3 +254,26 @@ Two rounds, all answers the recommended ones.
 - Not seen in a browser: Nodes, Automation, Checks, Health, Investigations and an Investigation's page (no sample data), and a narrow window.
 - Sizes the grill did not set: chart labels, badges, hints and chips at 12 px.
 - No API change, no eval rerun (nothing the agent sees changed), no isolation test (no Contract data moves).
+
+**Decided for 21.6b (2026-11-22, all recommended):**
+- The seven figures fold into the six cards: every number shows once.
+- The reference is a reference, never a layout to copy: the cards are named after squero's own pages and link to them ("Open Cost"), with neutral icons and the console's own Agenda and status badges.
+- The Savings card first; Idle GPUs beside the waste, never in it; the Agenda card opens the rest in place (it has no page).
+
+**Built 21.6b (2026-11-22):**
+- The Overview is a grid of six cards, three to a row on a wide window: Savings, Waste, Automation, Nodes, Agenda, Investigations. Each has an icon, its name, a line on what it shows, its numbers, and a link to its page.
+- Two new reads, the nodes and the Investigations. Every read but the Workloads fails alone: its card says "Couldn't read…" and still links to its page; a failed totals read, which only an unpriced Contract's waste share needs, is never shown as "0%".
+- A cluster with a read problem is listed as not read, never counted as 0 nodes; no cluster read says "No nodes read yet"; "could go" shows only where the Hub judged it.
+- A Contract with nothing stored says "No Sizings stored yet." above the cards, with "Check Health" (the Workloads page's own block, now shared).
+- The CPU and memory charts moved to the Cost page (`Usage.tsx`), under the groups, with their own read: a failed one says so and the page stands. They sit beside the page's content, so regrouping or comparing never reads or draws them again.
+- The Investigations list is the Hub's own: newest first, its latest 100.
+
+**Tests:** the Overview's two page tests rewritten for the cards (order, numbers, links, the Agenda's three and "See all", the latest three Investigations, a failed read per card, nothing stored, a failed totals read); 1 new for the nodes at a glance; 1 new for the Cost page's charts (drawn, kept across a comparison, no run stored, a failed read). 79 console tests. 19 mutations, all caught.
+
+**Checked:** in Chrome with the Hub's CSP and sample data: the Overview priced and unpriced (a failed nodes read, an empty Agenda) in dark, priced in light (tokens set by hand), and the Cost page with its charts. The browser console read from the first page load: no error, no CSP refusal.
+
+**Known limits:**
+- The Overview makes six reads where it made four.
+- Not seen: a narrow window (the grid goes to two columns, then one).
+- No API change beyond one schema's description (types regenerated), no eval rerun, no isolation test: every read is the Contract's own, by its id.
+

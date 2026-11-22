@@ -20,12 +20,13 @@ import { ChecksPage, HealthPage } from "./Checks";
 import { ContractsPage } from "./Contracts";
 import { FleetPage } from "./Fleet";
 import { NodesPage } from "./Nodes";
-import { OverviewPage } from "./Overview";
+import { NoSizings, OverviewPage } from "./Overview";
+import { UsageCharts } from "./Usage";
 import { amount, change, cores, cpu, gib, memory, money, pct, rank, when } from "./format";
 import { PageTools, Shell } from "./Shell";
 import { Badge, Change } from "./ui/badge";
 import { Button } from "./ui/button";
-import { Card, Empty, Figures, Skeleton, Tile } from "./ui/card";
+import { Card, Figures, Skeleton, Tile } from "./ui/card";
 
 /** The pages across every Contract: no Kill switch. */
 const ACROSS = ["contracts", "fleet"];
@@ -150,6 +151,12 @@ export default function App() {
         {shown && view === "nodes" && <NodesPage contract={shown} />}
         {shown && !allocation && costView && !error && <Skeleton />}
         {allocation && costView && <CostPage data={allocation} bills={bills} setBy={setBy} compare={compare} setCompare={setCompare} />}
+        {/* Outside the page, so regrouping or comparing never redraws them (slice 21.6b). */}
+        {shown && costView && (
+          <div className="mt-5">
+            <UsageCharts contract={shown} />
+          </div>
+        )}
     </Shell>
   );
 }
@@ -384,13 +391,7 @@ function Page({ contract, data }: { contract: string; data: Workloads }) {
           );
         })}
       </ul>
-      {clusters.length === 0 && (
-        <Empty
-          what="No Sizings stored yet."
-          why="The Hub stores them hourly, from each cluster's Prometheus."
-          action={<a href={`/app/?contract=${encodeURIComponent(contract)}&view=health`}>Check Health</a>}
-        />
-      )}
+      {clusters.length === 0 && <NoSizings contract={contract} />}
       <PriceNotes notes={data.prices} />
       <PageTools>
         <span>{clusters.length} cluster{clusters.length === 1 ? "" : "s"}</span>

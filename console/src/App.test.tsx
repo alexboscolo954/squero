@@ -516,6 +516,38 @@ test("a Contract with no billed cluster shows no bill line and no error", async 
   expect(screen.queryByText(/404/)).toBeNull();
 });
 
+test("the Cost page draws CPU and memory over time from its own read (21.6b)", async () => {
+  history.replaceState(null, "", "/app/?view=cost");
+  const routes: Record<string, [number, unknown]> = {
+    "/api/v1/contracts": [200, [{ id: "shop-1", name: "Demo shop" }]],
+    "/api/v1/contracts/shop-1/cost": [200, COST],
+    "/api/v1/contracts/shop-1/totals": [200, { points: [{ at: 1, cpu: { requests: 1, sizings: 1, usage: 1 }, memory: { requests: 1, sizings: 1, usage: 1 } }] }],
+  };
+  answer(routes);
+  render(<App />);
+  expect(await screen.findAllByText("totals chart")).toHaveLength(2);
+  expect(screen.getByText("CPU over time")).toBeTruthy();
+  expect(screen.getByLabelText("Legend").textContent).toContain("Sizings");
+  const reads = () => (fetch as unknown as { mock: { calls: string[][] } }).mock.calls.filter((c) => c[0].includes("/totals")).length;
+  expect(reads()).toBe(1);
+  fireEvent.change(screen.getByLabelText("Compare with"), { target: { value: "7" } }); // the cost is read again
+  await waitFor(() => expect(screen.getByLabelText("Compare with")).toHaveProperty("value", "7"));
+  await waitFor(() => expect(screen.queryByRole("table")).not.toBeNull());
+  expect(reads()).toBe(1); // the charts stay: never read or drawn again for a comparison
+  cleanup();
+  answer({ ...routes, "/api/v1/contracts/shop-1/totals": [200, { points: [] }] }); // no run stored
+  render(<App />);
+  expect(await screen.findAllByText("No hourly run stored in the last 14 days.")).toHaveLength(2);
+  const health = screen.getAllByText("Check Health").map((x) => x.getAttribute("href"));
+  expect(health).toEqual(["/app/?contract=shop-1&view=health", "/app/?contract=shop-1&view=health"]); // by its id
+  cleanup();
+  answer({ ...routes, "/api/v1/contracts/shop-1/totals": [500, {}] }); // its read fails alone
+  render(<App />);
+  expect(await screen.findByText("Couldn't read the hourly totals.")).toBeTruthy();
+  expect(screen.getByRole("table")).toBeTruthy(); // the rest of the page stands
+  expect(screen.queryByText("totals chart")).toBeNull();
+});
+
 test("the Kill switch shows who turned it on, and only here does it go off", async () => {
   const sent: string[] = [];
   const on = { on: true, by: "mcp:alex@example.com", since: 1_700_000_000 };

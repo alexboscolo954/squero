@@ -4484,7 +4484,7 @@
         "type": "object"
       },
       "Totals": {
-        "description": "A Contract's CPU and memory over time (slice 21.2): the Overview's charts.",
+        "description": "A Contract's CPU and memory over time (slice 21.2): the Cost page's charts, and the\nOverview's waste share without prices.",
         "properties": {
           "points": {
             "items": {

@@ -642,7 +642,8 @@ class Total(BaseModel):
 
 
 class Totals(BaseModel):
-    """A Contract's CPU and memory over time (slice 21.2): the Overview's charts."""
+    """A Contract's CPU and memory over time (slice 21.2): the Cost page's charts, and the
+    Overview's waste share without prices."""
 
     points: list[Total]  # oldest first, one per hourly run, over 14 days
 

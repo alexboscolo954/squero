@@ -27,13 +27,24 @@ export function AgendaPanel({ contract }: { contract: string }) {
 }
 
 /** An Agenda already read: its first `limit` items, and a link to all of them. */
-export function AgendaList({ contract, agenda, limit }: { contract: string; agenda: api.Agenda; limit?: number }) {
+export function AgendaList({
+  contract,
+  agenda,
+  limit,
+  titled = true,
+}: {
+  contract: string;
+  agenda: api.Agenda;
+  limit?: number;
+  /** false inside a card that already names it (the Overview, slice 21.6b) */
+  titled?: boolean;
+}) {
   const [all, setAll] = useState(false);
   const shown = all ? undefined : limit;
   if (agenda.items.length === 0) return <p className="hint">Nothing needs you now.</p>;
   return (
     <section className="agenda">
-      <h2>Now</h2>
+      {titled && <h2>Now</h2>}
       <ol>
         {agenda.items.slice(0, shown).map((i, n) => {
           const href = link(contract, i);

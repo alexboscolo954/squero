@@ -12,7 +12,7 @@ import { when } from "./format";
 
 export const page = (id: string) => `/app/?view=investigation&id=${encodeURIComponent(id)}`;
 
-function state(t: { status: string; failed: boolean }): string {
+export function state(t: { status: string; failed: boolean }): string {
   return t.failed ? "failed" : t.status.replace("_", " ");
 }
 

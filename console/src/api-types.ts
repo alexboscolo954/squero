@@ -2015,7 +2015,8 @@ export interface components {
         };
         /**
          * Totals
-         * @description A Contract's CPU and memory over time (slice 21.2): the Overview's charts.
+         * @description A Contract's CPU and memory over time (slice 21.2): the Cost page's charts, and the
+         *     Overview's waste share without prices.
          */
         Totals: {
             /** Points */

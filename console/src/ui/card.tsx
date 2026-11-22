@@ -48,12 +48,17 @@ export function Tile({
         {label}
       </p>
       <p className={cn("m-0 text-[28px] leading-tight font-bold tracking-[-0.02em] tabular-nums", TONE[tone])}>{value}</p>
-      {bar !== undefined && (
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-raised" aria-hidden="true">
-          <div className="h-full rounded-full bg-muted" style={{ width: `${Math.min(1, Math.max(0, bar)) * 100}%` }} />
-        </div>
-      )}
+      {bar !== undefined && <Meter share={bar} />}
       {note && <p className="m-0 text-xs text-muted">{note}</p>}
+    </div>
+  );
+}
+
+/** A thin meter for a share, 0 to 1. */
+export function Meter({ share }: { share: number }) {
+  return (
+    <div className="h-1.5 w-full overflow-hidden rounded-full bg-raised" aria-hidden="true">
+      <div className="h-full rounded-full bg-muted" style={{ width: `${Math.min(1, Math.max(0, share)) * 100}%` }} />
     </div>
   );
 }

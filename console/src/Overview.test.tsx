@@ -1,13 +1,11 @@
-// The Overview (slice 21.2): the tiles from the Hub's own numbers, money only with prices, the
-// Automation ring, the charts' columns, and the Agenda's first items.
+// The Overview (slice 21.2; a grid of cards since 21.6b): each card's numbers from the Hub's own,
+// money only with prices, the nodes at a glance, the charts' columns, and a failed read per card.
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type * as api from "./api";
-import { automation, figures, OverviewPage } from "./Overview";
+import { automation, figures, nodesAtGlance, OverviewPage } from "./Overview";
 import { Shell } from "./Shell";
 import { columns } from "./series";
-
-vi.mock("./TotalsChart", () => ({ default: ({ res }: { res: string }) => <div>{res} chart</div> }));
 
 afterEach(() => {
   cleanup();
@@ -73,6 +71,8 @@ test("without prices, the tiles are cores and GiB from the latest run, never an 
     available: "0.50 cores, 1.00 GiB",
     realized: "0.25 cores, 0.50 GiB",
   });
+  const unread = figures({ workloads: workloads(false), realized: REALIZED, totals: null, agenda: null });
+  expect([unread.cost, unread.wasted]).toEqual(["not read", "not read"]); // a failed read is no "0%"
   const empty = figures({ workloads: workloads(false), realized: null, totals: { points: [] }, agenda: null });
   expect([empty.cost, empty.wasted, empty.realized]).toEqual(["no reads yet", "0%", "none yet"]);
 });
@@ -107,49 +107,95 @@ test("the charts' columns are times, then requests, Sizings and usage, in cores 
   expect(columns(TOTALS, "memory")[1]).toEqual([8, 4]);
 });
 
-test("the page shows the figures, the Automation meter, both charts and the Agenda's first five", async () => {
-  hub({
-    "/api/v1/contracts/shop/workloads": workloads(true, { gpus: { idle: 1, of: 4, cost: 99, text: "1 of 4 GPUs idle" } }),
-    "/api/v1/contracts/shop/cost": { realized: REALIZED },
-    "/api/v1/contracts/shop/totals": TOTALS,
-    "/api/v1/contracts/shop/agenda": { contract: "shop", items: items(7) },
-  });
-  render(<OverviewPage contract="shop" />);
-  expect(await screen.findByText("400 EUR")).toBeTruthy();
-  expect(screen.getByText("Monthly cost")).toBeTruthy();
-  expect(screen.getByText("1 of 4 GPUs idle")).toBeTruthy();
-  expect(screen.getByText("99 EUR a month")).toBeTruthy(); // the idle GPUs' cost
-  expect(screen.getByText("7", { selector: "p" }).previousElementSibling?.textContent).toBe("On the Agenda");
-  const automated = screen.getByText("Automated").parentElement!; // a meter, not a ring (21.5b)
-  expect(automated.textContent).toBe("Automated50%2 of 4 containers");
-  const hero = screen.getByText("Savings available"); // first, in the accent (21.6a: every figure in a card)
-  expect(hero.parentElement?.parentElement?.firstElementChild).toBe(hero.parentElement);
-  expect(hero.nextElementSibling?.className).toContain("text-saving");
-  expect(screen.getByText("Wasted spend").parentElement?.textContent).toContain("of 400 EUR a month"); // the footnote
-  expect(screen.getByText("cpu chart")).toBeTruthy();
-  expect(screen.getByText("memory chart")).toBeTruthy();
-  const listed = [...document.querySelectorAll(".agenda li")].map((li) => li.textContent);
-  expect(listed).toEqual(["item 1", "item 2", "item 3", "item 4", "item 5"].map((t, i) => `kind/shop/Deployment/w${i}: ${t}`));
-  fireEvent.click(screen.getByText("See all 7"));
-  expect(document.querySelectorAll(".agenda li")).toHaveLength(7);
-  expect(screen.queryByText("See all 7")).toBeNull();
+const NODES = {
+  currency: "EUR",
+  clusters: [
+    { cluster: "kind", problem: null, nodes: [{}, {}], could_go: { now: { nodes: ["a"] }, after: { nodes: ["a", "b"] } } },
+    { cluster: "lab", problem: null, nodes: [{}], could_go: null }, // read, not judged
+    { cluster: "edge", problem: "its store is shared", nodes: [], could_go: null },
+  ],
+} as unknown as api.Nodes;
+const BRIEFS = ["one", "two", "three", "four"].map((title, i) => ({
+  id: `i${i}`, contract: "shop", kind: "triage", title, started: 1_700_000_000 - i * 60, status: i ? "done" : "running", failed: i === 1,
+})) as api.Brief[];
+const card = (title: string) => screen.getByText(title, { selector: "h2" }).closest("section")!;
+const open = (title: string) => [...card(title).querySelectorAll("a")].at(-1);
+
+test("the nodes at a glance: those read, the clusters not read, what could go where judged", () => {
+  expect(nodesAtGlance(NODES)).toEqual({ nodes: 3, clusters: 2, unread: ["edge"], could: { now: 1, after: 2 } });
+  const unjudged = { ...NODES, clusters: NODES.clusters.slice(1) } as api.Nodes;
+  expect(nodesAtGlance(unjudged)).toEqual({ nodes: 1, clusters: 1, unread: ["edge"], could: null }); // never "0 could go"
 });
 
-test("no GPUs, no GPU tile; no stored runs, no chart; a failed cost read is no error", async () => {
+test("the page is six cards, each with its numbers and a link to its page (21.6b)", async () => {
   hub({
-    "/api/v1/contracts/shop/workloads": workloads(false),
-    "/api/v1/contracts/shop/totals": { points: [] },
-    "/api/v1/contracts/shop/agenda": { contract: "shop", items: [] },
+    "/api/v1/contracts/shop/workloads": workloads(true, { clusters: { kind: {} }, gpus: { idle: 1, of: 4, cost: 99, text: "1 of 4 GPUs idle" } }),
+    "/api/v1/contracts/shop/cost": { realized: REALIZED },
+    "/api/v1/contracts/shop/agenda": { contract: "shop", items: items(7) }, // no totals: a priced Contract needs none
+    "/api/v1/contracts/shop/nodes": NODES,
+    "/api/v1/contracts/shop/investigations": BRIEFS,
   });
   render(<OverviewPage contract="shop" />);
-  expect(await screen.findByText("Requests", { selector: "p" })).toBeTruthy(); // unpriced: not "Monthly cost"
-  expect(screen.queryByText("Monthly cost")).toBeNull();
-  expect(screen.queryByText("Idle GPUs")).toBeNull();
-  expect(screen.getAllByText("No hourly run stored in the last 14 days.")).toHaveLength(2);
-  expect(screen.getByText("Savings realized").nextElementSibling?.textContent).toBe("none yet");
-  const actions = screen.getAllByText("Check Health").map((a) => a.getAttribute("href"));
-  expect(actions).toEqual(["/app/?contract=shop&view=health", "/app/?contract=shop&view=health"]); // each empty chart's
+  expect(await screen.findByText("100 EUR")).toBeTruthy();
+  const titles = [...document.querySelectorAll("h2")].map((h) => h.textContent);
+  expect(titles).toEqual(["Savings", "Waste", "Automation", "Nodes", "Agenda", "Investigations"]); // the Savings first
+  expect(screen.getByText("100 EUR").className).toContain("text-saving"); // the one figure in the accent
+  expect(card("Savings").textContent).toContain("available a monthRealized: 30 EUR a month, at today's prices");
+  expect(open("Savings")?.textContent).toBe("Open Cost");
+  expect(open("Savings")?.getAttribute("href")).toBe("/app/?contract=shop&view=cost");
+  expect(card("Waste").textContent).toContain("25%of 400 EUR a month");
+  expect(screen.getByText("25%").className).not.toContain("text-saving"); // in ink
+  expect(card("Waste").textContent).toContain("Idle GPUs: 1 of 4 GPUs idle, 99 EUR a month; beside the waste, never in it");
+  expect(open("Waste")?.getAttribute("href")).toBe("/app/?contract=shop");
+  expect(card("Automation").textContent).toContain("50%2 of 4 containers"); // a meter, not a ring (21.5b)
+  expect(open("Automation")?.getAttribute("href")).toBe("/app/?contract=shop&view=automation");
+  expect(card("Nodes").textContent).toContain("3nodes in 2 clustersCould go: 1 now, 2 after the SizingsNot read: edge");
+  expect(open("Nodes")?.getAttribute("href")).toBe("/app/?contract=shop&view=nodes");
+  expect(card("Agenda").textContent).toContain("What needs you now7");
+  const listed = () => [...document.querySelectorAll(".agenda li")].map((li) => li.textContent);
+  expect(listed()).toEqual(["item 1", "item 2", "item 3"].map((t, i) => `kind/shop/Deployment/w${i}: ${t}`));
+  expect(card("Agenda").textContent).not.toContain("Open"); // the Agenda has no page: all of it opens here
+  fireEvent.click(screen.getByText("See all 7"));
+  expect(listed()).toHaveLength(7);
+  const latest = [...card("Investigations").querySelectorAll(".latest li")];
+  expect(latest.map((li) => li.querySelector("a")?.textContent)).toEqual(["one", "two", "three"]);
+  expect(latest.map((li) => li.querySelector("span")?.textContent)).toEqual(["running", "failed", "done"]);
+  expect(latest[1].querySelector("a")?.getAttribute("href")).toBe("/app/?view=investigation&id=i1");
+  expect(open("Investigations")?.getAttribute("href")).toBe("/app/?contract=shop&view=investigations");
+  expect(screen.queryByText("CPU over time")).toBeNull(); // the charts are on the Cost page
+  expect(screen.queryByText("No Sizings stored yet.")).toBeNull(); // it has clusters
+});
+
+test("unpriced, cores and GiB; a card whose read failed says so, the rest stand", async () => {
+  hub({
+    "/api/v1/contracts/shop/workloads": workloads(false),
+    "/api/v1/contracts/shop/totals": TOTALS,
+    "/api/v1/contracts/shop/agenda": { contract: "shop", items: [] },
+    "/api/v1/contracts/shop/investigations": [],
+  });
+  render(<OverviewPage contract="shop" />);
+  expect(await screen.findByText("0.50 cores, 1.00 GiB")).toBeTruthy(); // the Savings available, no money
+  expect(card("Savings").textContent).toContain("availableRealized: none yetOpen Cost"); // the cost read failed: no error
+  expect(card("Waste").textContent).toContain("25%of CPU requests (2.00 cores, 4.00 GiB)");
+  expect(card("Waste").textContent).not.toContain("Idle GPUs");
+  expect(card("Nodes").textContent).toContain("Couldn't read the nodes.");
+  expect(open("Nodes")?.textContent).toBe("Open Nodes"); // its page may say why
   expect(screen.getByText("Nothing needs you now.")).toBeTruthy();
+  expect(card("Investigations").textContent).toContain("None yet.");
+  cleanup();
+  hub({ "/api/v1/contracts/shop/workloads": workloads(false), "/api/v1/contracts/shop/totals": TOTALS, "/api/v1/contracts/shop/nodes": { currency: null, clusters: [] } });
+  render(<OverviewPage contract="shop" />);
+  expect(await screen.findByText("Couldn't read the Agenda.")).toBeTruthy();
+  expect(screen.getByText("Couldn't read the Investigations.")).toBeTruthy();
+  expect(card("Nodes").textContent).toContain("No nodes read yet: the hourly run reads them."); // never a 0
+  expect(screen.getByText("No Sizings stored yet.")).toBeTruthy(); // no cluster stored: why, and where to look
+  expect(screen.getByText("Check Health").getAttribute("href")).toBe("/app/?contract=shop&view=health");
+  cleanup();
+  hub({ "/api/v1/contracts/shop/workloads": workloads(false) }); // unpriced, and the totals read failed
+  render(<OverviewPage contract="shop" />);
+  expect(await screen.findByText("Couldn't read the hourly totals.")).toBeTruthy(); // never "0%"
+  expect(card("Waste").textContent).not.toContain("%");
+  expect(card("Savings").textContent).toContain("0.50 cores, 1.00 GiB"); // the rest stands
 });
 
 test("while it loads, a flat block in its shape, never an empty page", () => {
