@@ -54,6 +54,10 @@ export const billing = (contract: string) =>
 export const agenda = (contract: string) =>
   get<Agenda>(`/contracts/${encodeURIComponent(contract)}/agenda`);
 
+export type Totals = Schemas["Totals"];
+export const totals = (contract: string) =>
+  get<Totals>(`/contracts/${encodeURIComponent(contract)}/totals`);
+
 export const investigations = (contract: string) =>
   get<Brief[]>(`/contracts/${encodeURIComponent(contract)}/investigations`);
 

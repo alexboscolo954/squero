@@ -13,14 +13,16 @@ import { useEffect, useMemo, useState } from "react";
 import * as api from "./api";
 import type { Allocation, Bills, Container, Point, Workload, Workloads } from "./api";
 import Chart from "./Chart";
-import { InvestigationList, InvestigationPage, TokenPage, page } from "./Investigations";
+import { InvestigationList, InvestigationPage, TokenPage } from "./Investigations";
 import { TeachingsPage } from "./Teachings";
 import { AutomationPage } from "./Automation";
 import { ChecksPage, HealthPage } from "./Checks";
 import { ContractsPage } from "./Contracts";
 import { FleetPage } from "./Fleet";
 import { NodesPage } from "./Nodes";
+import { OverviewPage } from "./Overview";
 import { amount, change, cores, cpu, gib, memory, money, pct, rank, when } from "./format";
+import { AgendaPanel } from "./Agenda";
 import { Shell } from "./Shell";
 import { Button } from "./ui/button";
 
@@ -138,6 +140,7 @@ export default function App() {
         {view === "fleet" && <FleetPage />}
         {shown && workloadsView && <AgendaPanel contract={shown} />}
         {data && workloadsView && <Page contract={shown} data={data} />}
+        {shown && view === "overview" && <OverviewPage contract={shown} />}
         {shown && view === "investigations" && <InvestigationList contract={shown} />}
         {shown && view === "teachings" && <TeachingsPage contract={shown} />}
         {shown && view === "automation" && <AutomationPage contract={shown} />}
@@ -182,46 +185,6 @@ function KillSwitch({ contract }: { contract: string }) {
         Turn on the Kill switch
       </Button>
     </>
-  );
-}
-
-/** Where to act on an Agenda item: its Investigation, its Workload, the Cost page, or Health
- * (a part whose Protocol the Hub refused: its version and Protocol there). */
-function link(contract: string, i: api.AgendaItem): string | null {
-  const here = `contract=${encodeURIComponent(contract)}`;
-  if (i.id) return page(i.id);
-  if (i.workload) return `/app/?${here}&workload=${encodeURIComponent(i.workload)}`;
-  if (i.kind === "bill") return `/app/?${here}&view=cost`;
-  if (i.kind === "protocol") return `/app/?${here}&view=health`;
-  return null;
-}
-
-/** What to look at now in this Contract, most urgent first (the Hub ranks it). */
-function AgendaPanel({ contract }: { contract: string }) {
-  const [agenda, setAgenda] = useState<api.Agenda | null>(null);
-  useEffect(() => {
-    setAgenda(null);
-    api.agenda(contract).then(setAgenda, () => setAgenda(null));
-  }, [contract]);
-  if (!agenda) return null;
-  if (agenda.items.length === 0) return <p className="hint">Nothing needs you now.</p>;
-  return (
-    <section className="agenda">
-      <h2>Now</h2>
-      <ol>
-        {agenda.items.map((i, n) => {
-          const href = link(contract, i);
-          const where = i.cluster && !i.workload ? `${i.cluster}: ` : i.workload ? `${i.workload}: ` : "";
-          const time = i.kind === "approval" ? ` (goes Stale ${when(i.at)})` : i.at ? ` (${when(i.at)})` : "";
-          return (
-            <li key={n} className={i.kind}>
-              {href ? <a href={href}>{where}{i.title}</a> : `${where}${i.title}`}
-              {time}
-            </li>
-          );
-        })}
-      </ol>
-    </section>
   );
 }
 

@@ -30,6 +30,8 @@ test("a Contract's pages link with it, the pages across Contracts without", () =
   expect(link("Workloads").getAttribute("href")).toBe("/app/?contract=bank");
   expect(link("Cost").getAttribute("href")).toBe("/app/?contract=bank&view=cost");
   expect(link("Health").getAttribute("href")).toBe("/app/?contract=bank&view=health");
+  expect(link("Overview").getAttribute("href")).toBe("/app/?contract=bank&view=overview");
+  expect(screen.getByText("squero").closest("a")?.getAttribute("href")).toBe("/app/?contract=bank&view=overview");
   expect(link("Fleet").getAttribute("href")).toBe("/app/?view=fleet");
   expect(link("Contracts").getAttribute("href")).toBe("/app/?view=contracts");
   expect(link("Approver token").getAttribute("href")).toBe("/app/?view=token");

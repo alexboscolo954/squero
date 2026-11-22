@@ -5,6 +5,7 @@ import App from "./App";
 import { series } from "./series";
 
 vi.mock("./Chart", () => ({ default: () => <div>chart</div> })); // jsdom has no canvas
+vi.mock("./TotalsChart", () => ({ default: () => <div>totals chart</div> }));
 
 const GI = 2 ** 30;
 const container = {
@@ -23,6 +24,7 @@ const container = {
   risks: [{ kind: "oom_killed", text: '<img src=x onerror="alert(1)">' }],
   groups: [] as NonNullable<import("./api").Container["groups"]>, // slice 15.3a: per instance type
   by_type: false as boolean, // slice 15.3c: its Actuator applies the groups
+  automated: false as boolean, // slice 21.2
 };
 
 function workload(name: string, cpu: number, memory: number, risks = container.risks) {

@@ -305,6 +305,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/contracts/{contract_id}/totals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Totals
+         * @description The Contract's CPU and memory over 14 days, summed (slice 21.2).
+         */
+        get: operations["totals_api_v1_contracts__contract_id__totals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/contracts/{contract_id}/workloads": {
         parameters: {
             query?: never;
@@ -866,6 +886,11 @@ export interface components {
         };
         /** Container */
         Container: {
+            /**
+             * Automated
+             * @default false
+             */
+            automated: boolean;
             /**
              * By Type
              * @default false
@@ -1885,6 +1910,18 @@ export interface components {
             /** Workloads */
             workloads: components["schemas"]["SpotWorkload"][];
         };
+        /**
+         * Sums
+         * @description One resource summed over a Contract's ready containers, each times its pods.
+         */
+        Sums: {
+            /** Requests */
+            requests: number;
+            /** Sizings */
+            sizings: number;
+            /** Usage */
+            usage: number;
+        };
         /** Taught */
         Taught: {
             /** Id */
@@ -1968,6 +2005,21 @@ export interface components {
             result: string;
             /** Tool */
             tool: string;
+        };
+        /** Total */
+        Total: {
+            /** At */
+            at: number;
+            cpu: components["schemas"]["Sums"];
+            memory: components["schemas"]["Sums"];
+        };
+        /**
+         * Totals
+         * @description A Contract's CPU and memory over time (slice 21.2): the Overview's charts.
+         */
+        Totals: {
+            /** Points */
+            points: components["schemas"]["Total"][];
         };
         /**
          * TriageReport
@@ -2779,6 +2831,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Teachings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    totals_api_v1_contracts__contract_id__totals_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                contract_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Totals"];
                 };
             };
             /** @description Validation Error */

@@ -287,13 +287,19 @@ Anything else gets a 403. That includes a tagged device, which has no user.
 
   | Group | Pages |
   |---|---|
-  | Overview | Fleet |
+  | Overview | Overview, Fleet |
   | Optimization | Workloads, Cost, Nodes, Automation |
   | Investigations | Investigations, Teachings, Checks, Health |
   | Settings | Contracts, Approver token |
 
   - The Contract switcher is at its top; a Contract's pages link with the one picked.
   - "Collapse" at its bottom shrinks it to icons. The browser remembers it.
+- **The Overview** (from 0.64.0, slice 21.2) is a Contract at a glance:
+  - tiles: monthly cost, wasted spend, Savings available and realized, Idle GPUs (with GPUs), the Agenda's count;
+  - a ring: the ready containers a Sizing rule automates where an Actuator runs;
+  - CPU and memory over 14 days, summed over the ready containers times their pods: requests, Sizings, usage (the Sizings' basis), the waste between requests and Sizings;
+  - the Agenda's first five items.
+  - Without prices, cores and GiB, never an amount. `GET /api/v1/contracts/{id}/totals` serves its charts.
 - **The header** names the Contract and the page. On a Contract's own pages it has the Kill switch: "Turn on the Kill switch", or, while it is on, a red line saying since when and by whom, with "Turn it off".
 - The app uses one stylesheet and the app's own scripts.
 - The Hub serves them behind the same identity.

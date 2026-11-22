@@ -5,6 +5,7 @@ import {
   Bot,
   Boxes,
   Coins,
+  Gauge,
   GraduationCap,
   HeartPulse,
   KeyRound,
@@ -25,7 +26,13 @@ type Page = { view: string; label: string; icon: LucideIcon; across?: boolean };
 
 /** The sidebar's groups. `across`: a page over every Contract, so its link names none. */
 export const GROUPS: { title: string; pages: Page[] }[] = [
-  { title: "Overview", pages: [{ view: "fleet", label: "Fleet", icon: LayoutGrid, across: true }] },
+  {
+    title: "Overview",
+    pages: [
+      { view: "overview", label: "Overview", icon: Gauge },
+      { view: "fleet", label: "Fleet", icon: LayoutGrid, across: true },
+    ],
+  },
   {
     title: "Optimization",
     pages: [
@@ -168,7 +175,7 @@ export function Shell({
           collapsed ? "w-16" : "w-60",
         )}
       >
-        <a href="/app/" className="flex items-center gap-2 px-4 text-lg font-semibold text-white hover:no-underline">
+        <a href={here ? `/app/?${here}&view=overview` : "/app/"} className="flex items-center gap-2 px-4 text-lg font-semibold text-white hover:no-underline">
           <Ferro />
           <span className={cn(collapsed && "sr-only")}>squero</span>
         </a>

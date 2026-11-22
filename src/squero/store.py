@@ -1189,6 +1189,23 @@ class Store:
         )
         return [(r["at"], r["row"]) for r in rows]
 
+    async def sizing_totals(self, contract_id: str, since: float) -> list[dict[str, Any]]:
+        """Slice 21.2: per hourly run since `since`, oldest first, the Contract's ready
+        containers summed, each times its pods: requests, Sizings and usage basis, of CPU
+        (cores) and memory (bytes). A container without a resource counts nothing of it."""
+        each = ", ".join(
+            f"sum(coalesce((s.row->'{res}'->>'{field}')::float, 0) * "
+            f"coalesce((s.row->>'pods')::float, 0)) as {res}_{field}"
+            for res in ("cpu", "memory")
+            for field in ("current", "target", "basis")
+        )
+        return await self._all(
+            f"select r.at, {each} from sizings s join sizing_runs r on r.id = s.run_id "  # noqa: S608 (names fixed above)
+            "where s.contract_id = %s and r.contract_id = %s and r.at >= %s "
+            "and s.row->>'state' = 'ready' group by r.at order by r.at",
+            (contract_id, contract_id, since),
+        )
+
     async def sync_digests(self, due: dict[str, tuple[str, float]]) -> None:
         """due: Contract id -> (schedule key, its next fire time), for every Contract
         that gets a digest; the others' rows go, so turning one back on starts anew."""

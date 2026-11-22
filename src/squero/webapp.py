@@ -168,6 +168,8 @@ class Container(BaseModel):
     # the pooled Sizing above is not applied
     by_type: bool = False
     gpus: ContainerGpus | None = None  # slice 17.2b: a container that requests GPUs
+    # slice 21.2: a Sizing rule automates it and its cluster runs an Actuator
+    automated: bool = False
 
 
 class Workload(BaseModel):
@@ -617,6 +619,26 @@ class Point(BaseModel):
 
 class History(BaseModel):
     points: list[Point]  # oldest first: hourly over 14 days, the last of each day over 400
+
+
+class Sums(BaseModel):
+    """One resource summed over a Contract's ready containers, each times its pods."""
+
+    requests: float
+    sizings: float
+    usage: float  # the Sizings' basis: a percentile of CPU, the peak of memory
+
+
+class Total(BaseModel):
+    at: float
+    cpu: Sums  # cores
+    memory: Sums  # bytes
+
+
+class Totals(BaseModel):
+    """A Contract's CPU and memory over time (slice 21.2): the Overview's charts."""
+
+    points: list[Total]  # oldest first, one per hourly run, over 14 days
 
 
 class ContractSummary(BaseModel):
@@ -1144,8 +1166,25 @@ async def workloads_of(st: Store, c: Contract, now: float) -> Workloads:
     names = {t.cluster for t in usage.targets(c)}
     rows, clusters = await st.latest_sizings(c.id, names)
     floors = sizing.floors_report(await st.latest_floors(c.id, names), c)
-    return Workloads.model_validate(
-        {"contract": c.id, **sizing.report(rows, clusters, c), **floors}
+    report = sizing.report(rows, clusters, c)
+    acting = {cl.name for cl in c.clusters if cl.actuator_token_secret}
+    for r in [*(x for w in report["workloads"] for x in w["containers"]), *report["learning"]]:
+        where = (r["cluster"], r["namespace"], r["kind"], r["name"], r["container"])
+        r["automated"] = r["cluster"] in acting and c.sizing.automated(*where)
+    return Workloads.model_validate({"contract": c.id, **report, **floors})
+
+
+async def totals_of(st: Store, c: Contract, now: float) -> Totals:
+    """A Contract's CPU and memory over the last 14 days (slice 21.2)."""
+    rows = await st.sizing_totals(c.id, now - 14 * DAY)
+
+    def sums(r: dict[str, Any], res: str) -> Sums:
+        return Sums(
+            requests=r[f"{res}_current"], sizings=r[f"{res}_target"], usage=r[f"{res}_basis"]
+        )
+
+    return Totals(
+        points=[Total(at=r["at"], cpu=sums(r, "cpu"), memory=sums(r, "memory")) for r in rows]
     )
 
 
@@ -1311,6 +1350,11 @@ def router(
         rows = await store().sizing_history(c.id, workload, now() - days * DAY)
         points = [Point.model_validate({"at": at, **row}) for at, row in rows]
         return History(points=daily(points) if days > 14 else points)
+
+    @api.get("/contracts/{contract_id}/totals")
+    async def totals(contract_id: str) -> Totals:
+        """The Contract's CPU and memory over 14 days, summed (slice 21.2)."""
+        return await totals_of(store(), contract(contract_id), now())
 
     @api.get("/contracts/{contract_id}/agenda")
     async def now_(contract_id: str) -> agenda.Agenda:

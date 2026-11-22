@@ -2,7 +2,7 @@
 
 **In short:** the console works but looks like raw HTML: a link bar, headings and bare forms. This phase gives it a real dashboard design, in the style of ScaleOps' product UI, without changing what any page does. It is built next, before Phase 19 continues.
 
-**Status:** grilled 2026-11-21; 21.1 built.
+**Status:** grilled 2026-11-21; 21.1 and 21.2 built.
 
 **Goal:** a console the Operator is glad to open every day: a sidebar, an Overview dashboard, and every page laid out as number tiles, charts and tables in cards.
 
@@ -11,7 +11,7 @@
 | Slice | What | Status |
 |---|---|---|
 | [21.1](#211-the-shell) | The shell: sidebar, header, Contract switcher, Kill switch, design tokens and components | ✅ built |
-| 21.2 | The Overview dashboard | ⏳ |
+| [21.2](#212-the-overview) | The Overview dashboard | ✅ built |
 | 21.3 | The optimizer pages restyled: Workloads, Cost, Nodes, Automation, Fleet | ⏳ |
 | 21.4 | The triage pages restyled: Investigations, Teachings, Checks, Health, Contracts | ⏳ |
 
@@ -89,6 +89,23 @@ Two rounds, all answers the recommended ones.
 - Number tiles: monthly cost, wasted spend, realized Savings, potential Savings, Idle GPUs, Agenda items, the Automated ring.
 - CPU and memory over time, from the new read-only endpoint.
 - The Agenda as a short list linking to its pages.
+
+**Decided (grill, 2026-11-21, all recommended):**
+- The Overview is a page of its own, `view=overview`, first in the sidebar; the logo links to it. Plain `/app/?contract=x` stays Workloads, so every link already sent (Agenda, Fleet, Slack) still works.
+- The tiles: Monthly cost (the requests', indigo), Wasted spend (the waste's share of it, pink, with a bar), Savings available (the waste's cost) and realized (the monthly rate of requests lowered), Idle GPUs (only with GPUs), the Agenda's count, and the Automated ring. Without prices, cores and GiB, never an amount.
+- The ring: automated containers of the ready ones. Automated: its Sizing rule says `automate: true` and its cluster runs an Actuator.
+- The charts: 14 days, hourly, summed over the ready containers times their pods; requests amber, Sizings green, usage (the Sizings' basis) a blue fill, the waste pink between requests and Sizings.
+- The Agenda stays on the Workloads page too, until 21.3.
+
+**Built (2026-11-21):**
+- `GET /api/v1/contracts/{id}/totals` (`webapp.totals_of`, `Store.sizing_totals`): one SQL sum per stored run over the last 14 days, of the Contract's own ready rows only; a container without CPU or memory counts nothing of it.
+- Each container in the Workloads carries `automated` (its rule, and its cluster's Actuator), learning ones too.
+- `Overview.tsx`: the tiles (`ui/card.tsx`: `Card`, `Tile`, `Ring`), `TotalsChart.tsx` (uPlot, its colours read from the theme's tokens, the waste a band), and the Agenda's first five with "See all N" (the Agenda's list moved to `Agenda.tsx`, read once).
+- Tiles show whole amounts ("1,841 EUR"), as ScaleOps does; the pages keep the cents. Unpriced: the newest run's requests in cores and GiB, the waste as a share of the CPU requests.
+
+**Tests:** 3 in `test_totals.py` (the sums times pods, ready only, the 14 days, another Contract's never counted; `automated` by rule and Actuator; the route behind the identity and cookie, an unknown Contract 404) and 8 in `Overview.test.tsx`, one more in `Shell.test.tsx`. 16 mutations, all caught.
+
+**Checked:** in Chrome on a local build with the Hub's CSP and sample data: the tiles in one row at 1476 px, the ring, both charts with the waste band, the Agenda's first five; no CSP violation. Dark theme only. Not checked live (the mini PC's Hub runs 0.63.0).
 
 ### 21.3 The optimizer pages
 

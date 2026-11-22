@@ -17,6 +17,9 @@ export function when(at: number | null | undefined): string {
 export const amount = (v: number, currency: string) =>
   `${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`;
 export const money = (v: number, currency: string) => `${amount(v, currency)}/month`;
+/** A whole amount, for a number tile (slice 21.2); the pages give the cents. */
+export const whole = (v: number, currency: string) =>
+  `${v.toLocaleString("en-US", { maximumFractionDigits: 0 })} ${currency}`;
 
 const sign = (v: number) => (v < 0 ? "-" : "+");
 

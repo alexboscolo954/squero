@@ -1201,6 +1201,11 @@
       },
       "Container": {
         "properties": {
+          "automated": {
+            "default": false,
+            "title": "Automated",
+            "type": "boolean"
+          },
           "by_type": {
             "default": false,
             "title": "By Type",
@@ -4195,6 +4200,30 @@
         "title": "SpotWorkloads",
         "type": "object"
       },
+      "Sums": {
+        "description": "One resource summed over a Contract's ready containers, each times its pods.",
+        "properties": {
+          "requests": {
+            "title": "Requests",
+            "type": "number"
+          },
+          "sizings": {
+            "title": "Sizings",
+            "type": "number"
+          },
+          "usage": {
+            "title": "Usage",
+            "type": "number"
+          }
+        },
+        "required": [
+          "requests",
+          "sizings",
+          "usage"
+        ],
+        "title": "Sums",
+        "type": "object"
+      },
       "Taught": {
         "properties": {
           "id": {
@@ -4431,6 +4460,44 @@
           "is_error"
         ],
         "title": "ToolCall",
+        "type": "object"
+      },
+      "Total": {
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "number"
+          },
+          "cpu": {
+            "$ref": "#/components/schemas/Sums"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/Sums"
+          }
+        },
+        "required": [
+          "at",
+          "cpu",
+          "memory"
+        ],
+        "title": "Total",
+        "type": "object"
+      },
+      "Totals": {
+        "description": "A Contract's CPU and memory over time (slice 21.2): the Overview's charts.",
+        "properties": {
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/Total"
+            },
+            "title": "Points",
+            "type": "array"
+          }
+        },
+        "required": [
+          "points"
+        ],
+        "title": "Totals",
         "type": "object"
       },
       "TriageReport": {
@@ -5890,6 +5957,46 @@
           }
         },
         "summary": "Retire Teaching"
+      }
+    },
+    "/api/v1/contracts/{contract_id}/totals": {
+      "get": {
+        "description": "The Contract's CPU and memory over 14 days, summed (slice 21.2).",
+        "operationId": "totals_api_v1_contracts__contract_id__totals_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "contract_id",
+            "required": true,
+            "schema": {
+              "title": "Contract Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Totals"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Totals"
       }
     },
     "/api/v1/contracts/{contract_id}/workloads": {
