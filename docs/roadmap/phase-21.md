@@ -2,7 +2,7 @@
 
 **In short:** the console works but looks like raw HTML: a link bar, headings and bare forms. This phase gives it a real dashboard design, in the style of ScaleOps' product UI, without changing what any page does. It is built next, before Phase 19 continues.
 
-**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5a and 21.5b built, to release. Owed: a look at the light theme and at every page with real data.
+**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6 grilled (2026-11-22), not built. Owed: a look at the light theme and at every page with real data.
 
 **Goal:** a console the Operator is glad to open every day: a sidebar, an Overview dashboard, and every page laid out as number tiles, charts and tables in cards.
 
@@ -17,6 +17,9 @@
 | [21.4](#214-the-triage-pages) | The triage pages restyled: Investigations, Teachings, Checks, Health, Contracts | ✅ built |
 | [21.5a](#215-refinement-after-two-design-skills) | Tokens, font, sidebar, header, buttons, badges, tables, focus and motion | ✅ built |
 | [21.5b](#215-refinement-after-two-design-skills) | Number tiles, charts, empty and loading states; the checklist on every page | ✅ built |
+| [21.6a](#216-density-and-layout-after-a-live-reference) | Denser type, a title row on every page, figures in cards, uppercase small labels | ⬜ next |
+| [21.6b](#216-density-and-layout-after-a-live-reference) | The Overview as a grid of cards | ⬜ |
+| [21.6c](#216-density-and-layout-after-a-live-reference) | Tables: bars in cells, a Total row, numbers in mono | ⬜ |
 
 ## Why this phase exists
 
@@ -205,3 +208,29 @@ Two rounds, all answers the recommended ones.
 
 **Checked:** in Chrome with the Hub's CSP: the Overview in both themes, no CSP violation.
 
+
+## 21.6 Density and layout after a live reference
+
+**Why:** on 0.65.0 the owner found the console "much better", but the text too large and some layouts "too simple". ScaleOps never answered a trial request, so the owner opened a free account on another optimizer's console, and a throwaway kind cluster was connected to it. Its pages were measured in Chrome (dark theme only; it has no light one).
+
+**What the reference does that ours does not:**
+
+| | Reference | Ours (21.5) |
+|---|---|---|
+| Body and table text | 12.5 px | 14 px |
+| Table rows | 34 px, heads 10.5 px uppercase | 40 px, heads 13 px sentence case |
+| Page title | 20 px/800, with the page's controls on the same row | the breadcrumb only |
+| Figures | 27 px/700 in a card, with a bar and a footnote | 32 to 40 px, no box |
+| Overview | a grid of cards: icon chip, title, subtitle, preview, "Explore details →" | a hero figure, charts, the Agenda |
+| Tables | bars inside cells, a Total row, numbers in mono | plain numbers |
+
+**Decided (grill, 2026-11-22, all recommended):**
+- **Type scale:** between the two. Body, tables and the sidebar 13 px; table rows 36 px; card titles 15 px/600; the page title 20 px/700.
+- **A title row on every page:** an icon and the title, short linked counts ("3 clusters · 41 workloads"), the page's controls on the right (Contract picker, range).
+- **Figures in cards:** a small icon, the label, the figure (28 px/700), a thin bar where a share exists (waste %, automated %), a footnote ("of $297/mo spend"). The hero (the Savings available) stays first, in the accent. *Reverses 21.5's "no boxes" for figures.*
+- **Uppercase small labels** on cards, table heads and sidebar groups (11 px, tracked); never on body text. *Reverses the 21.5 checklist's "no uppercase labels".*
+- **The Overview as a 3-column grid of cards:** Waste, Savings, Automation, Nodes, the Agenda, Investigations; each with an icon chip, title, subtitle, a small preview and "Explore details →" to its page. Its charts move to the Cost page.
+- **Tables:** bars inside cells (cost, waste, CPU and memory use), a Total row, numbers in JetBrains Mono. No filter under each column and no Columns panel: the chips and search already filter.
+- **Colour unchanged:** figures in ink, the Savings in the accent, one argued chart series. The complaint was size and layout, not colour.
+- **Unchanged:** the font, both themes, the teal accent.
+- **Slices:** 21.6a the type scale, title row, figure cards and labels; 21.6b the Overview grid; 21.6c the tables. Each updates the 21.5 checklist and "The look" in `running-the-hub.md`, and is checked in Chrome in both themes.
