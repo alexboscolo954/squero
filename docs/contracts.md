@@ -958,10 +958,11 @@ Make an IAM user with exactly these policies, and an access key for it:
 - **CloudWatchReadOnlyAccess**
 - **AWSCloudTrail_ReadOnlyAccess**
 
-For the optimizer, add two more permissions:
+For the optimizer, add these permissions:
 
 - `ce:GetCostAndUsage`, for its [Bill check](optimizer.md#bill-check).
 - `ec2:DescribeSpotPriceHistory`, for its [spot list prices](optimizer.md#spot-nodes). This is from 0.59.0. Without it, the read is refused. A spot node is then priced at its discount, and the read waits a day.
+- `aps:QueryMetrics` and `aps:ListAlerts`, only where a Prometheus uses `sigv4`: an [Amazon Managed Prometheus](optimizer.md#amazon-managed-prometheus-sigv4) workspace, whose requests this key signs (slice 19.1b).
 
 Do **not** use ReadOnlyAccess. It also reads S3 objects, DynamoDB items and Lambda environment variables. Those are client data, and often secrets.
 

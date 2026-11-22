@@ -19,6 +19,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from squero.servers import Access
+from squero.usage import SigV4, refusal
 
 READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 MAX_SERIES = 30
@@ -76,9 +77,11 @@ def build_server(
             else {}
         )
         if resp.status_code != 200 or body.get("status") != "success":
-            raise ToolError(
-                f"Prometheus error {resp.status_code}: {body.get('error', resp.text[:300])}"
-            )
+            # a signed store's refusal (19.1b) by its type only, never AWS's own words: its
+            # message can quote the signed request
+            signed = isinstance(client(cluster).auth, SigV4)
+            said = refusal(resp, body) or ("refused" if signed else resp.text[:300])
+            raise ToolError(f"Prometheus error {resp.status_code}: {said}")
         return body["data"]
 
     def trimmed(series: list[Any], rows: list[dict[str, Any]]) -> dict[str, Any]:

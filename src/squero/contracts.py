@@ -152,7 +152,8 @@ class Cluster(Strict):
     # store shared by several clusters (Thanos, Mimir), added to every query.
     prometheus_url: str | None = None
     prometheus_token_secret: str | None = None
-    prometheus_auth: Literal["bearer", "basic"] = "bearer"  # how the token is sent (19.1a)
+    # how the token is sent (19.1a); sigv4: none, signed with the aws key (19.1b)
+    prometheus_auth: Literal["bearer", "basic", "sigv4"] = "bearer"
     prometheus_user: str | None = None  # basic's user id (Grafana Cloud's), not a secret
     prometheus_labels: dict[Annotated[str, Field(pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")], str] = {}
     prices: ClusterPrices | None = None  # else the Contract's
@@ -214,12 +215,37 @@ class Cluster(Strict):
         return self
 
 
+# An Amazon Managed Prometheus workspace's URL (19.1b): its host names the region to sign for.
+AMP = re.compile(
+    r"^https://aps-workspaces\.([a-z]{2}(?:-[a-z]+)+-[0-9])\.amazonaws\.com/workspaces/ws-[0-9a-f-]+/?$"
+)
+
+
+def amp_region(url: str | None) -> str | None:
+    """The region of an Amazon Managed Prometheus workspace URL; none for any other URL."""
+    found = AMP.match(url or "")
+    return found.group(1) if found else None
+
+
 def auth_rules(
     auth: str, user: str | None, secret: str | None, url: str | None, p: str = ""
 ) -> None:
     """How a Prometheus's token is sent (19.1a): `bearer`, or `basic` with a user id
-    (Grafana Cloud), never over plain http. p: the cluster fields' prefix."""
-    if auth == "basic":
+    (Grafana Cloud), never over plain http; or no token at all, each request signed with
+    the aws integration's key (`sigv4`, 19.1b: Amazon Managed Prometheus). p: the cluster
+    fields' prefix."""
+    if auth == "sigv4":
+        if user or secret:
+            raise ValueError(
+                f"{p}auth: sigv4 signs with the aws integration's key: "
+                f"no {p}user or {p}token_secret"
+            )
+        if not amp_region(url):
+            raise ValueError(
+                f"{p}auth: sigv4 needs an Amazon Managed Prometheus workspace {p}url: "
+                "https://aps-workspaces.<region>.amazonaws.com/workspaces/<id>"
+            )
+    elif auth == "basic":
         if not (user and secret):
             raise ValueError(f"{p}auth: basic needs {p}user and {p}token_secret")
         if not (url or "").startswith("https://"):
@@ -238,7 +264,8 @@ class Prometheus(Strict):
     name: Literal["prometheus"]
     url: str
     token_secret: str | None = None
-    auth: Literal["bearer", "basic"] = "bearer"  # how the token is sent (19.1a)
+    # how the token is sent (19.1a); sigv4: none, signed with the aws key (19.1b)
+    auth: Literal["bearer", "basic", "sigv4"] = "bearer"
     user: str | None = None  # basic's user id (Grafana Cloud's), not a secret
 
     @model_validator(mode="after")
@@ -261,7 +288,8 @@ class Jira(Strict):
 class Aws(Strict):
     """The Contract's AWS account, read-only: CloudWatch metrics, alarms and logs, and
     CloudTrail's management events, with an IAM user's key; also its bill (Cost
-    Explorer, slice 10.5a) and its spot prices (`DescribeSpotPriceHistory`, 16.4a)."""
+    Explorer, slice 10.5a), its spot prices (`DescribeSpotPriceHistory`, 16.4a) and its
+    Amazon Managed Prometheus workspaces, whose requests the key signs (19.1b)."""
 
     name: Literal["aws"]
     regions: list[Annotated[str, Field(pattern=r"^[a-z]{2}(-[a-z]+)+-[0-9]$")]] = Field(
@@ -984,6 +1012,27 @@ class Contract(Strict):
         for i, t in enumerate(self.allocation.teams):
             if t.cluster is not None and t.cluster not in groups["cluster"]:
                 raise ValueError(f"team rule {i + 1}: no cluster {t.cluster!r}")
+        # sigv4 (19.1b): the aws integration's key signs, for a region it lists
+        signed = [
+            (f"cluster {c.name!r}", c.prometheus_url)
+            for c in self.clusters
+            if c.prometheus_auth == "sigv4"
+        ] + [
+            ("the prometheus integration", i.url)
+            for i in self.integrations
+            if isinstance(i, Prometheus) and i.auth == "sigv4"
+        ]
+        if signed:
+            aws = next((i for i in self.integrations if isinstance(i, Aws)), None)
+            if aws is None:
+                ones = ", ".join(who for who, _ in signed)
+                raise ValueError(f"auth: sigv4 on {ones}: it needs the aws integration's key")
+            for who, url in signed:
+                if (region := amp_region(url)) not in aws.regions:
+                    raise ValueError(
+                        f"{who}: its workspace is in {region}, not one of the aws "
+                        f"integration's regions {aws.regions}: add it there"
+                    )
         shared = any(isinstance(i, Prometheus) for i in self.integrations)
         if any(isinstance(i, Sizings) for i in self.integrations) and not any(
             shared or c.prometheus_url for c in self.clusters

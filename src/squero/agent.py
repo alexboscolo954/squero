@@ -437,7 +437,7 @@ def integration_server(
             found = [t for t in usage.targets(contract) if t.relay is None]
             off = {t.cluster for t in found if t.labels} | contract.shared_stores
             stores = {
-                t.cluster: (t.url, usage.auth(t.token, t.user))
+                t.cluster: (t.url, usage.auth(t.token, t.user, t.signer))
                 for t in found
                 if t.cluster not in off
             }
@@ -446,7 +446,8 @@ def integration_server(
             server = prometheus.build_server(stores, True, shared=shared, relayed=relayed)
             return server, prometheus.ACCESS
         token = contract.secret(integration.token_secret) if integration.token_secret else None
-        store = {"": (integration.url, usage.auth(token, integration.user))}
+        signer = usage.sigv4(contract, integration.url) if integration.auth == "sigv4" else None
+        store = {"": (integration.url, usage.auth(token, integration.user, signer))}
         return prometheus.build_server(store, False), prometheus.ACCESS
     if isinstance(integration, Runbooks):
         return runbooks.build_server(contract.runbook_dirs), runbooks.ACCESS

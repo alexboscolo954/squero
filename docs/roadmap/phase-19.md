@@ -1,8 +1,8 @@
 # Phase 19: Integrations breadth
 
-**In short:** Phase 19 adds the alert sources, paging tools and outbound channels that clients use. It starts with managed Prometheus logins, so the optimizer works for clients on managed clouds. Only 19.1a is built so far.
+**In short:** Phase 19 adds the alert sources, paging tools and outbound channels that clients use. It starts with managed Prometheus logins, so the optimizer works for clients on managed clouds. 19.1a and 19.1b are built so far.
 
-**Status:** grilled 2026-11-21. 1 of 8 slices built (19.1a, 2026-11-21).
+**Status:** grilled 2026-11-21. 2 of 8 slices built (19.1a, 2026-11-21; 19.1b, 2026-11-22).
 
 **Goal:** integrations only, through the Phase 4 framework: managed Prometheus logins, PagerDuty, outbound webhooks, Microsoft Teams and Google Chat, ServiceNow, and Datadog and New Relic.
 
@@ -11,7 +11,7 @@
 | Slice | What | Status |
 |---|---|---|
 | [19.1a](#191a-bearer-and-basic-one-helper) | `bearer` and `basic` through one Prometheus auth helper | ✅ built, Grafana Cloud check owed |
-| 19.1b | `sigv4` for Amazon Managed Prometheus | Not built |
+| [19.1b](#191b-sigv4-for-amp) | `sigv4` for Amazon Managed Prometheus | ✅ built, AWS check owed |
 | 19.1c | `azure` and `google` Prometheus auth | Not built |
 | 19.2 | PagerDuty | Not built |
 | 19.3 | Outbound webhooks | Not built |
@@ -71,7 +71,29 @@ Two rounds, all answers the recommended ones.
 
 ## 19.1b `sigv4` for AMP
 
-**What:** `sigv4` auth for Amazon Managed Prometheus, with the Contract's `aws` key and region.
+**What:** `sigv4` auth for Amazon Managed Prometheus (AMP), with the Contract's `aws` key.
+
+**Decided (grill, 2026-11-22, all recommended):**
+- **The region** comes from the workspace URL's host. No new field: a second one could only disagree with the URL.
+- **That region must be one the `aws` integration lists.** *Why:* every AWS call already goes to a listed region; the fix is one line in the Contract.
+- **Refused at load**, each naming the cluster or the integration: no `aws` integration; a URL that isn't an AMP workspace URL; a token or a user beside it; a Relay's cluster.
+- The key is the `aws` integration's IAM user key. No assumed role or session token yet.
+
+**Built (2026-11-22):**
+- `usage.SigV4`, an `httpx.Auth` over the Hub's own signer (`servers/aws.py`). It signs `host` and `x-amz-date`, in a header and never in the URL, and dates each request when it is sent: one signer serves a long-lived client, and AWS refuses an old date.
+- What is sent is what is signed: the query is rewritten as AWS reads it back (sorted, a space as `%20`, only `A-Za-z0-9-_.~` unescaped). httpx alone would send a space as `+`.
+- The signer comes from where the URL is, like the token and the user: a cluster's own Bearer URL under a signed integration is never signed, and the reverse.
+- It serves the same three readers as 19.1a: `Prom`, the agent's `prometheus` tools (with and without clusters), and `ask_stores`, which never asks a workspace who it is (AMP has no such page). Two workspaces in one region stay two stores, by their path.
+- `contracts.auth_rules` holds the shape rules; the `aws` integration and its regions are checked in `Contract._consistent`.
+- A signed store's refusal is shown by its type only (`x-amzn-errortype`), or as "refused" when AWS names none, to the Operator and to the agent: AWS's message can quote the signed request.
+- A Target's signer is left out of its comparison, so two reads of a Contract's targets stay equal.
+- **Permissions:** the Hub calls query, query range and alerts, so the key needs `aps:QueryMetrics` and `aps:ListAlerts`. (The grill's note named four; the Hub doesn't read labels, series or metadata.)
+
+**Tests:** 25 in `test_prometheus_sigv4.py`: the 13 refusals, the sent query and the signature over a canonical request written by hand, the date per request, repeated names, a URL with a trailing slash, the signer from where the URL is, the agent's tools, two Contracts each signed with its own key, a workspace never asked who it is, and a refusal by its type or with none. 22 mutations, all caught. No eval rerun: the tools' names, descriptions and schemas are unchanged. No API change.
+
+**Known limits:**
+- Not proven against AMP or against another signer. The signing is the Hub's own (`servers/aws.py`), whose tests cover requests to `/` with no query; a path and a query are checked here only against AWS's rule written by hand.
+- Not checked live yet.
 
 **Live check (planned):** on AWS, about $1, after a cost estimate and the owner's yes.
 

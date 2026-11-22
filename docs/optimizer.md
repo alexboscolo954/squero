@@ -94,7 +94,7 @@ clusters:
 | `prometheus_url` | the `prometheus` integration's URL | The cluster's own Prometheus. Optional. |
 | `prometheus_token_secret` | the integration's token | A name in `secrets.sops.yaml`. Optional. |
 | `prometheus_labels` | not set | Labels added to every query. Optional. |
-| `prometheus_auth` | `bearer` | `bearer` or `basic`. |
+| `prometheus_auth` | `bearer` | `bearer`, `basic` or `sigv4` (Amazon Managed Prometheus). |
 | `prometheus_user` | not set | Basic only: the user id. It is not a secret. |
 
 The `prometheus` integration takes the same `auth` and `user` beside its `url` and `token_secret`.
@@ -111,10 +111,52 @@ The `prometheus` integration takes the same `auth` and `user` beside its `url` a
 
 ```yaml
     prometheus_url: https://prometheus-prod-01.grafana.example/api/prom
-    prometheus_auth: basic                           # optional: bearer (the default) or basic
+    prometheus_auth: basic                           # optional: bearer (the default), basic or sigv4
     prometheus_user: "123456"                        # basic only: the user id
     prometheus_token_secret: grafana-cloud-token     # the access policy token
 ```
+
+#### Amazon Managed Prometheus (sigv4)
+
+An Amazon Managed Prometheus (AMP) workspace takes no token. The Hub signs each request with the Contract's `aws` integration's key. This is slice 19.1b.
+
+```yaml
+clusters:
+  - name: prod-us
+    context: prod-us
+    namespaces: [shop]
+    prometheus_url: https://aps-workspaces.us-east-2.amazonaws.com/workspaces/ws-1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d
+    prometheus_auth: sigv4
+integrations:
+  - name: aws
+    regions: [us-east-2]                              # must list the workspace's region
+    access_key_id: AKIA................
+    secret_access_key_secret: aws-secret-key
+```
+
+- **The URL** is the workspace's own: `https://aps-workspaces.<region>.amazonaws.com/workspaces/<id>`. The Hub reads the region from it and adds `/api/v1/...` itself.
+- **The key** is the `aws` integration's IAM user key. It needs two permissions on the workspace:
+
+  | Permission | For |
+  |---|---|
+  | `aps:QueryMetrics` | Sizings, node facts, the Bill check, and the agent's `query` and `query_range` |
+  | `aps:ListAlerts` | The agent's alerts tool |
+
+- **The signature** is in a header, never in the URL, and each request is dated when it is sent.
+
+What a Contract with `sigv4` is refused for, at load:
+
+| Refused | Why |
+|---|---|
+| No `aws` integration | Its key signs. |
+| A URL that isn't an AMP workspace URL | The region comes from it. |
+| A workspace in a region the `aws` integration doesn't list | Every AWS call goes to a listed region. Add the region there. |
+| A `prometheus_token_secret` or a `prometheus_user` beside it | Nothing else is sent. |
+| A Relay's cluster | Its Relay's own Prometheus takes a Bearer token or none. |
+
+- A refusal from AWS is shown by its type only (for example `AccessDeniedException`), or as "refused" when AWS names none. AWS's own message is never shown: it can quote the signed request.
+- A workspace is never asked who it is: AMP has no such page. Two workspaces in one region stay two stores, told apart by their path.
+- Not checked against a real workspace yet.
 
 ### Prometheus for the agent's tools
 

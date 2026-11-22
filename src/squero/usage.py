@@ -23,13 +23,23 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 from pydantic import SecretStr
 
-from squero.contracts import Cluster, Contract, Prometheus, _store, ksm_label, regroup
+from squero.contracts import (
+    Aws,
+    Cluster,
+    Contract,
+    Prometheus,
+    _store,
+    amp_region,
+    ksm_label,
+    regroup,
+)
 from squero.listprices import SAFE, why
+from squero.servers.aws import authorization
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +106,9 @@ class Target:
     ksm_namespace: str = "namespace"
     relay: tuple[str, str] | None = None  # (contract, cluster): read through its Relay
     user: str | None = None  # with the token: Basic auth (slice 19.1a), else Bearer
+    # sigv4 (slice 19.1b): no token, each request signed. Not compared: two reads of one
+    # Contract's targets stay equal, as before.
+    signer: httpx.Auth | None = field(default=None, compare=False)
 
 
 class Bearer(httpx.Auth):
@@ -107,12 +120,71 @@ class Bearer(httpx.Auth):
         yield request
 
 
-def auth(token: SecretStr | None, user: str | None = None) -> httpx.Auth | None:
-    """How a Prometheus's token is sent (slice 19.1a): Basic with its user id (Grafana
-    Cloud), else Bearer; none without a token."""
+class SigV4(httpx.Auth):
+    """Signs each request as AWS does (slice 19.1b), for Amazon Managed Prometheus, with
+    the Contract's aws key: in a header, never in the URL, and dated when it is sent (AWS
+    refuses a signature some minutes old, and one of these serves a long-lived client)."""
+
+    requires_request_body = True
+
+    def __init__(
+        self,
+        key_id: str,
+        secret: SecretStr,
+        region: str,
+        service: str = "aps",
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        self.key_id, self.secret, self.region, self.service = key_id, secret, region, service
+        self.now = now
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+        # The query as AWS reads it back: sorted, only A-Za-z0-9-_.~ unescaped, a space %20
+        # (httpx would send +). What is sent is what is signed.
+        pairs = sorted(
+            (quote(k, safe="-_.~"), quote(v, safe="-_.~"))
+            for k, v in request.url.params.multi_items()
+        )
+        query = "&".join(f"{k}={v}" for k, v in pairs)
+        request.url = request.url.copy_with(query=query.encode())
+        date = self.now().strftime("%Y%m%dT%H%M%SZ")
+        host = request.url.netloc.decode()
+        request.headers["x-amz-date"] = date
+        request.headers["Authorization"] = authorization(
+            request.method, host, request.url.path, query, {"host": host, "x-amz-date": date},
+            request.content, self.region, self.service,
+            self.key_id, self.secret.get_secret_value(), date,
+        )  # fmt: skip
+        yield request
+
+
+def sigv4(contract: Contract, url: str) -> SigV4:
+    """The signer for a Contract's Amazon Managed Prometheus workspace: its aws
+    integration's key, for the region its URL names (the Contract's rules checked both)."""
+    aws = next(i for i in contract.integrations if isinstance(i, Aws))
+    region = amp_region(url)
+    assert region is not None
+    return SigV4(aws.access_key_id, contract.secret(aws.secret_access_key_secret), region)
+
+
+def auth(
+    token: SecretStr | None, user: str | None = None, signer: httpx.Auth | None = None
+) -> httpx.Auth | None:
+    """How a Prometheus is authenticated: signed (slice 19.1b), else its token sent Basic
+    with its user id (Grafana Cloud) or Bearer (slice 19.1a); none without either."""
+    if signer is not None:
+        return signer
     if token is None:
         return None
     return httpx.BasicAuth(user, token.get_secret_value()) if user else Bearer(token)
+
+
+def refusal(resp: httpx.Response, body: Any) -> str:
+    """What a store's error says. An AWS-shaped refusal (Amazon Managed Prometheus) is
+    named by its type only: its message can quote the signed request."""
+    if kind := resp.headers.get("x-amzn-errortype"):
+        return str(kind).split(":")[0]
+    return str(body.get("error", "")) if isinstance(body, dict) else ""
 
 
 def targets(contract: Contract) -> list[Target]:
@@ -129,16 +201,21 @@ def targets(contract: Contract) -> list[Target]:
                 labels, spaces = dict(c.prometheus_labels), list(c.namespaces)
                 out.append(Target(c.name, "", None, labels, spaces, relay=where))
             continue
-        # the token and user from where the URL is: one store's never go to another
-        url, secret, user = (
-            (c.prometheus_url, c.prometheus_token_secret, c.prometheus_user)
+        # the token, user and auth from where the URL is: one store's never go to another
+        url, secret, user, how = (
+            (c.prometheus_url, c.prometheus_token_secret, c.prometheus_user, c.prometheus_auth)
             if c.prometheus_url
-            else ((shared.url, shared.token_secret, shared.user) if shared else (None, None, None))
+            else (
+                (shared.url, shared.token_secret, shared.user, shared.auth)
+                if shared
+                else (None, None, None, "bearer")
+            )
         )
         if url:
             token = contract.secret(secret) if secret else None
             labels, spaces = dict(c.prometheus_labels), list(c.namespaces)
-            out.append(Target(c.name, url, token, labels, spaces, user=user))
+            signer = sigv4(contract, url) if how == "sigv4" else None
+            out.append(Target(c.name, url, token, labels, spaces, user=user, signer=signer))
     return out
 
 
@@ -167,7 +244,7 @@ class Prom:
 
     def __init__(self, t: Target, http: httpx.Client | None = None) -> None:
         if http is None:
-            http = httpx.Client(base_url=t.url, auth=auth(t.token, t.user), timeout=30)
+            http = httpx.Client(base_url=t.url, auth=auth(t.token, t.user, t.signer), timeout=30)
         self.http = http
 
     def _get(self, path: str, params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -177,7 +254,7 @@ class Prom:
         except (httpx.HTTPError, ValueError) as e:
             raise UsageError(f"Prometheus unreachable: {e}") from None
         if resp.status_code != 200 or body.get("status") != "success":
-            raise UsageError(f"Prometheus error {resp.status_code}: {body.get('error', '')}")
+            raise UsageError(f"Prometheus error {resp.status_code}: {refusal(resp, body)}")
         result: list[dict[str, Any]] = body["data"]["result"]
         return result
 
@@ -247,6 +324,8 @@ def ask_stores(
 
     def who(ask: tuple[str, Target]) -> str | None:
         cid, t = ask
+        if t.signer is not None:
+            return None  # Amazon Managed Prometheus serves no runtime info: never asked
         try:
             url = f"{t.url.rstrip('/')}/api/v1/status/runtimeinfo"
             r = client.get(url, auth=auth(t.token, t.user))
