@@ -23,9 +23,11 @@ import { NodesPage } from "./Nodes";
 import { NoSizings, OverviewPage } from "./Overview";
 import { UsageCharts } from "./Usage";
 import { amount, change, cores, cpu, gib, kept, memory, money, pct, rank, share, weigh, when } from "./format";
+import { useParam } from "./params";
 import { PageTools, Shell } from "./Shell";
 import { Badge, Change } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Chips } from "./ui/chips";
 import { Bar, Card, Figures, Skeleton, Tile } from "./ui/card";
 
 /** The pages across every Contract: no Kill switch. */
@@ -70,18 +72,6 @@ function BillLines({ bills }: { bills: Bills | null }) {
       })}
     </>
   );
-}
-
-function useParam(name: string): [string, (v: string) => void] {
-  const [value, set] = useState(() => new URLSearchParams(location.search).get(name) ?? "");
-  const update = (v: string) => {
-    const q = new URLSearchParams(location.search);
-    if (v) q.set(name, v);
-    else q.delete(name);
-    history.replaceState(null, "", `${location.pathname}?${q}`);
-    set(v);
-  };
-  return [value, update];
 }
 
 export default function App() {
@@ -429,25 +419,12 @@ function Page({ contract, data }: { contract: string; data: Workloads }) {
       </p>
       <Card className="flex flex-col gap-3 p-0">
         <div className="filters flex flex-wrap items-center gap-3 px-4 pt-4">
-          <div className="flex gap-1" role="group" aria-label="Automation">
-            {(
-              [
-                ["", "All"],
-                ["yes", "Automated"],
-                ["no", "Not automated"],
-              ] as const
-            ).map(([v, label]) => (
-              <button
-                key={label}
-                type="button"
-                aria-pressed={automated === v}
-                onClick={() => setAutomated(v)}
-                className="cursor-pointer rounded-full border border-line bg-panel px-3 py-1 text-xs text-ink aria-pressed:border-accent aria-pressed:text-accent"
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <Chips
+            label="Automation"
+            value={automated}
+            onChange={setAutomated}
+            options={[["", "All"], ["yes", "Automated"], ["no", "Not automated"]] as const}
+          />
           <label className="text-sm">
             Cluster{" "}
             <select value={cluster} onChange={(e) => setCluster(e.target.value)}>

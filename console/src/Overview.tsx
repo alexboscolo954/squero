@@ -31,8 +31,10 @@ export function automation(w: api.Workloads): { automated: number; ready: number
   return { automated: all.filter((c) => c.automated).length, ready: all.length };
 }
 
-/** The nodes at a glance: those read, the clusters not read (a problem, never 0 nodes), and
- * the nodes that could go now and after the Sizings where the Hub judged it. */
+/** The nodes at a glance (the Overview's card and the Nodes page's figures): those read, the
+ * clusters not read (a problem, never 0 nodes), the nodes that could go now and after the Sizings
+ * where the Hub judged it, and the Hub's own count of spot nodes where a cluster names a spot
+ * label (none named: nothing said of spot). */
 export function nodesAtGlance(n: api.Nodes) {
   const read = n.clusters.filter((c) => !c.problem);
   const judged = read.filter((c) => c.could_go);
@@ -42,6 +44,7 @@ export function nodesAtGlance(n: api.Nodes) {
     clusters: read.length,
     unread: n.clusters.filter((c) => c.problem).map((c) => c.cluster),
     could: judged.length ? { now: count("now"), after: count("after") } : null,
+    spot: n.clusters.some((c) => c.spot) ? n.clusters.reduce((s, c) => s + (c.spot?.nodes ?? 0), 0) : null,
   };
 }
 

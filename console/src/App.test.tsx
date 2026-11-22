@@ -64,6 +64,13 @@ function answer(routes: Record<string, [number, unknown]>) {
   );
 }
 
+/** A cluster's facts on the Nodes page, label to value (slice 21.6d). */
+const facts = (section?: Element) =>
+  Object.fromEntries([...(section?.querySelectorAll("dl.facts dt") ?? [])].map((dt) => [dt.textContent, dt.nextElementSibling?.textContent]));
+
+/** A figure card's whole text, by its label (slice 21.6a). */
+const figure = (label: string) => screen.getByText(label, { selector: "main p" }).parentElement?.textContent;
+
 /** The widths of a row's cell bars (slice 21.6c). */
 const bars = (tr: Element) => [...tr.querySelectorAll(".bar > div")].map((d) => (d as HTMLElement).style.width);
 
@@ -1044,10 +1051,23 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
   const { container: page } = render(<App />);
   await waitFor(() => expect(page.querySelector("section.nodes")).not.toBeNull());
   const [kind, edge] = [...page.querySelectorAll("section.nodes")];
-  expect(kind?.textContent).toContain("Read 2023-11-14 22:13 UTC. Autoscaler: karpenter.");
-  expect(kind?.textContent).toContain("No Sizing asks more than 7.50 cores, 30.00 GiB: the largest Room after DaemonSets.");
+  // slice 21.6d: each cluster's facts as a list, label and value
+  expect(facts(kind)).toEqual({
+    Read: "2023-11-14 22:13 UTC",
+    Autoscaler: "karpenter",
+    "Largest Room": "7.50 cores, 30.00 GiB after DaemonSets: no Sizing asks more",
+    "Could be removed": "goes by Karpenter's rules",
+    Blockers: "its Actuator's last report: 2023-11-14 22:23 UTC",
+  });
+  // and the page's figures: the Hub's own counts, the clusters not read by name
+  expect(figure("Nodes read")).toBe("Nodes read3in 1 cluster");
+  expect(figure("Nodes that could go now")).toBe("Nodes that could go now1an upper bound");
+  expect(figure("After the Sizings")).toBe("After the Sizings2nodes that could go, an upper bound");
+  expect(screen.getByText("Nodes that could go now").nextElementSibling?.className).not.toContain("text-saving"); // not Savings
+  expect(figure("Clusters not read")).toBe("Clusters not read1edge");
+  expect(screen.queryByText("Spot nodes")).toBeNull(); // no cluster names a spot label: nothing said of spot
+  expect(screen.getByText("2 clusters").parentElement?.previousElementSibling?.tagName).toBe("H1"); // the title row
   // slice 15.1b: each node's verdict, by its cluster's rules
-  expect(kind?.textContent).toContain("goes by Karpenter's rules; its Actuator's last report of Blockers: 2023-11-14 22:23 UTC.");
   const verdicts = [...(kind?.querySelectorAll("tbody tr") ?? [])].map((tr) => tr.lastElementChild?.textContent);
   expect(verdicts[0]).toBe("yes: nothing on it blocks");
   expect(verdicts[1]).toBe("unknown: 2 pods not visible");
@@ -1062,7 +1082,7 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
   expect(kind?.querySelector("details.settings")?.textContent).toContain("NodePool spec.disruption.budgets (10% of nodes by default)");
   expect(edge?.querySelector("details.settings")).toBeNull();
   expect(page.querySelector("section.nodes i")).toBeNull();
-  expect(edge?.textContent).toContain("its Actuator's last report of Blockers: never.");
+  expect(facts(edge).Blockers).toBe("its Actuator's last report: never");
   // slice 15.4: the nodes that could go, now and after the Sizings, as a figure of its own
   const could = kind?.querySelector(".could-go")?.textContent;
   expect(could).toContain("Could go now: up to 1 (n2), 120.00 EUR/month.");
@@ -1082,7 +1102,8 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
   expect(cells[3]).toBe("2 pods: 0.35 cores, 1.00 GiB");
   expect(cells[4]).toBe("0.10 cores, 0.25 GiB");
   expect(cells[5]).toBe("2.15 cores, 10.00 GiB");
-  expect(edge?.textContent).toContain("Autoscaler: none named in the Contract.");
+  expect(facts(edge).Autoscaler).toBe("none named in the Contract");
+  expect(facts(edge)["Largest Room"]).toBeUndefined(); // none read: no line
   expect(edge?.textContent).toContain("node series would cross Contracts");
   expect(edge?.querySelector("table")).toBeNull();
   expect(screen.getByText("Nodes", { selector: "nav a span" }).closest("a")?.getAttribute("aria-current")).toBe("page");
@@ -1117,14 +1138,17 @@ test("Nodes shows a cluster's Placement, its Pinned nodes and which Workload to 
   const { container: page } = render(<App />);
   await waitFor(() => expect(page.querySelector("section.nodes")).not.toBeNull());
   expect(page.querySelector(".placement")?.textContent).toBe(
-    "Placement: pods that can't move prefer the nodes labelled squero.io/pinned=yes (1 pinned), tolerating squero.io/pinned=yes:NoSchedule. Placed: shop/Deployment/api. ",
+    "pods that can't move prefer the nodes labelled squero.io/pinned=yes (1 pinned), tolerating squero.io/pinned=yes:NoSchedule. Placed: shop/Deployment/api. ",
   );
   const rows = [...page.querySelectorAll("tbody tr")];
   expect(rows[0]?.firstElementChild?.querySelector(".chip")?.textContent).toBe("pinned");
   expect(rows[1]?.firstElementChild?.querySelector(".chip")?.textContent).toBe("spot"); // slice 16.1a
   expect(page.querySelector(".spot")?.textContent).toBe(
-    "Spot: nodes labelled karpenter.sh/capacity-type=spot (1) are priced at 0.35 of on-demand. ",
+    "nodes labelled karpenter.sh/capacity-type=spot (1) are priced at 0.35 of on-demand. ",
   );
+  expect(figure("Spot nodes")).toBe("Spot nodes1"); // the Hub's count for the label, shown where a cluster names one
+  expect(figure("Nodes that could go now")).toBe("Nodes that could go nownot judged"); // no verdict stored: never a 0
+  expect(figure("After the Sizings")).toBe("After the Sizingsnot judged");
   const verdicts = rows.map((tr) => tr.lastElementChild?.textContent);
   expect(verdicts[0]).toBe("no: pinned, kept for pods that can't moveshop/api-0: annotated safe-to-evict: falseplaced");
   expect(verdicts[1]).toContain("placed, on w1: the pinned nodes had no room when it started.");
@@ -1434,6 +1458,42 @@ test("Automation lists each container's last Actuation as text, and Revert posts
   expect(sent).toEqual([
     ["/api/v1/contracts/demo-shop/automation/revert", { cluster: "kind", namespace: "shop", kind: "Deployment", name: "api", container: "app" }],
   ]);
+});
+
+test("Automation counts each container's state once, filters by chips and badges each outcome (21.6d)", async () => {
+  const sent: [string, unknown][] = [];
+  const after = { ...AUTOMATION, clusters: [{ ...AUTOMATION.clusters[0], containers: [{ ...AUTOMATION.clusters[0].containers[0], reverting: true }] }] };
+  automating({ "/api/v1/contracts/demo-shop/automation/revert": [200, after] }, sent);
+  const { container: page } = render(<App />);
+  await screen.findByText("reverting");
+  // one state each, off before its rollbacks: the four figures add up to the rows
+  expect(figure("On")).toBe("On5of 8 its Actuators reported on (90 days)");
+  expect(figure("Off")).toBe("Off1its Automation is off");
+  expect(figure("Stopped by a Revert")).toBe("Stopped by a Revert1until you approve one of its Sizings");
+  expect(figure("Ended by rollbacks")).toBe("Ended by rollbacks13 rollbacks; it resumes at the time shown");
+  expect(screen.getByText("8 containers").parentElement?.previousElementSibling?.tagName).toBe("H1");
+  expect(screen.getByText("1 cluster")).toBeTruthy();
+  const rows = () => [...page.querySelectorAll("tbody tr")].map((tr) => tr.firstElementChild?.textContent?.split("/")[2]);
+  expect(rows()).toHaveLength(8);
+  const outcome = (name: string) => screen.getByText(`shop/Deployment/${name}/app`).closest("tr")!.children[2].querySelector("span")!;
+  expect([outcome("api").textContent, outcome("api").className.includes("text-ok")]).toEqual(["applied", true]);
+  expect([outcome("web").textContent, outcome("web").className.includes("text-bad")]).toEqual(["rolled back", true]);
+  expect(outcome("cache").className).toContain("text-bad"); // failed
+  expect([outcome("kept").textContent, outcome("kept").className.includes("text-muted")]).toEqual(["skipped", true]);
+  fireEvent.click(screen.getByRole("button", { name: "Not on" }));
+  expect(rows()).toEqual(["db", "web", "cache"]);
+  expect(new URLSearchParams(location.search).get("state")).toBe("not");
+  expect(figure("On")).toContain("On5"); // the figures stay whole under a filter
+  fireEvent.click(screen.getByRole("button", { name: "On" }));
+  expect(rows()).toEqual(["api", "kept", "idle", "grown", "hot"]);
+  fireEvent.click(screen.getByRole("button", { name: "All" }));
+  expect(rows()).toHaveLength(8);
+  fireEvent.click(screen.getByLabelText("Revert shop/Deployment/api/app")); // the Hub answers with one container, on
+  await waitFor(() => expect(rows()).toEqual(["api"]));
+  fireEvent.click(screen.getByRole("button", { name: "Not on" }));
+  expect(screen.getByText("No container here matches.")).toBeTruthy(); // filtered out, not "Nothing reported yet."
+  expect(screen.queryByText("Nothing reported yet.")).toBeNull();
+  expect(page.querySelector("table")).toBeNull();
 });
 
 test("a refused Revert shows the Hub's words, and the Kill switch says Reverts are refused", async () => {

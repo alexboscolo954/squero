@@ -122,9 +122,11 @@ const card = (title: string) => screen.getByText(title, { selector: "h2" }).clos
 const open = (title: string) => [...card(title).querySelectorAll("a")].at(-1);
 
 test("the nodes at a glance: those read, the clusters not read, what could go where judged", () => {
-  expect(nodesAtGlance(NODES)).toEqual({ nodes: 3, clusters: 2, unread: ["edge"], could: { now: 1, after: 2 } });
+  expect(nodesAtGlance(NODES)).toEqual({ nodes: 3, clusters: 2, unread: ["edge"], could: { now: 1, after: 2 }, spot: null });
   const unjudged = { ...NODES, clusters: NODES.clusters.slice(1) } as api.Nodes;
-  expect(nodesAtGlance(unjudged)).toEqual({ nodes: 1, clusters: 1, unread: ["edge"], could: null }); // never "0 could go"
+  expect(nodesAtGlance(unjudged)).toEqual({ nodes: 1, clusters: 1, unread: ["edge"], could: null, spot: null }); // never "0 could go"
+  const spot = { ...NODES, clusters: [{ ...NODES.clusters[0], spot: { nodes: 2 } }, { ...NODES.clusters[1], spot: { nodes: 1 } }] } as unknown as api.Nodes;
+  expect(nodesAtGlance(spot).spot).toBe(3); // the Hub's count, where a cluster names a spot label
 });
 
 test("the page is six cards, each with its numbers and a link to its page (21.6b)", async () => {

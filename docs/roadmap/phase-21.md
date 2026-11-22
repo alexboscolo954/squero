@@ -2,7 +2,7 @@
 
 **In short:** the console works but looks like raw HTML: a link bar, headings and bare forms. This phase gives it a real dashboard design, in the style of ScaleOps' product UI, without changing what any page does. It is built next, before Phase 19 continues.
 
-**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6a to 21.6c built (2026-11-22), not released; 21.6d to 21.6f grilled: one release, 0.66.0, after 21.6f. Owed: a look at the light theme and at every page with real data.
+**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6a to 21.6d built (2026-11-22), not released; 21.6e and 21.6f grilled: one release, 0.66.0, after 21.6f. Owed: a look at the light theme and at every page with real data.
 
 **Goal:** a console the Operator is glad to open every day: a sidebar, an Overview dashboard, and every page laid out as number tiles, charts and tables in cards.
 
@@ -20,8 +20,8 @@
 | [21.6a](#216-density-and-layout-after-a-live-reference) | Denser type, a title row on every page, figures in cards, uppercase small labels | ✅ built |
 | [21.6b](#216-density-and-layout-after-a-live-reference) | The Overview as a grid of cards | ✅ built |
 | [21.6c](#216-density-and-layout-after-a-live-reference) | Tables: bars in cells, a Total row, numbers in mono | ✅ built |
-| [21.6d](#216d-to-216f-the-same-pattern-on-every-page) | Nodes and Automation in the page pattern | ⬜ next |
-| [21.6e](#216d-to-216f-the-same-pattern-on-every-page) | Investigations and an Investigation's page | ⬜ |
+| [21.6d](#216d-to-216f-the-same-pattern-on-every-page) | Nodes and Automation in the page pattern | ✅ built |
+| [21.6e](#216d-to-216f-the-same-pattern-on-every-page) | Investigations and an Investigation's page | ⬜ next |
 | [21.6f](#216d-to-216f-the-same-pattern-on-every-page) | Checks, Health, Teachings, Contracts, Approver token, the Workload detail, Cost's lines | ⬜ |
 
 ## Why this phase exists
@@ -252,7 +252,7 @@ Two rounds, all answers the recommended ones.
 
 **Known limits:**
 - On Workloads and Fleet the first figure is in ink, so with every figure 28 px it no longer stands out; only the Savings carry the accent.
-- No counts on Nodes, Automation and the triage pages: they would need a fetch of their own. Only Cost's controls moved into the title row; other pages keep theirs where they were.
+- No counts on Nodes, Automation and the triage pages: they would need a fetch of their own. (Nodes and Automation got theirs in 21.6d, from what each page already reads.) Only Cost's controls moved into the title row; other pages keep theirs where they were.
 - With GPUs the Overview has 7 figures, 6 to a row at 1,476 px, so the seventh sits alone. Unpriced values ("4.10 cores, 10.50 GiB") wrap to two lines.
 - Not seen in a browser: Nodes, Automation, Checks, Health, Investigations and an Investigation's page (no sample data), and a narrow window.
 - Sizes the grill did not set: chart labels, badges, hints and chips at 12 px.
@@ -334,3 +334,21 @@ Two rounds, all answers the recommended ones.
 - **An Investigation's page:** a header card (title, status badge, kind, Contract, start time) and figures (tokens, cost, tool calls, masked names). Approve, Reject with its reason and the Stale deadline stay exactly as they are.
 - **Slices:** 21.6d Nodes and Automation; 21.6e Investigations and an Investigation's page; 21.6f Checks, Health, Teachings, Contracts, Approver token, the Workload detail and Cost's lines. Each checked in Chrome on every page it touches.
 - **Release:** one, 0.66.0, after 21.6f, so the mini PC's Hub never shows half of it.
+
+**Built 21.6d (2026-11-22):**
+- **Nodes:** figures on top: nodes read, Nodes that could go now and after the Sizings, spot nodes, clusters not read (by name). They are the Overview card's own numbers (`nodesAtGlance`). No verdict stored says "not judged", never 0; spot shows only where a cluster names a spot label, with the Hub's count for it.
+- Each cluster's facts as a label-and-value list: read, autoscaler, largest Room, whose rules, the last report of Blockers, Placement, spot. Every caveat kept word for word: the could-go box, "(the Hub can't read them)", both "Not part of Savings", "Its Actuator doesn't place them yet.".
+- The table fits its card at 1,500 px (1,345 px wide before, 1,178 now): cores and GiB break between the two, never inside one. The cells' text is unchanged.
+- **Automation:** figures of the containers' states, one each in the page's own order (off wins over its rollbacks), so they add up to the rows; they count the containers the Actuators reported on in 90 days, which is not the Overview's share of ready containers.
+- Chips All, On and Not on, kept in the address (`state`); the figures stay whole under a filter; a cluster the filter empties says "No container here matches.".
+- Each last outcome a badge: failed and rolled back red (the two the Actuator itself posts as warnings), applied green, every other (and any this console doesn't know) neutral.
+- Shared pieces: `params.ts` (`useParam`, moved out of `App.tsx`) and `ui/chips.tsx` (Workloads' chips, now used by both pages).
+- Revert, its label, and the Kill switch and "Couldn't:" notices are untouched. No bars on Nodes.
+
+**Tests:** 1 new for Automation (figures, chips, an emptied cluster, outcome badges); the Nodes tests moved from sentences to the facts list, with the figures (judged and not judged, spot, clusters not read) added; `nodesAtGlance`'s spot count. 82 console tests. 13 mutations, all caught.
+
+**Checked:** in Chrome with the Hub's CSP and the tests' own sample data: Nodes in dark and light (tokens set by hand), Automation in dark, unfiltered and "Not on"; the Nodes table measured, no sideways scroll at 1,500 px. The browser console read from the first page load: no error, no CSP refusal.
+
+**Known limits:**
+- Not seen in a browser: a cluster with Placement and spot facts, and the spot Workloads lists (tested).
+- No API change, no eval rerun, no isolation test.

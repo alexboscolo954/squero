@@ -3,14 +3,29 @@
  * the Actuator's own pod, where it blocks: audit A4). Each
  * node's verdict (slice 15.1b): whether it could be removed, by its cluster's rules, going
  * by its Actuator's latest report of Blockers. Placement (slice 15.2a): the cluster's Pinned
- * nodes, the Workloads placed on them, and which to restart to free a node. */
+ * nodes, the Workloads placed on them, and which to restart to free a node. The page pattern
+ * (slice 21.6d): figures on top, each cluster's facts as a list, a table that fits its card. */
+import { ArrowDownToLine, CircleAlert, Server, Tag } from "lucide-react";
 import * as api from "./api";
 import { useLoaded } from "./Checks";
 import { cores, gib, money, when } from "./format";
+import { nodesAtGlance } from "./Overview";
+import { PageTools } from "./Shell";
 import { Badge, Change } from "./ui/badge";
-import { Card, Skeleton } from "./ui/card";
+import { Card, Figures, Skeleton, Tile } from "./ui/card";
 
 const both = (v: { cpu?: number; memory?: number }) => `${cores(v.cpu ?? 0)}, ${gib(v.memory ?? 0)}`;
+
+/** Cores and GiB in a table cell: the same text as `both`, breaking only between the two, so
+ * the table's columns stay narrow (slice 21.6d). */
+function Both({ v }: { v: { cpu?: number; memory?: number } }) {
+  return (
+    <>
+      <span className="whitespace-nowrap">{cores(v.cpu ?? 0)},</span>{" "}
+      <span className="whitespace-nowrap">{gib(v.memory ?? 0)}</span>
+    </>
+  );
+}
 
 type Blocker = NonNullable<api.Nodes["clusters"][number]["nodes"][number]["verdict"]["blockers"]>[number];
 
@@ -103,39 +118,82 @@ export function NodesPage({ contract }: { contract: string }) {
   const [data, error] = useLoaded(api.nodes, contract);
   if (error) return <p className="notice">The Hub didn't answer: {error}</p>;
   if (!data) return <Skeleton />;
+  const g = nodesAtGlance(data);
+  const s = (n: number) => (n === 1 ? "" : "s");
   return (
     <div className="flex flex-col gap-5">
-      <p className="hint">
+      <PageTools>
+        <span>
+          {data.clusters.length} cluster{s(data.clusters.length)}
+        </span>
+      </PageTools>
+      {data.clusters.length > 0 && (
+        <Figures>
+          <Tile icon={Server} label="Nodes read" value={String(g.nodes)} note={`in ${g.clusters} cluster${s(g.clusters)}`} />
+          {/* In ink, never the accent: an upper bound, not part of Savings. */}
+          <Tile
+            icon={ArrowDownToLine}
+            label="Nodes that could go now"
+            value={g.could ? String(g.could.now) : "not judged"}
+            note={g.could ? "an upper bound" : undefined}
+          />
+          <Tile
+            icon={ArrowDownToLine}
+            label="After the Sizings"
+            value={g.could ? String(g.could.after) : "not judged"}
+            note={g.could ? "nodes that could go, an upper bound" : undefined}
+          />
+          {g.spot != null && <Tile icon={Tag} label="Spot nodes" value={String(g.spot)} />}
+          {g.unread.length > 0 && (
+            <Tile icon={CircleAlert} label="Clusters not read" value={String(g.unread.length)} note={g.unread.join(", ")} />
+          )}
+        </Figures>
+      )}
+      <p className="hint m-0">
         A node's Room is its allocatable less the requests of every Running or Pending pod on it. Pods outside this
         Contract's namespaces are not visible: they count as one sum per node.
       </p>
       {data.clusters.length === 0 && <p className="hint">No nodes read yet: the hourly run reads them.</p>}
       {data.clusters.map((c) => (
-        <Card key={c.cluster} className="nodes flex flex-col gap-1">
-          <h2>{c.cluster}</h2>
-          <p className="hint">
-            Read {when(c.at)}. Autoscaler: {c.autoscaler ?? "none named in the Contract"}.
-            {c.largest && ` No Sizing asks more than ${both(c.largest)}: the largest Room after DaemonSets.`}
-          </p>
-          <p className="hint">
-            Whether a node could be removed goes by {c.rules}; its Actuator's last report of Blockers:{" "}
-            {when(c.reported)}.
-          </p>
-          {c.placement && (
-            <p className="hint placement">
-              Placement: pods that can't move prefer the nodes labelled {c.placement.label} ({c.placement.pinned}{" "}
-              pinned){c.placement.taint && `, tolerating ${c.placement.taint}`}.{" "}
-              {c.placement.note && <span className="notice">{c.placement.note}. </span>}
-              Placed: {c.placement.workloads.length ? c.placement.workloads.join(", ") : "none"}.{" "}
-              {!c.placement.placing && "Its Actuator doesn't place them yet."}
-            </p>
-          )}
-          {c.spot && (
-            <p className="hint spot">
-              Spot: nodes labelled {c.spot.label} ({c.spot.nodes}) are priced at {c.spot.discount} of on-demand.{" "}
-              {c.spot.note && <span className="notice">{c.spot.note}.</span>}
-            </p>
-          )}
+        <Card key={c.cluster} className="nodes flex flex-col gap-2">
+          <h2 className="m-0">{c.cluster}</h2>
+          <dl className="facts m-0 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+            <dt className="text-muted">Read</dt>
+            <dd className="m-0">{when(c.at)}</dd>
+            <dt className="text-muted">Autoscaler</dt>
+            <dd className="m-0">{c.autoscaler ?? "none named in the Contract"}</dd>
+            {c.largest && (
+              <>
+                <dt className="text-muted">Largest Room</dt>
+                <dd className="m-0">{both(c.largest)} after DaemonSets: no Sizing asks more</dd>
+              </>
+            )}
+            <dt className="text-muted">Could be removed</dt>
+            <dd className="m-0">goes by {c.rules}</dd>
+            <dt className="text-muted">Blockers</dt>
+            <dd className="m-0">its Actuator's last report: {when(c.reported)}</dd>
+            {c.placement && (
+              <>
+                <dt className="text-muted">Placement</dt>
+                <dd className="placement m-0">
+                  pods that can't move prefer the nodes labelled {c.placement.label} ({c.placement.pinned} pinned)
+                  {c.placement.taint && `, tolerating ${c.placement.taint}`}.{" "}
+                  {c.placement.note && <span className="notice">{c.placement.note}. </span>}
+                  Placed: {c.placement.workloads.length ? c.placement.workloads.join(", ") : "none"}.{" "}
+                  {!c.placement.placing && "Its Actuator doesn't place them yet."}
+                </dd>
+              </>
+            )}
+            {c.spot && (
+              <>
+                <dt className="text-muted">Spot</dt>
+                <dd className="spot m-0">
+                  nodes labelled {c.spot.label} ({c.spot.nodes}) are priced at {c.spot.discount} of on-demand.{" "}
+                  {c.spot.note && <span className="notice">{c.spot.note}.</span>}
+                </dd>
+              </>
+            )}
+          </dl>
           <Spotting c={c} currency={data.currency} />
           {(c.settings ?? []).length > 0 && (
             <details className="settings">
@@ -237,11 +295,13 @@ export function NodesPage({ contract }: { contract: string }) {
                         <span key={t} className="chip bg-line text-muted">{t}</span>
                       ))}
                     </td>
-                    <td className="num">{both(n.allocatable)}</td>
+                    <td className="num whitespace-normal">
+                      <Both v={n.allocatable} />
+                    </td>
                     <td>
                       <details>
-                        <summary className="num">
-                          {n.mine.pods} pods: {both(n.mine)}
+                        <summary className="num whitespace-normal">
+                          <span className="whitespace-nowrap">{n.mine.pods} pods:</span> <Both v={n.mine} />
                         </summary>
                         <ul>
                           {n.own.map((p) => (
@@ -252,11 +312,15 @@ export function NodesPage({ contract }: { contract: string }) {
                         </ul>
                       </details>
                     </td>
-                    <td className="num">
-                      {n.others.pods} pods: {both(n.others)}
+                    <td className="num whitespace-normal">
+                      <span className="whitespace-nowrap">{n.others.pods} pods:</span> <Both v={n.others} />
                     </td>
-                    <td className="num">{both(n.daemonsets)}</td>
-                    <td className="num">{both(n.room)}</td>
+                    <td className="num whitespace-normal">
+                      <Both v={n.daemonsets} />
+                    </td>
+                    <td className="num whitespace-normal">
+                      <Both v={n.room} />
+                    </td>
                     <td>
                       {n.verdict.state === "clear" && <Badge tone="good">yes: nothing on it blocks</Badge>}
                       {n.verdict.state === "unknown" && (
