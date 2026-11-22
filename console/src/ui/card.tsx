@@ -18,61 +18,80 @@ const TONE = {
   plain: "text-ink",
 };
 
-/** A number and its label; `bar` (0 to 1) draws a thin bar under it, as Wasted spend has. */
+/** A row of figures (slice 21.5b, after the design brief): no box around each, thin rules
+ * between them, so the numbers carry the page and not the frames. */
+export function Figures({ className, children }: { className?: string; children: ReactNode }) {
+  return (
+    <div
+      className={cn(
+        "grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-y-4 border-y border-line py-4",
+        "[&>*]:border-line [&>*:not(:first-child)]:border-l",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** A figure: its label above, the number, a note under it; `hero` sets the one that matters
+ * largest; `bar` (0 to 1) draws a thin meter under it. */
 export function Tile({
   label,
   value,
   tone = "plain",
   bar,
   note,
+  hero = false,
 }: {
   label: string;
   value: string;
   tone?: keyof typeof TONE;
   bar?: number;
   note?: ReactNode;
+  hero?: boolean;
 }) {
   return (
-    <div className="flex min-w-0 flex-col items-center justify-center gap-1 border-line px-4 py-2 text-center not-first:border-l">
-      <p className={cn("m-0 text-2xl font-semibold tabular-nums", TONE[tone])}>{value}</p>
+    <div className="flex min-w-0 flex-col gap-1 px-5 first:pl-1">
+      <p className="m-0 text-[13px] font-medium text-muted">{label}</p>
+      <p
+        className={cn(
+          "m-0 leading-none font-bold tabular-nums",
+          hero ? "text-[40px] tracking-[-0.03em]" : "text-[28px] tracking-[-0.02em]",
+          TONE[tone],
+        )}
+      >
+        {value}
+      </p>
       {bar !== undefined && (
-        <div className="h-1.5 w-24 overflow-hidden rounded-full bg-line" aria-hidden="true">
-          <div className="h-full rounded-full bg-waste" style={{ width: `${Math.min(1, Math.max(0, bar)) * 100}%` }} />
+        <div className="mt-1 h-1 w-28 overflow-hidden rounded-full bg-raised" aria-hidden="true">
+          <div className="h-full rounded-full bg-muted" style={{ width: `${Math.min(1, Math.max(0, bar)) * 100}%` }} />
         </div>
       )}
-      <p className="m-0 text-sm text-muted">{label}</p>
-      {note && <p className="m-0 text-xs text-muted">{note}</p>}
+      {note && <p className="m-0 text-[13px] text-muted">{note}</p>}
     </div>
   );
 }
 
-/** A share as a ring, as ScaleOps shows Automation: `part` of `whole`. */
-export function Ring({ part, whole, label }: { part: number; whole: number; label: string }) {
-  const share = whole ? part / whole : 0;
-  const r = 30;
-  const round = 2 * Math.PI * r;
+/** A flat block in a shape of what loads (slice 21.5b): no pulse, no spinner. */
+export function Skeleton({ rows = 3 }: { rows?: number }) {
   return (
-    <figure className="m-0 flex items-center gap-4" aria-label={`${label}: ${part} of ${whole}`}>
-      <svg viewBox="0 0 72 72" className="size-20 -rotate-90" aria-hidden="true">
-        <circle cx="36" cy="36" r={r} fill="none" strokeWidth="7" className="stroke-line" />
-        <circle
-          cx="36"
-          cy="36"
-          r={r}
-          fill="none"
-          strokeWidth="7"
-          strokeLinecap="round"
-          className="stroke-saving"
-          strokeDasharray={`${share * round} ${round}`}
-        />
-      </svg>
-      <figcaption className="flex flex-col">
-        <span className="text-2xl font-semibold text-saving tabular-nums">{Math.round(share * 100)}%</span>
-        <span className="text-sm text-muted">{label}</span>
-        <span className="text-xs text-muted">
-          {part} of {whole}
-        </span>
-      </figcaption>
-    </figure>
+    <div className="flex flex-col gap-4" aria-busy="true" aria-label="Loading">
+      <div className="h-20 rounded-[10px] bg-raised" />
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="h-10 rounded-lg bg-raised" />
+      ))}
+    </div>
+  );
+}
+
+/** What isn't there yet, why, and the one thing to do (slice 21.5b). */
+export function Empty({ what, why, action }: { what: string; why: string; action?: ReactNode }) {
+  return (
+    <div className="rounded-[10px] border border-dashed border-line px-5 py-6">
+      <p className="m-0 font-semibold">{what}</p>
+      <p className="m-0 mt-1 text-sm text-muted">{why}</p>
+      {action && <p className="m-0 mt-3 text-sm">{action}</p>}
+    </div>
   );
 }

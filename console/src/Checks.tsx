@@ -3,7 +3,7 @@
 // and Hub text: shown as text.
 import { useEffect, useState } from "react";
 import * as api from "./api";
-import { Card } from "./ui/card";
+import { Card, Skeleton } from "./ui/card";
 import { cn } from "./ui/cn";
 import { when } from "./format";
 import { page } from "./Investigations";
@@ -29,7 +29,7 @@ export function useLoaded<T>(load: (contract: string) => Promise<T>, contract: s
 export function ChecksPage({ contract }: { contract: string }) {
   const [data, error] = useLoaded(api.checks, contract);
   if (error) return <p className="notice">The Hub didn't answer: {error}</p>;
-  if (!data) return null;
+  if (!data) return <Skeleton />;
   return (
     <>
       <h1 className="sr-only">{contract}: Checks</h1>

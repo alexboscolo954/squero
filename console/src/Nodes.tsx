@@ -8,7 +8,7 @@ import * as api from "./api";
 import { useLoaded } from "./Checks";
 import { cores, gib, money, when } from "./format";
 import { Badge, Change } from "./ui/badge";
-import { Card } from "./ui/card";
+import { Card, Skeleton } from "./ui/card";
 
 const both = (v: { cpu?: number; memory?: number }) => `${cores(v.cpu ?? 0)}, ${gib(v.memory ?? 0)}`;
 
@@ -102,7 +102,7 @@ function Spotting({ c, currency }: { c: Cluster; currency?: string | null }) {
 export function NodesPage({ contract }: { contract: string }) {
   const [data, error] = useLoaded(api.nodes, contract);
   if (error) return <p className="notice">The Hub didn't answer: {error}</p>;
-  if (!data) return null;
+  if (!data) return <Skeleton />;
   return (
     <div className="flex flex-col gap-5">
       <h1 className="sr-only">{contract}: Nodes</h1>

@@ -13,7 +13,7 @@
   --text: #1f262e; --muted: #5b6571;
   --accent: #0b6b60; --accent-bg: rgb(11 107 96 / 0.10);
   --ok: #15803d; --ok-bg: rgb(21 128 61 / 0.10);
-  --bad: #b42323; --bad-bg: rgb(180 35 35 / 0.10);
+  --bad: #b42323; --bad-bg: rgb(180 35 35 / 0.10); --bad-solid: #b42323; --on-solid: #ffffff;
   --wait: #8a5a00; --wait-bg: rgb(138 90 0 / 0.10);
   --rail: var(--bg); --rail-text: var(--muted); --rail-muted: var(--muted); --rail-hover: var(--raised);
   --rail-active: var(--text);
@@ -29,7 +29,7 @@
     --text: #eef2f6; --muted: #9ca5b0;
     --accent: #4fbfaf; --accent-bg: rgb(79 191 175 / 0.14);
     --ok: #46c08a; --ok-bg: rgb(70 192 138 / 0.14);
-    --bad: #f2777a; --bad-bg: rgb(242 119 122 / 0.14);
+    --bad: #f2777a; --bad-bg: rgb(242 119 122 / 0.14); --bad-solid: #b3272c;
     --wait: #e6b450; --wait-bg: rgb(230 180 80 / 0.14);
     --request: #7d8792;
     --weight: 350; /* light type on a dark ground reads heavier */
@@ -47,6 +47,8 @@
   --color-accent-bg: var(--accent-bg);
   --color-bad: var(--bad);
   --color-bad-bg: var(--bad-bg);
+  --color-bad-solid: var(--bad-solid);
+  --color-on-solid: var(--on-solid);
   --color-rail: var(--rail);
   --color-rail-text: var(--rail-text);
   --color-rail-muted: var(--rail-muted);
@@ -105,7 +107,7 @@
   button:not(.link):hover { background: var(--raised); }
   button:not(.link):active { transform: translateY(1px); }
   button:disabled { opacity: 0.55; cursor: not-allowed; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-solid); }
   button.primary:hover { background: var(--accent); opacity: 0.9; }
   button.danger { border-color: var(--bad); color: var(--bad); background: transparent; }
   /* Tables (slice 21.5a): rules between rows only, sentence-case heads, the selected row marked. */

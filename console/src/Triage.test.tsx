@@ -52,7 +52,7 @@ test("each integration is a tile; a failing one is framed red and says FAILING",
   expect(tile("jira").textContent).toBe("jiraFAILING5003 msHTTP 401 from jira.example");
 });
 
-test("a Teaching's approve and add are primary, reject and retire danger", async () => {
+test("one filled button on Teachings: add; approve is outlined (one per waiting Teaching), reject and retire danger", async () => {
   const teaching = { alerts: [], source_id: null, correction: null, contradicts: null, decided_by: null, decided_at: null };
   hub({
     "/api/v1/contracts/shop/teachings": {
@@ -63,7 +63,7 @@ test("a Teaching's approve and add are primary, reject and retire danger", async
     },
   });
   render(<TeachingsPage contract="shop" />);
-  expect((await screen.findByText("Approve this text")).className).toBe("primary");
+  expect((await screen.findByText("Approve this text")).className).toBe(""); // several can wait at once
   expect(screen.getByText("Reject").className).toBe("danger");
   expect(screen.getByText("Retire").className).toBe("danger");
   expect(screen.getByText("Add, approved").className).toBe("primary");

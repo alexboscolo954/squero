@@ -243,7 +243,7 @@ test("with prices, Workloads rank by the monthly cost of their waste and show it
   await screen.findByText("Deployment/memory-heavy");
   const names = [...document.querySelectorAll("tbody button")].map((b) => b.textContent);
   expect(names.slice(0, 2)).toEqual(["Deployment/cpu-heavy", "Deployment/memory-heavy"]);
-  expect(screen.getByText("1,234.50 EUR").nextElementSibling?.textContent).toBe("Waste a month"); // its tile
+  expect(screen.getByText("1,234.50 EUR").previousElementSibling?.textContent).toBe("Waste a month"); // its figure
   expect(screen.getByText("1,219.17 EUR/month")).toBeTruthy(); // the row's Savings
   fireEvent.click(screen.getByText("Deployment/cpu-heavy"));
   expect(screen.getByText(/of 4,960\.00 EUR\/month in requests/)).toBeTruthy(); // its detail
@@ -1279,10 +1279,10 @@ test("the Fleet lists every Contract in its own currency, totals per currency, r
     "<b>Gone</b>Couldn't read it: RuntimeError: Prometheus unreachable",
     "ShopKill switch offAgendawaste 3Waste10.00 USD/monthRequests20.00 USD/monthIdle GPUs1.5 of 8 GPUs idle, 100.00 USD/monthUnrequested GPUs1 on 1 nodes, 40.00 USD/monthRelays and Actuators-",
   ]);
-  const totals = [...page.querySelectorAll(".fleet section.total")].map((c) => c.textContent);
+  const totals = [...page.querySelectorAll(".fleet .total")].map((c) => c.textContent);
   expect(totals).toEqual([
-    "EUR1 Contract37 EURWaste a month73 EURRequests a month0 EURIdle GPUs a month0 EURUnrequested GPUs a month",
-    "USD1 Contract10 USDWaste a month20 USDRequests a month100 USDIdle GPUs a month40 USDUnrequested GPUs a month",
+    "EUR, 1 Contract: waste a month37 EURRequests a month73 EURIdle GPUs a month0 EURUnrequested GPUs a month0 EUR",
+    "USD, 1 Contract: waste a month10 USDRequests a month20 USDIdle GPUs a month100 USDUnrequested GPUs a month40 USD",
   ]);
   expect(page.querySelector(".fleet section.contract")?.querySelector("span")?.textContent).toBe("Kill switch on");
   expect([...page.querySelectorAll(".fleet div.bad")].map((d) => d.textContent)).toEqual([
@@ -1400,7 +1400,7 @@ test("idle GPUs show beside the waste, per Workload and per GPU, as text (slice 
   const { container: page } = render(<App />);
   fireEvent.click(await screen.findByText("Deployment/trainer"));
   const tile = screen.getByText("Idle GPUs", { selector: "main p" });
-  expect(tile.previousElementSibling?.textContent).toBe(idle.text); // its tile, beside the waste
+  expect(tile.nextElementSibling?.textContent).toBe(idle.text); // its figure, beside the waste
   expect(screen.getByText("Idle GPUs", { selector: "th" })).toBeTruthy();
   const cells = [...page.querySelectorAll("tbody tr")].map((tr) => tr.children[7]?.textContent);
   expect(cells).toEqual(["-", idle.text]); // ranked by waste: plain first
@@ -1437,7 +1437,7 @@ test("the Cost page says the idle GPUs beside the Savings (slice 17.2b)", async 
   });
   render(<App />);
   const value = await screen.findByText("0.5 of 1 GPUs idle");
-  expect(value.nextElementSibling?.textContent).toBe("Idle GPUs");
+  expect(value.previousElementSibling?.textContent).toBe("Idle GPUs");
   expect(screen.getByText("beside the Savings, never in them")).toBeTruthy();
 });
 

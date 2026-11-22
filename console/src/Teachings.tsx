@@ -3,6 +3,7 @@
 // edited as plain text before it is approved.
 import { useEffect, useState } from "react";
 import * as api from "./api";
+import { Skeleton } from "./ui/card";
 import { when } from "./format";
 import { page } from "./Investigations";
 
@@ -35,7 +36,7 @@ function Proposed({ t, act, limit }: { t: api.Teaching; act: Act; limit: number 
         />
       </p>
       <p>
-        <button className="primary" onClick={() => act((c) => api.decideTeaching(c, t.id, true, text))}>Approve this text</button>{" "}
+        <button onClick={() => act((c) => api.decideTeaching(c, t.id, true, text))}>Approve this text</button>{" "}
         <button className="danger" onClick={() => act((c) => api.decideTeaching(c, t.id, false, ""))}>Reject</button>
       </p>
     </section>
@@ -56,7 +57,7 @@ export function TeachingsPage({ contract }: { contract: string }) {
     api.teachings(contract).then(setData, (e: Error) => setError(e.message));
   }, [contract]);
   if (error) return <p className="notice">The Hub didn't answer: {error}</p>;
-  if (!data) return null;
+  if (!data) return <Skeleton />;
   const act: Act = (change) => {
     setFailed("");
     return change(contract).then(

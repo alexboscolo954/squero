@@ -90,7 +90,7 @@ test("the charts' columns are times, then requests, Sizings and usage, in cores 
   expect(columns(TOTALS, "memory")[1]).toEqual([8, 4]);
 });
 
-test("the page shows the tiles, the ring, both charts and the Agenda's first five", async () => {
+test("the page shows the figures, the Automation meter, both charts and the Agenda's first five", async () => {
   hub({
     "/api/v1/contracts/shop/workloads": workloads(true, { gpus: { idle: 1, of: 4, cost: 99, text: "1 of 4 GPUs idle" } }),
     "/api/v1/contracts/shop/cost": { realized: REALIZED },
@@ -102,8 +102,10 @@ test("the page shows the tiles, the ring, both charts and the Agenda's first fiv
   expect(screen.getByText("Monthly cost")).toBeTruthy();
   expect(screen.getByText("1 of 4 GPUs idle")).toBeTruthy();
   expect(screen.getByText("99 EUR a month")).toBeTruthy(); // the idle GPUs' cost
-  expect(screen.getByText("7", { selector: "p" }).nextElementSibling?.textContent).toBe("On the Agenda");
-  expect(screen.getByLabelText("containers automated: 2 of 4")).toBeTruthy();
+  expect(screen.getByText("7", { selector: "p" }).previousElementSibling?.textContent).toBe("On the Agenda");
+  const automated = screen.getByText("Automated").parentElement!; // a meter, not a ring (21.5b)
+  expect(automated.textContent).toBe("Automated50%2 of 4 containers");
+  expect(screen.getByText("Savings available").nextElementSibling?.className).toContain("text-[40px]"); // the hero
   expect(screen.getByText("cpu chart")).toBeTruthy();
   expect(screen.getByText("memory chart")).toBeTruthy();
   const listed = [...document.querySelectorAll(".agenda li")].map((li) => li.textContent);
@@ -124,8 +126,16 @@ test("no GPUs, no GPU tile; no stored runs, no chart; a failed cost read is no e
   expect(screen.queryByText("Monthly cost")).toBeNull();
   expect(screen.queryByText("Idle GPUs")).toBeNull();
   expect(screen.getAllByText("No hourly run stored in the last 14 days.")).toHaveLength(2);
-  expect(screen.getByText("Savings realized").previousElementSibling?.textContent).toBe("none yet");
+  expect(screen.getByText("Savings realized").nextElementSibling?.textContent).toBe("none yet");
+  const actions = screen.getAllByText("Check Health").map((a) => a.getAttribute("href"));
+  expect(actions).toEqual(["/app/?contract=shop&view=health", "/app/?contract=shop&view=health"]); // each empty chart's
   expect(screen.getByText("Nothing needs you now.")).toBeTruthy();
+});
+
+test("while it loads, a flat block in its shape, never an empty page", () => {
+  vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {}))); // the Hub never answers
+  render(<OverviewPage contract="shop" />);
+  expect(screen.getByLabelText("Loading").getAttribute("aria-busy")).toBe("true");
 });
 
 test("a Hub that doesn't answer says so", async () => {

@@ -6,7 +6,7 @@ import * as api from "./api";
 import { cpu, memory, when } from "./format";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
-import { Card } from "./ui/card";
+import { Card, Skeleton } from "./ui/card";
 
 function automation(h: api.Held): string {
   if (!h.automated) return "off";
@@ -25,7 +25,7 @@ export function AutomationPage({ contract }: { contract: string }) {
     api.automation(contract).then(setData, (e: Error) => setError(e.message));
   }, [contract]);
   if (error) return <p className="notice">The Hub didn't answer: {error}</p>;
-  if (!data) return null;
+  if (!data) return <Skeleton />;
   const undo = (cluster: string, h: api.Held) => {
     setFailed("");
     api

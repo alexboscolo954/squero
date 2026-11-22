@@ -2,7 +2,7 @@
 
 **In short:** the console works but looks like raw HTML: a link bar, headings and bare forms. This phase gives it a real dashboard design, in the style of ScaleOps' product UI, without changing what any page does. It is built next, before Phase 19 continues.
 
-**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5a built; 21.5b next. Owed: a look at the light theme and at every page with real data.
+**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5a and 21.5b built, to release. Owed: a look at the light theme and at every page with real data.
 
 **Goal:** a console the Operator is glad to open every day: a sidebar, an Overview dashboard, and every page laid out as number tiles, charts and tables in cards.
 
@@ -16,7 +16,7 @@
 | 21.3b | Nodes, Automation and Fleet restyled | ✅ built |
 | [21.4](#214-the-triage-pages) | The triage pages restyled: Investigations, Teachings, Checks, Health, Contracts | ✅ built |
 | [21.5a](#215-refinement-after-two-design-skills) | Tokens, font, sidebar, header, buttons, badges, tables, focus and motion | ✅ built |
-| 21.5b | Number tiles, charts, empty and loading states; the checklist on every page | ⏳ |
+| [21.5b](#215-refinement-after-two-design-skills) | Number tiles, charts, empty and loading states; the checklist on every page | ✅ built |
 
 ## Why this phase exists
 
@@ -183,4 +183,25 @@ Two rounds, all answers the recommended ones.
 **Tests:** the asset route serves a `.woff2` as `font/woff2`; the Kill switch test sends nothing on "Keep it on" and turns off on "Yes"; a new one: the question never follows you to another Contract. 6 mutations, all caught (one after that test).
 
 **Checked:** in Chrome with the Hub's CSP: both fonts load from the Hub, no CSP violation. Dark theme only.
+
+**Built 21.5b (2026-11-22):**
+- Figures without boxes: a row with thin rules between, each label above its number; one hero figure, 40 px (the Savings available on the Overview and Cost, the waste on Workloads, each currency's waste on the Fleet), the rest 28 px, in ink, the Savings in the accent.
+- The Automation ring became a figure with a thin meter ("60%", "3 of 5 containers"): the brief counts a donut as a dashboard tell. A thin neutral meter under Wasted spend too.
+- Charts (the Overview's and a container's): the Sizings the one accent line; requests a muted line; the waste a faint neutral band between them; usage in ink with a faint fill; horizontal rules only, no ticks, muted 13 px labels; the legend as line swatches. Their colours are read from the theme when they draw, and they draw again when the system switches theme (`theme.ts`).
+- Every page shows a flat block in its shape while it loads, never an empty page; an empty Workloads or chart says what is missing, why, and "Check Health".
+- Colours only from tokens: the Kill switch's line and the filled buttons use `--bad-solid` and `--on-solid`, not Tailwind's own red and white.
+
+**The brief's checklist, run on the console's source and in Chrome:**
+- No uppercase or tracked labels; no `transition: all`; no shadows; no card in a card. ✅
+- Colours only from tokens (none outside the token block). ✅ (after the fix above)
+- One filled button per view: Teachings had one per waiting Teaching, so "Approve this text" is outlined and "Add, approved" filled. ✅
+- One loud chart series; horizontal rules only; figures in ink but the Savings. ✅
+- No purple-blue or cyan on dark: the accent is a teal-green. ✅
+- A focus ring everywhere, shown at once; motion off on request; `overflow-x: clip`. ✅
+- Every loading and empty state says something, the empty ones with an action. ✅ (the pages without data show their Hub's own sentence, as before)
+- Contrast: not measured with a tool; the light theme previewed by setting its tokens by hand (the system was dark), so its charts were seen in the dark theme's colours.
+
+**Tests:** 2 in `theme.test.ts` (a colour at an opacity, the axes), one for the loading block, the Overview's tests on the hero, the meter and the empty charts' action; 7 existing tests moved to the figure layout. 7 mutations, all caught.
+
+**Checked:** in Chrome with the Hub's CSP: the Overview in both themes, no CSP violation.
 

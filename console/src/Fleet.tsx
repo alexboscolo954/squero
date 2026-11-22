@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import * as api from "./api";
 import { money, whole } from "./format";
 import { Badge } from "./ui/badge";
-import { Card, Tile } from "./ui/card";
+import { Card, Figures, Skeleton, Tile } from "./ui/card";
 
 const counts = (agenda: Record<string, number>) =>
   Object.entries(agenda)
@@ -28,23 +28,17 @@ export function FleetPage() {
     api.fleet().then(setFleet, (e: Error) => setError(e.message));
   }, []);
   if (error) return <p className="notice">The Hub didn't answer: {error}</p>;
-  if (!fleet) return null;
+  if (!fleet) return <Skeleton />;
   return (
     <div className="fleet flex flex-col gap-5">
       <h1 className="sr-only">Fleet</h1>
       {fleet.totals.map((t) => (
-        <Card key={t.currency} className="total grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-y-3 p-3">
-          <div className="flex flex-col items-center justify-center px-4 text-center">
-            <p className="m-0 text-lg font-semibold">{t.currency}</p>
-            <p className="m-0 text-sm text-muted">
-              {t.contracts} Contract{t.contracts === 1 ? "" : "s"}
-            </p>
-          </div>
-          <Tile label="Waste a month" value={whole(t.waste, t.currency)} tone="waste" />
-          <Tile label="Requests a month" value={whole(t.requests, t.currency)} tone="money" />
+        <Figures key={t.currency} className="total">
+          <Tile hero label={`${t.currency}, ${t.contracts} Contract${t.contracts === 1 ? "" : "s"}: waste a month`} value={whole(t.waste, t.currency)} />
+          <Tile label="Requests a month" value={whole(t.requests, t.currency)} />
           <Tile label="Idle GPUs a month" value={whole(t.idle_gpus, t.currency)} />
           <Tile label="Unrequested GPUs a month" value={whole(t.unrequested_gpus, t.currency)} />
-        </Card>
+        </Figures>
       ))}
       {fleet.rows.length === 0 ? (
         <p className="hint">No Contracts loaded.</p>

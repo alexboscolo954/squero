@@ -7,7 +7,7 @@ import { AgendaList } from "./Agenda";
 import * as api from "./api";
 import { cores, gib, pct, whole } from "./format";
 import TotalsChart from "./TotalsChart";
-import { Card, CardTitle, Ring, Tile } from "./ui/card";
+import { Card, CardTitle, Empty, Figures, Skeleton, Tile } from "./ui/card";
 
 type Loaded = {
   workloads: api.Workloads;
@@ -67,26 +67,27 @@ export function OverviewPage({ contract }: { contract: string }) {
     );
   }, [contract]);
   if (error) return <p className="notice">The Hub didn't answer: {error}</p>;
-  if (!data) return null;
+  if (!data) return <Skeleton />;
   const f = figures(data);
   const auto = automation(data.workloads);
   const gpus = data.workloads.gpus;
   const priced = Boolean(data.workloads.currency && data.workloads.cost);
   return (
     <div className="flex flex-col gap-5">
-      <div className="grid gap-5 lg:grid-cols-[1fr_auto]">
-        <Card className="grid grid-cols-[repeat(auto-fit,minmax(130px,1fr))] gap-y-3 p-3">
-          <Tile label={priced ? "Monthly cost" : "Requests"} value={f.cost} tone="money" />
-          <Tile label="Wasted spend" value={f.wasted} tone="waste" bar={f.share} note={priced ? undefined : "of CPU requests"} />
-          <Tile label="Savings available" value={f.available} tone="saving" note={priced ? "a month" : undefined} />
-          <Tile label="Savings realized" value={f.realized} tone="saving" note={priced ? "a month, at today's prices" : "held less, now"} />
-          {gpus && <Tile label="Idle GPUs" value={gpus.text} tone="waste" note={gpus.cost != null && data.workloads.currency ? `${whole(gpus.cost, data.workloads.currency)} a month` : undefined} />}
-          <Tile label="On the Agenda" value={String(data.agenda?.items.length ?? 0)} />
-        </Card>
-        <Card className="flex items-center justify-center">
-          <Ring part={auto.automated} whole={auto.ready} label="containers automated" />
-        </Card>
-      </div>
+      <Figures>
+        <Tile label="Savings available" value={f.available} tone="saving" hero note={priced ? "a month" : undefined} />
+        <Tile label={priced ? "Monthly cost" : "Requests"} value={f.cost} />
+        <Tile label="Wasted spend" value={f.wasted} bar={f.share} note={priced ? undefined : "of CPU requests"} />
+        <Tile label="Savings realized" value={f.realized} tone="saving" note={priced ? "a month, at today's prices" : "held less, now"} />
+        <Tile
+          label="Automated"
+          value={auto.ready ? pct(auto.automated / auto.ready) : "none"}
+          bar={auto.ready ? auto.automated / auto.ready : 0}
+          note={`${auto.automated} of ${auto.ready} containers`}
+        />
+        {gpus && <Tile label="Idle GPUs" value={gpus.text} note={gpus.cost != null && data.workloads.currency ? `${whole(gpus.cost, data.workloads.currency)} a month` : undefined} />}
+        <Tile label="On the Agenda" value={String(data.agenda?.items.length ?? 0)} />
+      </Figures>
       <Card>
         <div className="grid gap-6 md:grid-cols-2">
           {(["cpu", "memory"] as const).map((res) => (
@@ -95,16 +96,20 @@ export function OverviewPage({ contract }: { contract: string }) {
               {data.totals.points.length ? (
                 <TotalsChart totals={data.totals} res={res} />
               ) : (
-                <p className="hint">No hourly run stored in the last 14 days.</p>
+                <Empty
+                  what="No hourly run stored in the last 14 days."
+                  why="The charts sum the Sizings each hourly run stores; a run needs the cluster's Prometheus."
+                  action={<a href={`/app/?contract=${encodeURIComponent(contract)}&view=health`}>Check Health</a>}
+                />
               )}
             </div>
           ))}
         </div>
-        <ul className="m-0 mt-3 flex list-none flex-wrap justify-center gap-5 p-0 text-sm text-muted" aria-label="Legend">
-          <li className="flex items-center gap-2"><span className="size-2.5 rounded-full bg-usage" />Usage (the Sizings' basis)</li>
-          <li className="flex items-center gap-2"><span className="size-2.5 rounded-full bg-request" />Requests</li>
-          <li className="flex items-center gap-2"><span className="size-2.5 rounded-full bg-waste" />Waste</li>
-          <li className="flex items-center gap-2"><span className="size-2.5 rounded-full bg-saving" />Sizings</li>
+        <ul className="m-0 mt-3 flex list-none flex-wrap justify-center gap-5 p-0 text-[13px] text-muted" aria-label="Legend">
+          <li className="flex items-center gap-2"><span className="h-0.5 w-3 bg-accent" />Sizings</li>
+          <li className="flex items-center gap-2"><span className="h-0.5 w-3 bg-request" />Requests</li>
+          <li className="flex items-center gap-2"><span className="h-2 w-3 bg-muted/20" />Waste, between them</li>
+          <li className="flex items-center gap-2"><span className="h-2 w-3 bg-ink/20" />Usage (the Sizings' basis)</li>
         </ul>
       </Card>
       {data.agenda && (

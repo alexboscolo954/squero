@@ -25,7 +25,7 @@ import { amount, change, cores, cpu, gib, memory, money, pct, rank, when } from 
 import { Shell } from "./Shell";
 import { Badge, Change } from "./ui/badge";
 import { Button } from "./ui/button";
-import { Card, Tile } from "./ui/card";
+import { Card, Empty, Figures, Skeleton, Tile } from "./ui/card";
 
 /** The pages across every Contract: no Kill switch. */
 const ACROSS = ["contracts", "fleet"];
@@ -140,6 +140,7 @@ export default function App() {
         {view === "contracts" && <ContractsPage />}
         {view === "fleet" && <FleetPage />}
         {data && workloadsView && <Page contract={shown} data={data} />}
+        {shown && !data && workloadsView && !error && <Skeleton />}
         {shown && view === "overview" && <OverviewPage contract={shown} />}
         {shown && view === "investigations" && <InvestigationList contract={shown} />}
         {shown && view === "teachings" && <TeachingsPage contract={shown} />}
@@ -147,6 +148,7 @@ export default function App() {
         {shown && view === "checks" && <ChecksPage contract={shown} />}
         {shown && view === "health" && <HealthPage contract={shown} />}
         {shown && view === "nodes" && <NodesPage contract={shown} />}
+        {shown && !allocation && costView && !error && <Skeleton />}
         {allocation && costView && <CostPage data={allocation} bills={bills} setBy={setBy} compare={compare} setCompare={setCompare} />}
     </Shell>
   );
@@ -170,7 +172,7 @@ function KillSwitch({ contract }: { contract: string }) {
   const couldnt = failed && <span className="text-sm text-bad">Couldn't: {failed}</span>;
   // On, it takes a line of its own under the header's: nothing on the page may hide it.
   return state.on ? (
-    <div role="status" className="order-last flex basis-full flex-wrap items-center gap-3 rounded-md bg-red-700 px-4 py-2 text-sm text-white">
+    <div role="status" className="order-last flex basis-full flex-wrap items-center gap-3 rounded-md bg-bad-solid px-4 py-2 text-sm text-on-solid">
       <Power className="size-4 shrink-0" aria-hidden="true" />
       <p className="m-0 mr-auto">
         Kill switch on since {when(state.since)} ({state.by}): approving is refused and no change
@@ -182,7 +184,7 @@ function KillSwitch({ contract }: { contract: string }) {
           <Button size="sm" variant="outline" onClick={() => (setAsking(false), act(api.turnOffKillSwitch))}>
             Yes, turn it off
           </Button>
-          <Button size="sm" variant="ghost" className="text-white hover:bg-white/10" onClick={() => setAsking(false)}>
+          <Button size="sm" variant="ghost" className="text-on-solid hover:bg-on-solid/10" onClick={() => setAsking(false)}>
             Keep it on
           </Button>
         </>
@@ -383,19 +385,25 @@ function Page({ contract, data }: { contract: string; data: Workloads }) {
           );
         })}
       </ul>
-      {clusters.length === 0 && <p>No Sizings stored yet: the Hub stores them hourly.</p>}
+      {clusters.length === 0 && (
+        <Empty
+          what="No Sizings stored yet."
+          why="The Hub stores them hourly, from each cluster's Prometheus."
+          action={<a href={`/app/?contract=${encodeURIComponent(contract)}&view=health`}>Check Health</a>}
+        />
+      )}
       <PriceNotes notes={data.prices} />
-      <Card className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-y-3 p-3">
+      <Figures>
         <Tile
+          hero
           label={priced ? "Waste a month" : "Waste"}
           value={priced ? amount(data.cost!.waste, data.currency!) : cores(data.total.cpu ?? 0)}
-          tone="waste"
           note={priced ? `${cores(data.total.cpu ?? 0)}, ${gib(data.total.memory ?? 0)}` : gib(data.total.memory ?? 0)}
         />
-        {priced && <Tile label="Requests a month" value={amount(data.cost!.requests, data.currency!)} tone="money" />}
+        {priced && <Tile label="Requests a month" value={amount(data.cost!.requests, data.currency!)} />}
         <Tile label="Workloads" value={String(data.workloads.length)} note={`${data.learning.length} learning`} />
-        {data.gpus && <Tile label="Idle GPUs" value={data.gpus.text} tone="waste" />}
-      </Card>
+        {data.gpus && <Tile label="Idle GPUs" value={data.gpus.text} />}
+      </Figures>
       <p className="m-0 -mt-3 text-xs text-muted">
         {priced
           ? "Waste: requests above the Sizings; requests are what pods reserve, not the nodes."
@@ -580,11 +588,11 @@ function CostPage({
       {cmp && cmp.left_out.length > 0 && (
         <p className="notice">Left out of the change, requests or labels unknown then: {cmp.left_out.join(", ")}</p>
       )}
-      <Card className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-y-3 p-3">
-        <Tile label="Requests" value={shown(data.total, "requests")} tone="money" note={cmp ? change(cmp.change, "requests", currency) : undefined} />
-        <Tile label="Savings available" value={shown(data.total, "waste")} tone="saving" note={cmp ? change(cmp.change, "waste", currency) : undefined} />
-        {data.gpus && <Tile label="Idle GPUs" value={data.gpus.text} tone="waste" note="beside the Savings, never in them" />}
-      </Card>
+      <Figures>
+        <Tile hero label="Savings available" value={shown(data.total, "waste")} tone="saving" note={cmp ? change(cmp.change, "waste", currency) : undefined} />
+        <Tile label="Requests" value={shown(data.total, "requests")} note={cmp ? change(cmp.change, "requests", currency) : undefined} />
+        {data.gpus && <Tile label="Idle GPUs" value={data.gpus.text} note="beside the Savings, never in them" />}
+      </Figures>
       <p className="m-0 -mt-3 text-xs text-muted">
         Requests in the Contract's namespaces, not the nodes; the available Savings is what the requests above the
         Sizings cost.

@@ -12,10 +12,10 @@ const button = cva(
   {
     variants: {
       variant: {
-        default: "bg-accent text-white hover:opacity-90",
+        default: "bg-accent text-on-solid hover:opacity-90",
         outline: "border border-line bg-panel text-ink hover:bg-raised",
         ghost: "bg-transparent text-ink hover:bg-raised",
-        danger: "bg-bad text-white hover:opacity-90",
+        danger: "bg-bad-solid text-on-solid hover:opacity-90",
         "danger-outline": "border border-bad bg-transparent text-bad hover:bg-bad-bg",
       },
       size: { default: "h-9 px-4", sm: "h-8 px-3", icon: "size-9" },

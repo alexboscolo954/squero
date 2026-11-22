@@ -6,6 +6,7 @@
 // it is after.
 import { useEffect, useState } from "react";
 import * as api from "./api";
+import { Skeleton } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { when } from "./format";
 
@@ -60,7 +61,7 @@ export function InvestigationList({ contract }: { contract: string }) {
     api.investigations(contract).then(setRows, (e: Error) => setError(e.message));
   }, [contract]);
   if (error) return <p className="notice">The Hub didn't answer: {error}</p>;
-  if (!rows) return null;
+  if (!rows) return <Skeleton />;
   return (
     <>
       <h1 className="sr-only">{contract}: Investigations</h1>
