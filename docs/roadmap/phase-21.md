@@ -2,7 +2,7 @@
 
 **In short:** the console works but looks like raw HTML: a link bar, headings and bare forms. This phase gives it a real dashboard design, in the style of ScaleOps' product UI, without changing what any page does. It is built next, before Phase 19 continues.
 
-**Status:** built 2026-11-21 (21.1 to 21.4). Owed: a look at the light theme, and the release that puts it on the mini PC's Hub.
+**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5a built; 21.5b next. Owed: a look at the light theme and at every page with real data.
 
 **Goal:** a console the Operator is glad to open every day: a sidebar, an Overview dashboard, and every page laid out as number tiles, charts and tables in cards.
 
@@ -15,6 +15,8 @@
 | [21.3a](#213-the-optimizer-pages) | Workloads and Cost restyled | ✅ built |
 | 21.3b | Nodes, Automation and Fleet restyled | ✅ built |
 | [21.4](#214-the-triage-pages) | The triage pages restyled: Investigations, Teachings, Checks, Health, Contracts | ✅ built |
+| [21.5a](#215-refinement-after-two-design-skills) | Tokens, font, sidebar, header, buttons, badges, tables, focus and motion | ✅ built |
+| 21.5b | Number tiles, charts, empty and loading states; the checklist on every page | ⏳ |
 
 ## Why this phase exists
 
@@ -159,3 +161,26 @@ Two rounds, all answers the recommended ones.
 **Tests:** 3 in `Triage.test.tsx` (the status badges' colours, the Health tiles and the failing frame, the primary and danger buttons); the 67 earlier tests unchanged. 5 mutations, all caught.
 
 **Checked:** in Chrome on a local build with the Hub's CSP and sample data: Teachings (the page of the owner's screenshot), Health and Investigations; no CSP violation. Dark theme only.
+
+## 21.5 Refinement after two design skills
+
+**Why:** on 0.64.0 the owner found the console "better but still too dull", and pointed at two design skills, [hallmark](https://github.com/nutlope/hallmark) and [taste-skill](https://github.com/leonxlnx/taste-skill). Both were read (nothing installed or run) and distilled into a brief. Their diagnosis: every panel the same box at the same weight, seven colours with none argued, uppercase grey table heads, the system font. Their cure: scale and mass, one accent, not more colour.
+
+**Decided (grill, 2026-11-22, all recommended):**
+- **Colour, a hybrid:** figures in ink, but the Savings in the accent (what squero is for); one accent, a teal-green (hue 175: the skills ban purple-blue and cyan on dark, so the indigo and the teal go); status colours (ok, warning, failing) only on badges and notices, never the accent; in charts one argued series, the Sizings.
+- **Font:** Hanken Grotesk (variable), JetBrains Mono for ids and code, both self-hosted from npm (`@fontsource-variable/*`); the Hub serves `.woff2` from `/app/assets/`.
+- **Hierarchy:** one hero figure (40 px) and the rest 32 px, separated by thin rules, no boxes; the sidebar on the page's own ground with a rule and an accent bar on the active page; tables without an outer border, 40 px rows, sentence-case heads, the selected row barred in the accent; elevation by lightness on dark, no shadows, no card in a card.
+- **The Kill switch:** outlined; no confirm to turn it on (the safe direction, an emergency), a confirm to turn it off.
+- **Slices:** 21.5a the tokens and the shared parts, 21.5b the tiles, charts and states, then the skills' checklist on every page.
+
+**Built 21.5a (2026-11-22):**
+- Tokens for both themes: a neutral canvas, cards a step lighter, raised surfaces, rules, ink and muted text, the accent (`#0b6b60` light, `#4fbfaf` dark), ok, warning and failing with their tints; dark text at weight 350. The ScaleOps colours retired: money and waste are ink, the Savings the accent.
+- Hanken Grotesk and JetBrains Mono (5.3.0, OFL), every file served by the Hub: Vite never inlines an asset (`assetsInlineLimit: 0`), since a small font would become a `data:` URL that `default-src 'self'` refuses. The Hub serves `.woff2` as `font/woff2`.
+- The sidebar on the canvas with a right rule, sentence-case group names, the active page barred in the accent; the header 56 px with a chevron breadcrumb.
+- Buttons 36 px, radius 8, a 1 px press, disabled at 55%; badges in status colours (the policy pill neutral); tables with rules between rows only, sentence-case heads, the selected row barred; one focus ring everywhere; `prefers-reduced-motion` turns motion off.
+- The Kill switch asks before turning off ("Changes to this Contract's systems will run again." Yes, turn it off / Keep it on), the question reset when the Contract changes.
+
+**Tests:** the asset route serves a `.woff2` as `font/woff2`; the Kill switch test sends nothing on "Keep it on" and turns off on "Yes"; a new one: the question never follows you to another Contract. 6 mutations, all caught (one after that test).
+
+**Checked:** in Chrome with the Hub's CSP: both fonts load from the Hub, no CSP violation. Dark theme only.
+

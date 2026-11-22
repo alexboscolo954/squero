@@ -18,7 +18,8 @@ const proxy = {
 export default defineConfig({
   base: "/app/",
   plugins: [react(), tailwindcss()],
-  build: { outDir: "dist", assetsDir: "assets", sourcemap: false },
+  // assetsInlineLimit 0: never a data: URL (a small font would be one), which default-src 'self' refuses
+  build: { outDir: "dist", assetsDir: "assets", sourcemap: false, assetsInlineLimit: 0 },
   server: { host: "127.0.0.1", port: 5173, proxy: { "/api": proxy } },
   test: { environment: "jsdom" },
 });

@@ -157,8 +157,10 @@ export default function App() {
 function KillSwitch({ contract }: { contract: string }) {
   const [state, setState] = useState<api.KillSwitch | null>(null);
   const [failed, setFailed] = useState("");
+  const [asking, setAsking] = useState(false); // turning it off asks first (slice 21.5a); on never
   useEffect(() => {
     setState(null);
+    setAsking(false);
     setFailed("");
     api.killSwitch(contract).then(setState, () => setState(null));
   }, [contract]);
@@ -174,7 +176,19 @@ function KillSwitch({ contract }: { contract: string }) {
         Kill switch on since {when(state.since)} ({state.by}): approving is refused and no change
         to this Contract's systems runs.
       </p>
-      <Button size="sm" variant="outline" onClick={() => act(api.turnOffKillSwitch)}>Turn it off</Button>
+      {asking ? (
+        <>
+          <span>Changes to this Contract's systems will run again.</span>
+          <Button size="sm" variant="outline" onClick={() => (setAsking(false), act(api.turnOffKillSwitch))}>
+            Yes, turn it off
+          </Button>
+          <Button size="sm" variant="ghost" className="text-white hover:bg-white/10" onClick={() => setAsking(false)}>
+            Keep it on
+          </Button>
+        </>
+      ) : (
+        <Button size="sm" variant="outline" onClick={() => setAsking(true)}>Turn it off</Button>
+      )}
       {couldnt}
     </div>
   ) : (

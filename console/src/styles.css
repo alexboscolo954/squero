@@ -4,26 +4,35 @@
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 
-/* The colours, light and dark (following the system). The meanings follow ScaleOps' product UI:
-   money indigo, savings green, waste pink, request amber, usage blue; the accent is squero's.
+/* The colours, light and dark, following the system (slice 21.5a, after the hallmark and taste
+   skills): a neutral canvas, cards a step lighter (no shadows on dark), one accent (a teal-green,
+   hue 175: never cyan or purple-blue), figures in ink, status colours only on badges and notices.
    ponytail: one palette per theme; tune these values, never the components. */
 :root {
-  --bg: #f3f4f6; --panel: #fff; --text: #111827; --muted: #6b7280; --line: #e5e7eb;
-  --accent: #0e7490; --accent-bg: #e0f2f5;
-  --bad: #c0262d; --bad-bg: #fde8e8; --wait: #8a5a00; --wait-bg: #fdf1d8;
-  --rail: #0f1216; --rail-text: #c9ced6; --rail-muted: #7b8490; --rail-hover: #1b2027;
-  --money: #5b5bd6; --saving: #10b77f; --waste: #e5486e; --waste-bg: #fbe3ea;
-  --request: #e0a526; --usage: #3b82f6;
+  --bg: #f9fafb; --panel: #ffffff; --raised: #f1f3f5; --line: #dde2e8;
+  --text: #1f262e; --muted: #5b6571;
+  --accent: #0b6b60; --accent-bg: rgb(11 107 96 / 0.10);
+  --ok: #15803d; --ok-bg: rgb(21 128 61 / 0.10);
+  --bad: #b42323; --bad-bg: rgb(180 35 35 / 0.10);
+  --wait: #8a5a00; --wait-bg: rgb(138 90 0 / 0.10);
+  --rail: var(--bg); --rail-text: var(--muted); --rail-muted: var(--muted); --rail-hover: var(--raised);
+  --rail-active: var(--text);
+  /* the figures: ink, the Savings the accent (Q1 of 21.5) */
+  --money: var(--text); --saving: var(--accent); --waste: var(--text); --waste-bg: var(--raised);
+  --request: #8a94a0; --usage: var(--text);
+  --weight: 400;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0b0d10; --panel: #15181d; --text: #e5e7eb; --muted: #9ca3af; --line: #262b33;
-    --accent: #38bdd8; --accent-bg: #10303a;
-    --bad: #ff7b7b; --bad-bg: #3a1c1c; --wait: #f2c26b; --wait-bg: #382a10;
-    --rail: #07090b; --rail-text: #c9ced6; --rail-muted: #6b7480; --rail-hover: #14181d;
-    --money: #8b8bf5; --saving: #34d399; --waste: #f47b98; --waste-bg: #3b1722;
-    --request: #f2c04a; --usage: #60a5fa;
+    --bg: #0e1216; --panel: #161b21; --raised: #1e242c; --line: #2d343d;
+    --text: #eef2f6; --muted: #9ca5b0;
+    --accent: #4fbfaf; --accent-bg: rgb(79 191 175 / 0.14);
+    --ok: #46c08a; --ok-bg: rgb(70 192 138 / 0.14);
+    --bad: #f2777a; --bad-bg: rgb(242 119 122 / 0.14);
+    --wait: #e6b450; --wait-bg: rgb(230 180 80 / 0.14);
+    --request: #7d8792;
+    --weight: 350; /* light type on a dark ground reads heavier */
     color-scheme: dark;
   }
 }
@@ -42,22 +51,35 @@
   --color-rail-text: var(--rail-text);
   --color-rail-muted: var(--rail-muted);
   --color-rail-hover: var(--rail-hover);
+  --color-rail-active: var(--rail-active);
+  --color-raised: var(--raised);
+  --color-ok: var(--ok);
+  --color-ok-bg: var(--ok-bg);
+  --color-wait: var(--wait);
+  --color-wait-bg: var(--wait-bg);
   --color-money: var(--money);
   --color-saving: var(--saving);
   --color-waste: var(--waste);
   --color-waste-bg: var(--waste-bg);
   --color-request: var(--request);
   --color-usage: var(--usage);
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: "Hanken Grotesk Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, Menlo, monospace;
 }
 
 /* The pages' own rules, until 21.3 and 21.4 move each page to the components. */
 @layer legacy {
   * { box-sizing: border-box; }
+  html, body { overflow-x: clip; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font: var(--weight) 14px/1.5 "Hanken Grotesk Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-variant-numeric: tabular-nums;
   }
+  code, pre { font-family: "JetBrains Mono Variable", ui-monospace, Menlo, monospace; font-size: 0.9em; }
+  strong, b, h1, h2, h3, th { font-weight: 600; }
+  /* one focus ring everywhere, shown at once (slice 21.5a) */
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
   h1 { font-size: 1.4rem; margin: 0.5rem 0; }
@@ -76,30 +98,30 @@
   textarea { display: block; width: 100%; max-width: 48rem; min-height: 4.5rem; margin: 0.5rem 0; }
   select:focus, input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   button:not(.link) {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 0.35rem 0.85rem;
-    cursor: pointer; font-size: 0.875rem; font-weight: 500;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 0 0.85rem;
+    min-height: 2.25rem; cursor: pointer; font-size: 0.875rem; font-weight: 500;
+    transition: transform 90ms cubic-bezier(.2, .8, .2, 1), opacity 120ms;
   }
-  button:not(.link):hover { background: var(--bg); }
-  button:disabled { opacity: 0.5; cursor: default; }
+  button:not(.link):hover { background: var(--raised); }
+  button:not(.link):active { transform: translateY(1px); }
+  button:disabled { opacity: 0.55; cursor: not-allowed; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.primary:hover { background: var(--accent); opacity: 0.9; }
-  button.danger { border-color: var(--bad); color: var(--bad); }
-  table {
-    width: 100%; border-collapse: separate; border-spacing: 0; background: var(--panel);
-    border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
-  }
+  button.danger { border-color: var(--bad); color: var(--bad); background: transparent; }
+  /* Tables (slice 21.5a): rules between rows only, sentence-case heads, the selected row marked. */
+  table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--panel); }
   tbody tr:last-child td { border-bottom: 0; }
-  th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th {
-    font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em;
-    color: var(--muted); background: var(--bg);
-  }
+  th, td { text-align: left; padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td { height: 2.5rem; }
+  th { font-size: 13px; font-weight: 500; color: var(--muted); white-space: nowrap; }
   tbody tr { cursor: pointer; }
-  tbody tr:hover td, tbody tr.picked td { background: var(--bg); }
+  tbody tr:hover td { background: var(--raised); }
+  tbody tr.picked td { background: var(--accent-bg); }
+  tbody tr.picked td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
   button.link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
   .chip {
-    display: inline-block; margin: 0 0.25rem 0.25rem 0; padding: 0 0.45rem; border-radius: 999px;
-    background: var(--bad-bg); color: var(--bad); font-size: 0.8rem;
+    display: inline-block; margin: 0 0.25rem 0.25rem 0; padding: 0.05rem 0.5rem; border-radius: 999px;
+    background: var(--bad-bg); color: var(--bad); font-size: 13px; font-weight: 500;
   }
   .detail {
     margin-top: 1.25rem; padding: 1rem 1.25rem; background: var(--panel);
@@ -125,4 +147,9 @@
   table + h2 { margin-top: 1.25rem; }
   .bad { color: var(--bad); font-weight: 600; }
   .nowrap { white-space: nowrap; }
+}
+
+/* Motion off for whoever asks (slice 21.5a). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
 }

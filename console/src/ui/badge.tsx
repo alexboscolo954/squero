@@ -1,18 +1,18 @@
-// A badge and a pill (slice 21.3a): a short state in colour, as ScaleOps marks policies
-// (lavender pills) and Automation (green).
+// A badge (slice 21.3a; 21.5a: status colours only, never the accent): a short state, its text
+// always there, its colour a tint with the same hue's text.
 import type { ReactNode } from "react";
 import { cn } from "./cn";
 
 const TONE = {
-  policy: "bg-money/15 text-money",
-  good: "bg-saving/15 text-saving",
+  policy: "bg-raised text-ink",
+  good: "bg-ok-bg text-ok",
   bad: "bg-bad-bg text-bad",
-  muted: "bg-line text-muted",
+  muted: "bg-raised text-muted",
 };
 
 export function Badge({ tone = "muted", children }: { tone?: keyof typeof TONE; children: ReactNode }) {
   return (
-    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap", TONE[tone])}>
+    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[13px] font-medium whitespace-nowrap", TONE[tone])}>
       {children}
     </span>
   );

@@ -28,7 +28,7 @@ const brief = (id: string, status: string, failed = false) =>
 test("an Investigation's status is green when done, red when failed, grey otherwise", async () => {
   hub({ "/api/v1/contracts/shop/investigations": [brief("a", "done"), brief("b", "done", true), brief("c", "waiting_approval")] });
   render(<InvestigationList contract="shop" />);
-  expect((await screen.findByText("done")).className).toContain("text-saving");
+  expect((await screen.findByText("done")).className).toContain("text-ok"); // a status colour, never the accent
   expect(screen.getByText("failed").className).toContain("text-bad");
   expect(screen.getByText("waiting approval").className).toContain("text-muted");
   expect(screen.getByText("Ask").className).toBe("primary");

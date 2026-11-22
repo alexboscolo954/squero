@@ -2,7 +2,7 @@
 
 **In short:** Phase 18 makes the cluster parts easy to install and safe to upgrade. One signed Helm chart installs the Relay and the Actuator. A Protocol number makes the Hub refuse a version mismatch and say who must upgrade. The Fleet page shows every Contract on one screen.
 
-**Status:** complete (2026-11-21). Released in 0.62.0 (18.1) and 0.63.0 (18.3, 18.4). 18.1d was built after 0.63.0; no release names it yet.
+**Status:** complete (2026-11-21). Released in 0.62.0 (18.1) and 0.63.0 (18.3, 18.4). 18.1d shipped in 0.64.0.
 
 **Goal:** install what runs in a client's cluster with one signed Helm chart, make the Hub and its cluster parts refuse a version mismatch clearly, and see every Contract on one page.
 
@@ -13,7 +13,7 @@
 | [18.1a](#181a-the-chart) | The `squero` Helm chart replaces the kustomize directories | ✅ built |
 | [18.1b](#181b-the-done-when-in-ci) | CI installs the chart into kind and sees the Relay connect | ✅ built, in CI |
 | [18.1c](#181c-publish-and-sign) | Chart and image published to ghcr and signed with cosign | ✅ built, checked by 0.62.0 |
-| [18.1d](#181d-no-npm-ci-under-qemu) | The console builds on the runner's own platform | ✅ built |
+| [18.1d](#181d-no-npm-ci-under-qemu) | The console builds on the runner's own platform | ✅ built, checked by 0.64.0 |
 | [18.3](#183-protocol) | A Protocol number per part; the Hub refuses a mismatch and says who must upgrade | ✅ built, not checked live |
 | [18.4](#184-fleet) | The Fleet page: one row per Contract | ✅ built, not checked live |
 | 18.2 | OpenShift values | Deferred (in the grill) |
@@ -88,7 +88,7 @@ Three rounds, all answers the recommended ones.
 
 **Built (2026-11-21):** `FROM --platform=$BUILDPLATFORM` on the Dockerfile's `console` stage. Its output is static files, the same for every architecture.
 
-**Checked:** locally, the stage built for `linux/amd64` on the arm64 Mac ran natively (its `node` binary is AArch64). The next tag run shows the build time in CI.
+**Checked:** locally, the stage built for `linux/amd64` on the arm64 Mac ran natively (its `node` binary is AArch64). In CI by 0.64.0's tag run (2026-11-22): the image build took 3 minutes 6 seconds, the whole `publish` job 4 minutes 16 seconds.
 
 ## 18.3 Protocol
 

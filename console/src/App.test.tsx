@@ -526,10 +526,37 @@ test("the Kill switch shows who turned it on, and only here does it go off", asy
   render(<App />);
   expect(await screen.findByText(/Kill switch on since 2023-11-14 22:13 UTC \(mcp:alex@example.com\)/)).toBeTruthy();
   fireEvent.click(screen.getByText("Turn it off"));
+  fireEvent.click(screen.getByText("Keep it on")); // slice 21.5a: off asks first
+  expect(sent).toEqual(["GET"]); // nothing sent
+  fireEvent.click(screen.getByText("Turn it off"));
+  expect(screen.getByText("Changes to this Contract's systems will run again.")).toBeTruthy();
+  fireEvent.click(screen.getByText("Yes, turn it off"));
   expect(await screen.findByText("Turn on the Kill switch")).toBeTruthy();
   fireEvent.click(screen.getByText("Turn on the Kill switch"));
   expect(await screen.findByText("Turn it off")).toBeTruthy();
   expect(sent).toEqual(["GET", "DELETE", "POST"]);
+});
+
+test("a question to turn the Kill switch off never follows you to another Contract", async () => {
+  const on = { on: true, by: "console:op", since: 1_700_000_000 };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const path = url.split("?")[0];
+      if (path.endsWith("/kill-switch")) return new Response(JSON.stringify(on), { status: 200 });
+      const routes: Record<string, unknown> = {
+        "/api/v1/contracts": [{ id: "demo-shop", name: "demo-shop" }, { id: "demo-bank", name: "demo-bank" }],
+      };
+      return new Response(JSON.stringify(routes[path] ?? {}), { status: path in routes ? 200 : 404 });
+    }),
+  );
+  history.replaceState(null, "", "/app/?contract=demo-shop&view=teachings");
+  render(<App />);
+  fireEvent.click(await screen.findByText("Turn it off"));
+  expect(screen.getByText("Yes, turn it off")).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Contract"), { target: { value: "demo-bank" } });
+  expect(await screen.findByText("Turn it off")).toBeTruthy(); // asked anew, for demo-bank
+  expect(screen.queryByText("Yes, turn it off")).toBeNull();
 });
 
 test("the Kill switch is on a Contract's own pages only, never across Contracts or on one Investigation", async () => {

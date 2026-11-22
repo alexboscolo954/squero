@@ -58,7 +58,7 @@ test("an Investigation is under Investigations, names no Contract and hides the 
 
 test("the header names the Contract on its pages, and none on a page across Contracts", () => {
   shell("teachings");
-  expect(document.querySelector("header")?.textContent).toBe("Demo bank/Teachings");
+  expect(document.querySelector("header")?.textContent).toBe("Demo bankTeachings"); // a chevron between
   cleanup();
   shell("fleet");
   expect(document.querySelector("header")?.textContent).toBe("Fleet");

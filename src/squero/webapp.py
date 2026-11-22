@@ -59,7 +59,13 @@ HEADERS = {
     "X-Content-Type-Options": "nosniff",
 }
 ASSET = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")  # Vite's hashed names; no path
-TYPES = {".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml"}
+# slice 21.5a: the console's own fonts, self-hosted, so default-src 'self' still holds
+TYPES = {
+    ".js": "text/javascript",
+    ".css": "text/css",
+    ".svg": "image/svg+xml",
+    ".woff2": "font/woff2",
+}
 TOKEN_PAGE = "/app/?view=token"  # noqa: S105 (a page, not a secret)
 SHOWN = 4000  # characters of a tool call's result, as the Jinja page shows
 DAY = 86400.0

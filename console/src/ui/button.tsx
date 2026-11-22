@@ -4,16 +4,17 @@ import type { ComponentProps } from "react";
 import { cn } from "./cn";
 
 const button = cva(
-  "inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 rounded-md border-0 text-sm " +
-    "font-medium whitespace-nowrap transition-colors disabled:pointer-events-none disabled:opacity-50 " +
+  "inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 rounded-lg border-0 text-sm " +
+    "font-medium whitespace-nowrap transition-transform duration-90 active:translate-y-px " +
+    "disabled:cursor-not-allowed disabled:opacity-55 " +
     "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent " +
     "[&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
         default: "bg-accent text-white hover:opacity-90",
-        outline: "border border-line bg-panel text-ink hover:bg-page",
-        ghost: "bg-transparent text-ink hover:bg-page",
+        outline: "border border-line bg-panel text-ink hover:bg-raised",
+        ghost: "bg-transparent text-ink hover:bg-raised",
         danger: "bg-bad text-white hover:opacity-90",
         "danger-outline": "border border-bad bg-transparent text-bad hover:bg-bad-bg",
       },

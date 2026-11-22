@@ -39,6 +39,7 @@ def app_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     )
     (tmp_path / "assets" / "index-a1.js").write_text("console.log(1)")
     (tmp_path / "assets" / "index-a1.css").write_text("body{}")
+    (tmp_path / "assets" / "font-a1.woff2").write_bytes(b"wOF2")
     (tmp_path / "secret.txt").write_text("not an asset")
     (tmp_path / "assets" / ".hidden").write_text("a dotfile is never served")
     monkeypatch.setattr(webapp, "APP_DIR", tmp_path)
@@ -78,6 +79,7 @@ def test_the_page_and_its_files_need_an_operators_identity(
         page = c.get("/app/", headers=AS_OPERATOR)  # no token needed for the page
         js = c.get("/app/assets/index-a1.js", headers=AS_OPERATOR)
         css = c.get("/app/assets/index-a1.css", headers=AS_OPERATOR)
+        font = c.get("/app/assets/font-a1.woff2", headers=AS_OPERATOR)  # slice 21.5a
         refused = [
             c.get(path, headers=headers)
             for path in ("/app/", "/app/assets/index-a1.js")
@@ -91,7 +93,8 @@ def test_the_page_and_its_files_need_an_operators_identity(
     assert page.headers["cache-control"] == "no-store"
     assert js.headers["content-type"].startswith("text/javascript")
     assert css.headers["content-type"].startswith("text/css")
-    for r in (page, js, css):
+    assert font.headers["content-type"] == "font/woff2" and font.content == b"wOF2"
+    for r in (page, js, css, font):
         assert r.headers["content-security-policy"] == CSP
         assert r.headers["x-frame-options"] == "DENY"
         assert r.headers["x-content-type-options"] == "nosniff"

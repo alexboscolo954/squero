@@ -4,7 +4,7 @@ import type { ComponentProps, ReactNode } from "react";
 import { cn } from "./cn";
 
 export function Card({ className, ...props }: ComponentProps<"section">) {
-  return <section className={cn("rounded-xl border border-line bg-panel p-5", className)} {...props} />;
+  return <section className={cn("rounded-[10px] border border-line bg-panel p-5", className)} {...props} />;
 }
 
 export function CardTitle({ children }: { children: ReactNode }) {
