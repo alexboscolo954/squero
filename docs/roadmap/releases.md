@@ -1,11 +1,12 @@
 # Releases
 
-**In short:** every version the roadmap names, from 0.2 to 0.65.0, newest first, with its date and what it shipped. Where the roadmap gives no release date, the date is the day the slice was built or checked live, and the Notes column says so. Events that were not releases, such as the rename and the license change, are in [Notable events](#notable-events).
+**In short:** every version the roadmap names, from 0.2 to 0.66.0, newest first, with its date and what it shipped. Where the roadmap gives no release date, the date is the day the slice was built or checked live, and the Notes column says so. Events that were not releases, such as the rename and the license change, are in [Notable events](#notable-events).
 
 ## Releases
 
 | Version | Date | What it shipped | Notes |
 |---|---|---|---|
+| 0.66.0 | 2026-11-22 | 21.6: one page pattern on every page of the console, after a live reference: denser type, a title row with counts and controls, figures in cards (21.6a); the Overview as a grid of six cards, the charts on Cost (21.6b); bars in the Workloads and Cost tables, a Total row, numbers in mono (21.6c); Nodes and Automation (21.6d), Investigations and an Investigation's page (21.6e), Checks, Health, Teachings, Contracts and the Approver token (21.6f) | Runs on the mini PC's Hub from the day it was tagged. Image and chart signed and verified in the tag run; the chart is public. No API change but one schema's description |
 | 0.65.0 | 2026-11-22 | 21.5: the console refined after the hallmark and taste design skills (one accent, figures in ink but the Savings, one hero figure, charts with one argued series, Hanken Grotesk and JetBrains Mono served by the Hub, a confirm before turning the Kill switch off) | Runs on the mini PC's Hub. Tagged on `251980e`, not the version commit: the version commit's CI failed on a race in the integration test (a checkout pod's restarts seen before its last exit), fixed first |
 | 0.64.0 | 2026-11-22 | Phase 21, the console design: the sidebar and header (21.1), the Overview with `GET /api/v1/contracts/{id}/totals` (21.2), the optimizer pages (21.3a, 21.3b) and the triage pages (21.4) restyled after ScaleOps' product UI; also 18.1d and the publish job's 30-minute limit | Runs on the mini PC's Hub. Its tag run checked 18.1d: the image build took 3 minutes 6 seconds (0.63.0's hung 75 minutes) |
 | 0.63.0 | 2026-11-21 | 18.3 Protocol (a Relay or an Actuator of another Protocol is refused, and the Agenda says who must upgrade) and 18.4 the Fleet page | Runs on the mini PC's Hub |

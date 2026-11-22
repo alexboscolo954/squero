@@ -2,7 +2,7 @@
 
 **In short:** the console works but looks like raw HTML: a link bar, headings and bare forms. This phase gives it a real dashboard design, in the style of ScaleOps' product UI, without changing what any page does. It is built next, before Phase 19 continues.
 
-**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6 built (2026-11-22), 21.6a to 21.6f, not released: 0.66.0 on the owner's word. Owed: a look at the light theme and at every page with real data.
+**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6 (21.6a to 21.6f) released in 0.66.0 (2026-11-22), running on the mini PC's Hub. Owed: a look at the light theme and at every page with real data.
 
 **Goal:** a console the Operator is glad to open every day: a sidebar, an Overview dashboard, and every page laid out as number tiles, charts and tables in cards.
 
@@ -394,4 +394,4 @@ Two rounds, all answers the recommended ones.
 - A container's chart legend picked up the small uppercase heads of 21.6a (it is a table).
 - No API change, no eval rerun, no isolation test.
 
-**21.6, whole:** every page of the console now follows one pattern. Not released: 0.66.0 waits for the owner's word.
+**21.6, whole:** every page of the console now follows one pattern. Released in 0.66.0 (2026-11-22): image and chart published, signed and verified in the tag run, the chart public. The mini PC's Hub was upgraded the same day: healthy, and its console build carries the 21.6 pages.
