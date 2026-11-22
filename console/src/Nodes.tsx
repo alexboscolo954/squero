@@ -7,6 +7,8 @@
 import * as api from "./api";
 import { useLoaded } from "./Checks";
 import { cores, gib, money, when } from "./format";
+import { Badge, Change } from "./ui/badge";
+import { Card } from "./ui/card";
 
 const both = (v: { cpu?: number; memory?: number }) => `${cores(v.cpu ?? 0)}, ${gib(v.memory ?? 0)}`;
 
@@ -102,15 +104,15 @@ export function NodesPage({ contract }: { contract: string }) {
   if (error) return <p className="notice">The Hub didn't answer: {error}</p>;
   if (!data) return null;
   return (
-    <>
-      <h1>{contract}: Nodes</h1>
+    <div className="flex flex-col gap-5">
+      <h1 className="sr-only">{contract}: Nodes</h1>
       <p className="hint">
         A node's Room is its allocatable less the requests of every Running or Pending pod on it. Pods outside this
         Contract's namespaces are not visible: they count as one sum per node.
       </p>
       {data.clusters.length === 0 && <p className="hint">No nodes read yet: the hourly run reads them.</p>}
       {data.clusters.map((c) => (
-        <section key={c.cluster} className="nodes">
+        <Card key={c.cluster} className="nodes flex flex-col gap-1">
           <h2>{c.cluster}</h2>
           <p className="hint">
             Read {when(c.at)}. Autoscaler: {c.autoscaler ?? "none named in the Contract"}.
@@ -147,7 +149,13 @@ export function NodesPage({ contract }: { contract: string }) {
             </details>
           )}
           {c.could_go && (
-            <p className="could-go">
+            <p className="m-0 mt-2 text-sm font-semibold">
+              Nodes that could go: now{" "}
+              <Change from={String(c.could_go.now.nodes.length)} to={`${c.could_go.after.nodes.length} after the Sizings`} />
+            </p>
+          )}
+          {c.could_go && (
+            <p className="could-go m-0 rounded-lg border border-saving/40 bg-saving/5 p-3">
               {(["now", "after"] as const).map((which) => {
                 const went = c.could_go![which];
                 return (
@@ -178,7 +186,7 @@ export function NodesPage({ contract }: { contract: string }) {
             </p>
           )}
           {c.unrequested_gpus && c.unrequested_gpus.gpus > 0 && (
-            <p className="could-go">
+            <p className="could-go m-0 rounded-lg border border-line p-3">
               Unrequested GPUs:{" "}
               <strong>
                 {c.unrequested_gpus.gpus} on {c.unrequested_gpus.nodes} nodes
@@ -190,6 +198,7 @@ export function NodesPage({ contract }: { contract: string }) {
           {c.problem ? (
             <p className="notice">{c.problem}</p>
           ) : (
+            <div className="mt-2 overflow-x-auto">
             <table className="investigations">
               <thead>
                 <tr>
@@ -207,26 +216,26 @@ export function NodesPage({ contract }: { contract: string }) {
                   <tr key={n.node}>
                     <td>
                       {n.node} {n.type && <span className="hint">{n.type}</span>}{" "}
-                      {n.cordoned && <span className="chip">cordoned</span>}{" "}
+                      {n.cordoned && <span className="chip bg-line text-muted">cordoned</span>}{" "}
                       {n.gpus && (
                         <>
-                          <span className="chip">
+                          <span className="chip bg-line text-muted">
                             {n.gpus.requests} of {n.gpus.allocatable} GPUs asked{n.gpus.product ? `, ${n.gpus.product}` : ""}
                           </span>{" "}
                         </>
                       )}
                       {n.spot && (
                         <>
-                          <span className="chip">spot</span>{" "}
+                          <span className="chip bg-line text-muted">spot</span>{" "}
                         </>
                       )}
                       {n.pinned && (
                         <>
-                          <span className="chip">pinned</span>{" "}
+                          <span className="chip bg-line text-muted">pinned</span>{" "}
                         </>
                       )}
                       {n.taints.map((t) => (
-                        <span key={t} className="chip">{t}</span>
+                        <span key={t} className="chip bg-line text-muted">{t}</span>
                       ))}
                     </td>
                     <td>{both(n.allocatable)}</td>
@@ -250,17 +259,21 @@ export function NodesPage({ contract }: { contract: string }) {
                     <td>{both(n.daemonsets)}</td>
                     <td>{both(n.room)}</td>
                     <td>
-                      {n.verdict.state === "clear" && "yes: nothing on it blocks"}
-                      {n.verdict.state === "unknown" && <span className="hint">unknown: {n.verdict.why}</span>}
+                      {n.verdict.state === "clear" && <Badge tone="good">yes: nothing on it blocks</Badge>}
+                      {n.verdict.state === "unknown" && (
+                        <span className="hint">
+                          <Badge>unknown</Badge>: {n.verdict.why}
+                        </span>
+                      )}
                       {n.verdict.state === "pinned" && (
                         <>
-                          no: pinned, kept for pods that can't move
+                          <Badge tone="policy">no: pinned, kept for pods that can't move</Badge>
                           <Blockers found={n.verdict.blockers ?? []} />
                         </>
                       )}
                       {n.verdict.state === "blocked" && (
                         <>
-                          <span className="bad">blocked</span>
+                          <Badge tone="bad">blocked</Badge>
                           <Blockers found={n.verdict.blockers ?? []} />
                           {n.verdict.restart &&
                             (n.verdict.restart.workloads.length ? (
@@ -275,9 +288,10 @@ export function NodesPage({ contract }: { contract: string }) {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
-        </section>
+        </Card>
       ))}
-    </>
+    </div>
   );
 }

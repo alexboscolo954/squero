@@ -1,8 +1,10 @@
-// The Fleet (slice 18.4): every Contract the Hub serves, a row each, read-only. Money in each
+// The Fleet (slice 18.4): every Contract the Hub serves, a card each (slice 21.3b), read-only. Money in each
 // Contract's own currency, totals per currency, never converted.
 import { useEffect, useState } from "react";
 import * as api from "./api";
-import { money } from "./format";
+import { money, whole } from "./format";
+import { Badge } from "./ui/badge";
+import { Card, Tile } from "./ui/card";
 
 const counts = (agenda: Record<string, number>) =>
   Object.entries(agenda)
@@ -28,76 +30,66 @@ export function FleetPage() {
   if (error) return <p className="notice">The Hub didn't answer: {error}</p>;
   if (!fleet) return null;
   return (
-    <>
-      <h1>Fleet</h1>
+    <div className="fleet flex flex-col gap-5">
+      <h1 className="sr-only">Fleet</h1>
+      {fleet.totals.map((t) => (
+        <Card key={t.currency} className="total grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-y-3 p-3">
+          <div className="flex flex-col items-center justify-center px-4 text-center">
+            <p className="m-0 text-lg font-semibold">{t.currency}</p>
+            <p className="m-0 text-sm text-muted">
+              {t.contracts} Contract{t.contracts === 1 ? "" : "s"}
+            </p>
+          </div>
+          <Tile label="Waste a month" value={whole(t.waste, t.currency)} tone="waste" />
+          <Tile label="Requests a month" value={whole(t.requests, t.currency)} tone="money" />
+          <Tile label="Idle GPUs a month" value={whole(t.idle_gpus, t.currency)} />
+          <Tile label="Unrequested GPUs a month" value={whole(t.unrequested_gpus, t.currency)} />
+        </Card>
+      ))}
       {fleet.rows.length === 0 ? (
         <p className="hint">No Contracts loaded.</p>
       ) : (
-        <table className="investigations fleet">
-          <thead>
-            <tr>
-              <th>Contract</th>
-              <th>Kill switch</th>
-              <th>Agenda</th>
-              <th>Waste</th>
-              <th>Requests</th>
-              <th>Idle GPUs</th>
-              <th>Unrequested GPUs</th>
-              <th>Relays and Actuators</th>
-            </tr>
-          </thead>
-          <tbody>
-            {fleet.rows.map((r) => (
-              <tr key={r.id}>
-                <td>
-                  <a href={`/app/?contract=${encodeURIComponent(r.id)}`}>{r.name}</a>
-                </td>
-                {r.error ? (
-                  <td colSpan={7} className="bad">
-                    Couldn't read it: {r.error}
-                  </td>
-                ) : (
-                  <>
-                    <td className={r.kill_switch ? "bad" : ""}>{r.kill_switch ? "on" : "off"}</td>
-                    <td>{counts(r.agenda)}</td>
-                    <td>{r.currency && r.cost ? money(r.cost.waste, r.currency) : "no prices"}</td>
-                    <td>{r.currency && r.cost ? money(r.cost.requests, r.currency) : "no prices"}</td>
-                    <td>{r.idle_gpus ? r.idle_gpus.text : "-"}</td>
-                    <td>{unrequested(r.unrequested_gpus, r.currency)}</td>
-                    <td>
-                      {(r.parts ?? []).length === 0
-                        ? "-"
-                        : (r.parts ?? []).map((p) => (
-                            <div key={`${p.cluster}/${p.part}`} className={p.ok ? "" : "bad"}>
-                              {p.cluster}: {p.text}
-                            </div>
-                          ))}
-                    </td>
-                  </>
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+          {fleet.rows.map((r) => (
+            <Card key={r.id} className="contract flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <a className="mr-auto text-base font-semibold" href={`/app/?contract=${encodeURIComponent(r.id)}`}>
+                  {r.name}
+                </a>
+                {!r.error && (
+                  <Badge tone={r.kill_switch ? "bad" : "muted"}>Kill switch {r.kill_switch ? "on" : "off"}</Badge>
                 )}
-              </tr>
-            ))}
-          </tbody>
-          {fleet.totals.length > 0 && (
-            <tfoot>
-              {fleet.totals.map((t) => (
-                <tr key={t.currency}>
-                  <th>
-                    Total, {t.currency} ({t.contracts} Contract{t.contracts === 1 ? "" : "s"})
-                  </th>
-                  <td />
-                  <td />
-                  <td>{money(t.waste, t.currency)}</td>
-                  <td>{money(t.requests, t.currency)}</td>
-                  <td>{money(t.idle_gpus, t.currency)}</td>
-                  <td>{money(t.unrequested_gpus, t.currency)}</td>
-                  <td />
-                </tr>
-              ))}
-            </tfoot>
-          )}
-        </table>
+              </div>
+              {r.error ? (
+                <p className="bad m-0">Couldn't read it: {r.error}</p>
+              ) : (
+                <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+                  <dt className="text-muted">Agenda</dt>
+                  <dd className="m-0">{counts(r.agenda)}</dd>
+                  <dt className="text-muted">Waste</dt>
+                  <dd className={r.currency && r.cost ? "m-0 text-waste" : "m-0"}>{r.currency && r.cost ? money(r.cost.waste, r.currency) : "no prices"}</dd>
+                  <dt className="text-muted">Requests</dt>
+                  <dd className="m-0">{r.currency && r.cost ? money(r.cost.requests, r.currency) : "no prices"}</dd>
+                  <dt className="text-muted">Idle GPUs</dt>
+                  <dd className="m-0">{r.idle_gpus ? r.idle_gpus.text : "-"}</dd>
+                  <dt className="text-muted">Unrequested GPUs</dt>
+                  <dd className="m-0">{unrequested(r.unrequested_gpus, r.currency)}</dd>
+                  <dt className="text-muted">Relays and Actuators</dt>
+                  <dd className="m-0">
+                    {(r.parts ?? []).length === 0
+                      ? "-"
+                      : (r.parts ?? []).map((p) => (
+                          <div key={`${p.cluster}/${p.part}`} className={p.ok ? "" : "bad"}>
+                            {p.cluster}: {p.text}
+                          </div>
+                        ))}
+                  </dd>
+                </dl>
+              )}
+            </Card>
+          ))}
+        </div>
       )}
-    </>
+    </div>
   );
 }

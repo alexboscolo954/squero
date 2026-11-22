@@ -970,6 +970,7 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
   // slice 15.4: the nodes that could go, now and after the Sizings, as a figure of its own
   const could = kind?.querySelector(".could-go")?.textContent;
   expect(could).toContain("Could go now: up to 1 (n2), 120.00 EUR/month.");
+  expect(kind?.querySelector(".could-go")?.previousElementSibling?.textContent).toBe("Nodes that could go: now 1 → 2 after the Sizings");
   expect(could).toContain("After the Sizings: up to 2 (n2, n<b>4</b>), 8.00 cores, 32.00 GiB.");
   expect(could).toContain("An upper bound: tolerations and spread rules can't be seen. Not part of Savings. 1 of 3 nodes not judged.");
   // audit A3: why none is counted, as text
@@ -1242,20 +1243,21 @@ test("the Fleet lists every Contract in its own currency, totals per currency, r
   });
   const { container: page } = render(<App />);
   await screen.findByText("Fleet", { selector: "h1" });
-  const rows = [...page.querySelectorAll(".fleet tbody tr")].map((tr) => tr.textContent);
-  expect(rows).toEqual([
-    "Bankonkill_switch 1, protocol 136.50 EUR/month73.00 EUR/month1.5 of 8 GPUs idle (no GPU price: set `gpu` in its prices)1.26 on 1 nodes, no GPU price" +
-      "eu: Relay 0.63.0, Protocol 1eu: Actuator in eu speaks Protocol 3, this Hub 1: upgrade the Hub",
-    "Darkoffnothingno pricesno prices---",
+  // a card per Contract: its name and Kill switch, then each value under its name
+  const cards = [...page.querySelectorAll(".fleet section.contract")].map((c) => c.textContent);
+  expect(cards).toEqual([
+    "BankKill switch onAgendakill_switch 1, protocol 1Waste36.50 EUR/monthRequests73.00 EUR/monthIdle GPUs1.5 of 8 GPUs idle (no GPU price: set `gpu` in its prices)" +
+      "Unrequested GPUs1.26 on 1 nodes, no GPU priceRelays and Actuatorseu: Relay 0.63.0, Protocol 1eu: Actuator in eu speaks Protocol 3, this Hub 1: upgrade the Hub",
+    "DarkKill switch offAgendanothingWasteno pricesRequestsno pricesIdle GPUs-Unrequested GPUs-Relays and Actuators-",
     "<b>Gone</b>Couldn't read it: RuntimeError: Prometheus unreachable",
-    "Shopoffwaste 310.00 USD/month20.00 USD/month1.5 of 8 GPUs idle, 100.00 USD/month1 on 1 nodes, 40.00 USD/month-",
+    "ShopKill switch offAgendawaste 3Waste10.00 USD/monthRequests20.00 USD/monthIdle GPUs1.5 of 8 GPUs idle, 100.00 USD/monthUnrequested GPUs1 on 1 nodes, 40.00 USD/monthRelays and Actuators-",
   ]);
-  const totals = [...page.querySelectorAll(".fleet tfoot tr")].map((tr) => tr.textContent);
+  const totals = [...page.querySelectorAll(".fleet section.total")].map((c) => c.textContent);
   expect(totals).toEqual([
-    "Total, EUR (1 Contract)36.50 EUR/month73.00 EUR/month0.00 EUR/month0.00 EUR/month",
-    "Total, USD (1 Contract)10.00 USD/month20.00 USD/month100.00 USD/month40.00 USD/month",
+    "EUR1 Contract37 EURWaste a month73 EURRequests a month0 EURIdle GPUs a month0 EURUnrequested GPUs a month",
+    "USD1 Contract10 USDWaste a month20 USDRequests a month100 USDIdle GPUs a month40 USDUnrequested GPUs a month",
   ]);
-  expect(page.querySelector(".fleet .bad")?.textContent).toBe("on"); // its Kill switch
+  expect(page.querySelector(".fleet section.contract")?.querySelector("span")?.textContent).toBe("Kill switch on");
   expect([...page.querySelectorAll(".fleet div.bad")].map((d) => d.textContent)).toEqual([
     "eu: Actuator in eu speaks Protocol 3, this Hub 1: upgrade the Hub",
   ]);

@@ -4,6 +4,9 @@
 import { useEffect, useState } from "react";
 import * as api from "./api";
 import { cpu, memory, when } from "./format";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import { Card } from "./ui/card";
 
 function automation(h: api.Held): string {
   if (!h.automated) return "off";
@@ -30,8 +33,8 @@ export function AutomationPage({ contract }: { contract: string }) {
       .then(setData, (e: Error) => setFailed(e.message));
   };
   return (
-    <>
-      <h1>{contract}: Automation</h1>
+    <div className="flex flex-col gap-5">
+      <h1 className="sr-only">{contract}: Automation</h1>
       <p className="hint">
         What the Actuator in each cluster last did with each container (90 days). Revert puts a
         container's pods back to their template's requests, and stops its Automation until you
@@ -41,12 +44,12 @@ export function AutomationPage({ contract }: { contract: string }) {
       {failed && <p className="notice">Couldn't: {failed}</p>}
       {data.clusters.length === 0 && <p className="hint">No cluster of this Contract runs an Actuator.</p>}
       {data.clusters.map((cl) => (
-        <section key={cl.cluster}>
-          <h2>{cl.cluster}</h2>
+        <Card key={cl.cluster} className="p-0">
+          <h2 className="m-0 px-5 pt-4 pb-3">{cl.cluster}</h2>
           {cl.containers.length === 0 ? (
-            <p className="hint">Nothing reported yet.</p>
+            <p className="hint px-5 pb-4">Nothing reported yet.</p>
           ) : (
-            <table>
+            <table className="rounded-none border-x-0 border-b-0">
               <thead>
                 <tr>
                   <th>Container</th>
@@ -63,7 +66,9 @@ export function AutomationPage({ contract }: { contract: string }) {
                   return (
                     <tr key={where}>
                       <td>{where}</td>
-                      <td>{automation(h)}</td>
+                      <td>
+                        <Badge tone={!h.automated ? "muted" : automation(h) === "on" ? "good" : "bad"}>{automation(h)}</Badge>
+                      </td>
                       <td>
                         {h.outcome}, {h.pods} pods, {when(h.at)}
                       </td>
@@ -79,9 +84,9 @@ export function AutomationPage({ contract }: { contract: string }) {
                           <span className="hint">reverting</span>
                         ) : (
                           h.revertable && (
-                            <button aria-label={`Revert ${where}`} onClick={() => undo(cl.cluster, h)}>
+                            <Button size="sm" variant="outline" aria-label={`Revert ${where}`} onClick={() => undo(cl.cluster, h)}>
                               Revert
-                            </button>
+                            </Button>
                           )
                         )}
                       </td>
@@ -91,8 +96,8 @@ export function AutomationPage({ contract }: { contract: string }) {
               </tbody>
             </table>
           )}
-        </section>
+        </Card>
       ))}
-    </>
+    </div>
   );
 }

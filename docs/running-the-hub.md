@@ -306,6 +306,7 @@ Anything else gets a 403. That includes a tagged device, which has no user.
   - a Workload's waste in cores and GiB and its requests' cost in its detail, under the table.
   - Automation shows, never changes there: it is a pull request to the contracts repo, `propose_change` in Claude Code.
 - **Cost**: the grouping and comparison on top, tiles for the requests and the Savings available (with the change when compared), the realized Savings, then the groups.
+- **Nodes, Automation, Fleet** (slice 21.3b): each cluster or Contract a card; verdicts, Automation states and Kill switches as coloured badges; the Fleet's totals per currency as tiles on top, never converted.
 - **The header** names the Contract and the page. On a Contract's own pages it has the Kill switch: "Turn on the Kill switch", or, while it is on, a red line saying since when and by whom, with "Turn it off".
 - The app uses one stylesheet and the app's own scripts.
 - The Hub serves them behind the same identity.

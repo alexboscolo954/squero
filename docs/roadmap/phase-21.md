@@ -2,7 +2,7 @@
 
 **In short:** the console works but looks like raw HTML: a link bar, headings and bare forms. This phase gives it a real dashboard design, in the style of ScaleOps' product UI, without changing what any page does. It is built next, before Phase 19 continues.
 
-**Status:** grilled 2026-11-21; 21.1, 21.2 and 21.3a built.
+**Status:** grilled 2026-11-21; 21.1, 21.2, 21.3a and 21.3b built.
 
 **Goal:** a console the Operator is glad to open every day: a sidebar, an Overview dashboard, and every page laid out as number tiles, charts and tables in cards.
 
@@ -13,7 +13,7 @@
 | [21.1](#211-the-shell) | The shell: sidebar, header, Contract switcher, Kill switch, design tokens and components | ✅ built |
 | [21.2](#212-the-overview) | The Overview dashboard | ✅ built |
 | [21.3a](#213-the-optimizer-pages) | Workloads and Cost restyled | ✅ built |
-| 21.3b | Nodes, Automation and Fleet restyled | ⏳ |
+| 21.3b | Nodes, Automation and Fleet restyled | ✅ built |
 | 21.4 | The triage pages restyled: Investigations, Teachings, Checks, Health, Contracts | ⏳ |
 
 ## Why this phase exists
@@ -131,6 +131,16 @@ Two rounds, all answers the recommended ones.
 **Tests:** 3 in `Workloads.test.tsx` (request → Sizing per pod with an unset request, Automation all, some or none, the table's cells, the chips and the search with their address), and 9 existing tests moved to the new markup (the Agenda's now render its panel; the compared change, the totals and Idle GPUs read their tiles). 9 mutations, all caught.
 
 **Checked:** in Chrome on a local build with the Hub's CSP and sample data: both pages, no CSP violation. Dark theme only.
+
+**Built 21.3b (2026-11-21):**
+- Nodes: each cluster a card; above what could go, "Nodes that could go: now 1 → 2 after the Sizings" (a "before → after"); what could go and the Unrequested GPUs in framed boxes; the verdicts as badges (yes green, blocked red, unknown grey, pinned lavender); a node's type, GPUs, spot, pinned and taints as grey badges.
+- Automation: each cluster a card, the Automation state a badge (on green, off grey, stopped or ended red), Revert an outlined button.
+- Fleet: totals per currency as tiles on top (whole amounts, never converted), then a card per Contract (its name linking to its Workloads, its Kill switch as a badge, each value under its name, a failing Contract's error in its card).
+- Choice made while building, for the owner to confirm: a Fleet card still links to the Contract's Workloads, as 18.4 decided, not to its Overview.
+
+**Tests:** the Fleet test reads the cards and the totals' tiles; one assertion more for "Nodes that could go". 6 mutations, all caught (one after that assertion).
+
+**Checked:** in Chrome with the Hub's CSP and sample data: Fleet and Automation, no CSP violation. Nodes only through its tests (no sample data for it in the preview). Dark theme only.
 
 ### 21.4 The triage pages
 
