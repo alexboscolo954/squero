@@ -67,7 +67,6 @@ export function TeachingsPage({ contract }: { contract: string }) {
   };
   return (
     <>
-      <h1 className="sr-only">{contract}: Teachings</h1>
       <p className="hint">
         Lessons for this Contract's future Investigations. Only approved ones are used, and never by
         another Contract.

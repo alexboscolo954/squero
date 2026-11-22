@@ -32,7 +32,6 @@ export function ChecksPage({ contract }: { contract: string }) {
   if (!data) return <Skeleton />;
   return (
     <>
-      <h1 className="sr-only">{contract}: Checks</h1>
       {data.checks.length === 0 ? (
         <p className="hint">No Checks scheduled.</p>
       ) : (
@@ -128,7 +127,6 @@ export function HealthPage({ contract }: { contract: string }) {
   const spent = data.spent_usd >= 1 ? data.spent_usd.toFixed(2) : data.spent_usd.toFixed(4);
   return (
     <>
-      <h1 className="sr-only">{contract}: Health</h1>
       <p className="hint">Each check is one read through the Contract's own tools, run now.</p>
       <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4">
         {data.integrations.map((p) => (

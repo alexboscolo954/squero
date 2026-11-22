@@ -28,10 +28,10 @@ export function useScheme(): string {
   return scheme;
 }
 
-/** The axes the design brief asks for: horizontal rules only, no ticks, muted 13px labels. */
+/** The axes the design brief asks for: horizontal rules only, no ticks, muted 12px labels (21.6a). */
 export function axes(unit: (v: number) => string) {
   const muted = token("muted");
-  const font = '13px "Hanken Grotesk Variable", sans-serif';
+  const font = '12px "Hanken Grotesk Variable", sans-serif';
   return [
     { stroke: muted, font, grid: { show: false }, ticks: { show: false } },
     {

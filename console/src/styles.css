@@ -37,6 +37,13 @@
   }
 }
 
+/* The type scale (slice 21.6a, after a live reference): 13px body, tables and sidebar; Tailwind's
+   `text-sm` is that size, so every component follows. */
+@theme {
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: calc(1.25 / 0.8125);
+}
+
 @theme inline {
   --color-page: var(--bg);
   --color-panel: var(--panel);
@@ -75,7 +82,7 @@
   html, body { overflow-x: clip; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
-    font: var(--weight) 14px/1.5 "Hanken Grotesk Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font: var(--weight) 13px/1.5 "Hanken Grotesk Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     font-variant-numeric: tabular-nums;
   }
   code, pre { font-family: "JetBrains Mono Variable", ui-monospace, Menlo, monospace; font-size: 0.9em; }
@@ -84,10 +91,10 @@
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  h1 { font-size: 1.4rem; margin: 0.5rem 0; }
-  h2 { font-size: 1.15rem; margin: 0 0 0.5rem; }
-  h3 { font-size: 1rem; margin: 0.75rem 0 0.25rem; }
-  .hint { color: var(--muted); font-size: 0.85rem; }
+  h1 { font-size: 20px; font-weight: 700; margin: 0.5rem 0; }
+  h2 { font-size: 15px; margin: 0 0 0.5rem; }
+  h3 { font-size: 13px; margin: 0.75rem 0 0.25rem; }
+  .hint { color: var(--muted); font-size: 12px; }
   .notice { background: var(--wait-bg); color: var(--wait); padding: 0.75rem 1rem; border-radius: 6px; }
   .clusters { list-style: none; padding: 0; margin: 0 0 0.5rem; color: var(--muted); }
   .clusters .stale { color: var(--bad); }
@@ -101,7 +108,7 @@
   select:focus, input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   button:not(.link) {
     background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 0 0.85rem;
-    min-height: 2.25rem; cursor: pointer; font-size: 0.875rem; font-weight: 500;
+    min-height: 2.25rem; cursor: pointer; font-size: 13px; font-weight: 500;
     transition: transform 90ms cubic-bezier(.2, .8, .2, 1), opacity 120ms;
   }
   button:not(.link):hover { background: var(--raised); }
@@ -110,12 +117,16 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-solid); }
   button.primary:hover { background: var(--accent); opacity: 0.9; }
   button.danger { border-color: var(--bad); color: var(--bad); background: transparent; }
-  /* Tables (slice 21.5a): rules between rows only, sentence-case heads, the selected row marked. */
+  /* Tables (slice 21.5a): rules between rows only, the selected row marked; 36px rows and small
+     uppercase heads (slice 21.6a). */
   table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--panel); }
   tbody tr:last-child td { border-bottom: 0; }
-  th, td { text-align: left; padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-  td { height: 2.5rem; }
-  th { font-size: 13px; font-weight: 500; color: var(--muted); white-space: nowrap; }
+  th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td { height: 2.25rem; }
+  th {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--muted); white-space: nowrap;
+  }
   tbody tr { cursor: pointer; }
   tbody tr:hover td { background: var(--raised); }
   tbody tr.picked td { background: var(--accent-bg); }
@@ -123,7 +134,7 @@
   button.link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
   .chip {
     display: inline-block; margin: 0 0.25rem 0.25rem 0; padding: 0.05rem 0.5rem; border-radius: 999px;
-    background: var(--bad-bg); color: var(--bad); font-size: 13px; font-weight: 500;
+    background: var(--bad-bg); color: var(--bad); font-size: 12px; font-weight: 500;
   }
   .detail {
     margin-top: 1.25rem; padding: 1rem 1.25rem; background: var(--panel);

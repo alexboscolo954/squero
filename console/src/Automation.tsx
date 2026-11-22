@@ -34,7 +34,6 @@ export function AutomationPage({ contract }: { contract: string }) {
   };
   return (
     <div className="flex flex-col gap-5">
-      <h1 className="sr-only">{contract}: Automation</h1>
       <p className="hint">
         What the Actuator in each cluster last did with each container (90 days). Revert puts a
         container's pods back to their template's requests, and stops its Automation until you

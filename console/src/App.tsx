@@ -8,7 +8,7 @@
 // Automation and Revert (slice 12.6b): Automation.tsx.
 // The frame around every page (slice 21.1): Shell.tsx.
 // Everything from the API is rendered as text.
-import { Power } from "lucide-react";
+import { Boxes, Coins, Cpu, PiggyBank, Power, Recycle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import * as api from "./api";
 import type { Allocation, Bills, Container, Point, Workload, Workloads } from "./api";
@@ -22,7 +22,7 @@ import { FleetPage } from "./Fleet";
 import { NodesPage } from "./Nodes";
 import { OverviewPage } from "./Overview";
 import { amount, change, cores, cpu, gib, memory, money, pct, rank, when } from "./format";
-import { Shell } from "./Shell";
+import { PageTools, Shell } from "./Shell";
 import { Badge, Change } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, Empty, Figures, Skeleton, Tile } from "./ui/card";
@@ -373,7 +373,6 @@ function Page({ contract, data }: { contract: string; data: Workloads }) {
 
   return (
     <div className="flex flex-col gap-5">
-      <h1 className="sr-only">{data.contract}: Workloads</h1>
       <ul className="clusters m-0 flex list-none flex-wrap gap-x-5 gap-y-1 p-0 text-sm">
         {clusters.map((name) => {
           const st = data.clusters[name];
@@ -393,16 +392,20 @@ function Page({ contract, data }: { contract: string; data: Workloads }) {
         />
       )}
       <PriceNotes notes={data.prices} />
+      <PageTools>
+        <span>{clusters.length} cluster{clusters.length === 1 ? "" : "s"}</span>
+        <span>{data.workloads.length} workload{data.workloads.length === 1 ? "" : "s"}</span>
+      </PageTools>
       <Figures>
         <Tile
-          hero
+          icon={Recycle}
           label={priced ? "Waste a month" : "Waste"}
           value={priced ? amount(data.cost!.waste, data.currency!) : cores(data.total.cpu ?? 0)}
           note={priced ? `${cores(data.total.cpu ?? 0)}, ${gib(data.total.memory ?? 0)}` : gib(data.total.memory ?? 0)}
         />
-        {priced && <Tile label="Requests a month" value={amount(data.cost!.requests, data.currency!)} />}
-        <Tile label="Workloads" value={String(data.workloads.length)} note={`${data.learning.length} learning`} />
-        {data.gpus && <Tile label="Idle GPUs" value={data.gpus.text} />}
+        {priced && <Tile icon={Coins} label="Requests a month" value={amount(data.cost!.requests, data.currency!)} />}
+        <Tile icon={Boxes} label="Workloads" value={String(data.workloads.length)} note={`${data.learning.length} learning`} />
+        {data.gpus && <Tile icon={Cpu} label="Idle GPUs" value={data.gpus.text} />}
       </Figures>
       <p className="m-0 -mt-3 text-xs text-muted">
         {priced
@@ -550,8 +553,8 @@ function CostPage({
   const cmp = data.compare;
   return (
     <div className="flex flex-col gap-5">
-      <h1 className="sr-only">{data.contract}: Cost by {label}</h1>
-      <div className="flex flex-wrap items-center gap-4 text-sm">
+      <PageTools>
+      <div className="ml-auto flex flex-wrap items-center gap-4 text-ink">
       {data.groupings.length > 1 && (
         <label>
           Group by{" "}
@@ -572,6 +575,7 @@ function CostPage({
         </select>
       </label>
       </div>
+      </PageTools>
       {data.warnings.map((w) => (
         <p key={w} className="notice">{w}</p>
       ))}
@@ -589,9 +593,9 @@ function CostPage({
         <p className="notice">Left out of the change, requests or labels unknown then: {cmp.left_out.join(", ")}</p>
       )}
       <Figures>
-        <Tile hero label="Savings available" value={shown(data.total, "waste")} tone="saving" note={cmp ? change(cmp.change, "waste", currency) : undefined} />
-        <Tile label="Requests" value={shown(data.total, "requests")} note={cmp ? change(cmp.change, "requests", currency) : undefined} />
-        {data.gpus && <Tile label="Idle GPUs" value={data.gpus.text} note="beside the Savings, never in them" />}
+        <Tile icon={PiggyBank} label="Savings available" value={shown(data.total, "waste")} tone="saving" note={cmp ? change(cmp.change, "waste", currency) : undefined} />
+        <Tile icon={Coins} label="Requests" value={shown(data.total, "requests")} note={cmp ? change(cmp.change, "requests", currency) : undefined} />
+        {data.gpus && <Tile icon={Cpu} label="Idle GPUs" value={data.gpus.text} note="beside the Savings, never in them" />}
       </Figures>
       <p className="m-0 -mt-3 text-xs text-muted">
         Requests in the Contract's namespaces, not the nodes; the available Savings is what the requests above the

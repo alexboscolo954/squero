@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type * as api from "./api";
 import { automation, figures, OverviewPage } from "./Overview";
+import { Shell } from "./Shell";
 import { columns } from "./series";
 
 vi.mock("./TotalsChart", () => ({ default: ({ res }: { res: string }) => <div>{res} chart</div> }));
@@ -85,6 +86,22 @@ test("the ring counts the ready containers a rule automates", () => {
   expect(automation(workloads(true))).toEqual({ automated: 2, ready: 4 });
 });
 
+test("in the Shell, its title row counts the clusters and links the workloads (21.6a)", async () => {
+  hub({
+    "/api/v1/contracts/shop/workloads": workloads(true, { clusters: { a: {}, b: {} } }),
+    "/api/v1/contracts/shop/cost": { realized: REALIZED },
+    "/api/v1/contracts/shop/totals": TOTALS,
+    "/api/v1/contracts/shop/agenda": { contract: "shop", items: [] },
+  });
+  render(
+    <Shell view="overview" here="contract=shop" contracts={[]} shown="shop" onContract={() => {}}>
+      <OverviewPage contract="shop" />
+    </Shell>,
+  );
+  expect(await screen.findByText("2 clusters")).toBeTruthy();
+  expect(screen.getByText("2 workloads").getAttribute("href")).toBe("/app/?contract=shop");
+});
+
 test("the charts' columns are times, then requests, Sizings and usage, in cores or GiB", () => {
   expect(columns(TOTALS, "cpu")).toEqual([[1_700_000_000, 1_700_003_600], [4, 2], [1, 1], [0.5, 0.5]]);
   expect(columns(TOTALS, "memory")[1]).toEqual([8, 4]);
@@ -105,7 +122,10 @@ test("the page shows the figures, the Automation meter, both charts and the Agen
   expect(screen.getByText("7", { selector: "p" }).previousElementSibling?.textContent).toBe("On the Agenda");
   const automated = screen.getByText("Automated").parentElement!; // a meter, not a ring (21.5b)
   expect(automated.textContent).toBe("Automated50%2 of 4 containers");
-  expect(screen.getByText("Savings available").nextElementSibling?.className).toContain("text-[40px]"); // the hero
+  const hero = screen.getByText("Savings available"); // first, in the accent (21.6a: every figure in a card)
+  expect(hero.parentElement?.parentElement?.firstElementChild).toBe(hero.parentElement);
+  expect(hero.nextElementSibling?.className).toContain("text-saving");
+  expect(screen.getByText("Wasted spend").parentElement?.textContent).toContain("of 400 EUR a month"); // the footnote
   expect(screen.getByText("cpu chart")).toBeTruthy();
   expect(screen.getByText("memory chart")).toBeTruthy();
   const listed = [...document.querySelectorAll(".agenda li")].map((li) => li.textContent);

@@ -12,7 +12,7 @@ const TONE = {
 
 export function Badge({ tone = "muted", children }: { tone?: keyof typeof TONE; children: ReactNode }) {
   return (
-    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[13px] font-medium whitespace-nowrap", TONE[tone])}>
+    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap", TONE[tone])}>
       {children}
     </span>
   );

@@ -64,7 +64,6 @@ export function InvestigationList({ contract }: { contract: string }) {
   if (!rows) return <Skeleton />;
   return (
     <>
-      <h1 className="sr-only">{contract}: Investigations</h1>
       <AskForm contract={contract} />
       <p className="hint">Newest first. Passing Checks are left out.</p>
       {rows.length === 0 ? (
@@ -413,7 +412,6 @@ export function TokenPage() {
   const [failed, setFailed] = useState("");
   return (
     <>
-      <h1 className="sr-only">Approver token</h1>
       <p>
         Your Tailscale identity says who you are. To see anything else here, and to approve, reject
         or ask, the console also needs <code>SQUERO_APPROVER_TOKEN</code>, once per browser: it stays as

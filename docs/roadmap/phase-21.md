@@ -2,7 +2,7 @@
 
 **In short:** the console works but looks like raw HTML: a link bar, headings and bare forms. This phase gives it a real dashboard design, in the style of ScaleOps' product UI, without changing what any page does. It is built next, before Phase 19 continues.
 
-**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6 grilled (2026-11-22), not built. Owed: a look at the light theme and at every page with real data.
+**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6 grilled (2026-11-22); 21.6a built. Owed: a look at the light theme and at every page with real data.
 
 **Goal:** a console the Operator is glad to open every day: a sidebar, an Overview dashboard, and every page laid out as number tiles, charts and tables in cards.
 
@@ -17,8 +17,8 @@
 | [21.4](#214-the-triage-pages) | The triage pages restyled: Investigations, Teachings, Checks, Health, Contracts | ✅ built |
 | [21.5a](#215-refinement-after-two-design-skills) | Tokens, font, sidebar, header, buttons, badges, tables, focus and motion | ✅ built |
 | [21.5b](#215-refinement-after-two-design-skills) | Number tiles, charts, empty and loading states; the checklist on every page | ✅ built |
-| [21.6a](#216-density-and-layout-after-a-live-reference) | Denser type, a title row on every page, figures in cards, uppercase small labels | ⬜ next |
-| [21.6b](#216-density-and-layout-after-a-live-reference) | The Overview as a grid of cards | ⬜ |
+| [21.6a](#216-density-and-layout-after-a-live-reference) | Denser type, a title row on every page, figures in cards, uppercase small labels | ✅ built |
+| [21.6b](#216-density-and-layout-after-a-live-reference) | The Overview as a grid of cards | ⬜ next |
 | [21.6c](#216-density-and-layout-after-a-live-reference) | Tables: bars in cells, a Total row, numbers in mono | ⬜ |
 
 ## Why this phase exists
@@ -172,7 +172,7 @@ Two rounds, all answers the recommended ones.
 **Decided (grill, 2026-11-22, all recommended):**
 - **Colour, a hybrid:** figures in ink, but the Savings in the accent (what squero is for); one accent, a teal-green (hue 175: the skills ban purple-blue and cyan on dark, so the indigo and the teal go); status colours (ok, warning, failing) only on badges and notices, never the accent; in charts one argued series, the Sizings.
 - **Font:** Hanken Grotesk (variable), JetBrains Mono for ids and code, both self-hosted from npm (`@fontsource-variable/*`); the Hub serves `.woff2` from `/app/assets/`.
-- **Hierarchy:** one hero figure (40 px) and the rest 32 px, separated by thin rules, no boxes; the sidebar on the page's own ground with a rule and an accent bar on the active page; tables without an outer border, 40 px rows, sentence-case heads, the selected row barred in the accent; elevation by lightness on dark, no shadows, no card in a card.
+- **Hierarchy:** one hero figure (40 px) and the rest 32 px, separated by thin rules, no boxes (superseded by 21.6a: figures in cards, 28 px); the sidebar on the page's own ground with a rule and an accent bar on the active page; tables without an outer border, 40 px rows, sentence-case heads, the selected row barred in the accent; elevation by lightness on dark, no shadows, no card in a card.
 - **The Kill switch:** outlined; no confirm to turn it on (the safe direction, an emergency), a confirm to turn it off.
 - **Slices:** 21.5a the tokens and the shared parts, 21.5b the tiles, charts and states, then the skills' checklist on every page.
 
@@ -195,7 +195,7 @@ Two rounds, all answers the recommended ones.
 - Colours only from tokens: the Kill switch's line and the filled buttons use `--bad-solid` and `--on-solid`, not Tailwind's own red and white.
 
 **The brief's checklist, run on the console's source and in Chrome:**
-- No uppercase or tracked labels; no `transition: all`; no shadows; no card in a card. ✅
+- No uppercase or tracked labels; no `transition: all`; no shadows; no card in a card. ✅ (uppercase small labels superseded by 21.6a)
 - Colours only from tokens (none outside the token block). ✅ (after the fix above)
 - One filled button per view: Teachings had one per waiting Teaching, so "Approve this text" is outlined and "Add, approved" filled. ✅
 - One loud chart series; horizontal rules only; figures in ink but the Savings. ✅
@@ -234,3 +234,23 @@ Two rounds, all answers the recommended ones.
 - **Colour unchanged:** figures in ink, the Savings in the accent, one argued chart series. The complaint was size and layout, not colour.
 - **Unchanged:** the font, both themes, the teal accent.
 - **Slices:** 21.6a the type scale, title row, figure cards and labels; 21.6b the Overview grid; 21.6c the tables. Each updates the 21.5 checklist and "The look" in `running-the-hub.md`, and is checked in Chrome in both themes.
+
+**Built 21.6a (2026-11-22):**
+- The type scale: body, tables, sidebar and Tailwind's `text-sm` 13 px; table rows 36 px; card titles 15 px; headings 20, 15 and 13 px; chart labels 12 px.
+- A title row in the Shell on every page but an Investigation's (which has its own title): the page's icon and its name as the one `h1` (the Contract's name inside it for screen readers), the page's counts and controls drawn beside it through `PageTools`, and the Contract switcher at the right. The pages' hidden headings went.
+- The Contract switcher moved there from the sidebar, shown only with several Contracts and never on a page across them.
+- Counts where the page already holds them: Overview (clusters, workloads, linked to Workloads), Workloads (clusters, workloads), Fleet (Contracts, linked to Contracts). Cost's grouping and comparison moved into the row.
+- Figures in cards: an icon, an 11 px uppercase label, the figure at 28 px, a full-width meter for a share, a footnote (Wasted spend: "of 895 EUR a month"). Every figure the same size; the first card is the hero, the Savings in the accent.
+- Uppercase small labels on figures, table heads and sidebar groups (11 px, 600, 0.05em).
+
+**Tests:** 3 new (the Shell's title row: icon, the Contract for screen readers, counts beside it, one `h1`; Workloads' counts, one cluster and two workloads; the Overview's counts and link inside the Shell); the switcher's, the Investigation's and the Fleet's tests extended; the Overview's hero and footnote; 10 tests now wait on page content instead of the old hidden headings. 77 console tests. 10 mutations, all caught.
+
+**Checked:** in Chrome with the Hub's CSP and sample data: Overview (priced, and unpriced with GPUs), Workloads, Cost, Fleet and Teachings dark; the Overview light (its tokens set by hand: the system was dark, so its charts kept the dark colours). The browser console read from the first page load: no error, no CSP refusal.
+
+**Known limits:**
+- On Workloads and Fleet the first figure is in ink, so with every figure 28 px it no longer stands out; only the Savings carry the accent.
+- No counts on Nodes, Automation and the triage pages: they would need a fetch of their own. Only Cost's controls moved into the title row; other pages keep theirs where they were.
+- With GPUs the Overview has 7 figures, 6 to a row at 1,476 px, so the seventh sits alone. Unpriced values ("4.10 cores, 10.50 GiB") wrap to two lines.
+- Not seen in a browser: Nodes, Automation, Checks, Health, Investigations and an Investigation's page (no sample data), and a narrow window.
+- Sizes the grill did not set: chart labels, badges, hints and chips at 12 px.
+- No API change, no eval rerun (nothing the agent sees changed), no isolation test (no Contract data moves).

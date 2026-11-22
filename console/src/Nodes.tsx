@@ -105,7 +105,6 @@ export function NodesPage({ contract }: { contract: string }) {
   if (!data) return <Skeleton />;
   return (
     <div className="flex flex-col gap-5">
-      <h1 className="sr-only">{contract}: Nodes</h1>
       <p className="hint">
         A node's Room is its allocatable less the requests of every Running or Pending pod on it. Pods outside this
         Contract's namespaces are not visible: they count as one sum per node.

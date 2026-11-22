@@ -2,10 +2,12 @@
 // CPU and memory over 14 days, then the Agenda's first items. Every number is the Hub's own,
 // from the Workloads, the Cost page's realized Savings, the Agenda and the stored totals; money
 // only where the Contract has prices, never converted.
+import { Bot, Coins, Cpu, ListTodo, PiggyBank, Recycle, TrendingDown } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AgendaList } from "./Agenda";
 import * as api from "./api";
 import { cores, gib, pct, whole } from "./format";
+import { PageTools } from "./Shell";
 import TotalsChart from "./TotalsChart";
 import { Card, CardTitle, Empty, Figures, Skeleton, Tile } from "./ui/card";
 
@@ -72,21 +74,29 @@ export function OverviewPage({ contract }: { contract: string }) {
   const auto = automation(data.workloads);
   const gpus = data.workloads.gpus;
   const priced = Boolean(data.workloads.currency && data.workloads.cost);
+  const clusters = Object.keys(data.workloads.clusters).length;
   return (
     <div className="flex flex-col gap-5">
+      <PageTools>
+        <span>{clusters} cluster{clusters === 1 ? "" : "s"}</span>
+        <a href={`/app/?contract=${encodeURIComponent(contract)}`}>
+          {data.workloads.workloads.length} workload{data.workloads.workloads.length === 1 ? "" : "s"}
+        </a>
+      </PageTools>
       <Figures>
-        <Tile label="Savings available" value={f.available} tone="saving" hero note={priced ? "a month" : undefined} />
-        <Tile label={priced ? "Monthly cost" : "Requests"} value={f.cost} />
-        <Tile label="Wasted spend" value={f.wasted} bar={f.share} note={priced ? undefined : "of CPU requests"} />
-        <Tile label="Savings realized" value={f.realized} tone="saving" note={priced ? "a month, at today's prices" : "held less, now"} />
+        <Tile icon={PiggyBank} label="Savings available" value={f.available} tone="saving" note={priced ? "a month" : undefined} />
+        <Tile icon={Coins} label={priced ? "Monthly cost" : "Requests"} value={f.cost} />
+        <Tile icon={Recycle} label="Wasted spend" value={f.wasted} bar={f.share} note={priced ? `of ${f.cost} a month` : "of CPU requests"} />
+        <Tile icon={TrendingDown} label="Savings realized" value={f.realized} tone="saving" note={priced ? "a month, at today's prices" : "held less, now"} />
         <Tile
+          icon={Bot}
           label="Automated"
           value={auto.ready ? pct(auto.automated / auto.ready) : "none"}
           bar={auto.ready ? auto.automated / auto.ready : 0}
           note={`${auto.automated} of ${auto.ready} containers`}
         />
-        {gpus && <Tile label="Idle GPUs" value={gpus.text} note={gpus.cost != null && data.workloads.currency ? `${whole(gpus.cost, data.workloads.currency)} a month` : undefined} />}
-        <Tile label="On the Agenda" value={String(data.agenda?.items.length ?? 0)} />
+        {gpus && <Tile icon={Cpu} label="Idle GPUs" value={gpus.text} note={gpus.cost != null && data.workloads.currency ? `${whole(gpus.cost, data.workloads.currency)} a month` : undefined} />}
+        <Tile icon={ListTodo} label="On the Agenda" value={String(data.agenda?.items.length ?? 0)} />
       </Figures>
       <Card>
         <div className="grid gap-6 md:grid-cols-2">
@@ -105,7 +115,7 @@ export function OverviewPage({ contract }: { contract: string }) {
             </div>
           ))}
         </div>
-        <ul className="m-0 mt-3 flex list-none flex-wrap justify-center gap-5 p-0 text-[13px] text-muted" aria-label="Legend">
+        <ul className="m-0 mt-3 flex list-none flex-wrap justify-center gap-5 p-0 text-xs text-muted" aria-label="Legend">
           <li className="flex items-center gap-2"><span className="h-0.5 w-3 bg-accent" />Sizings</li>
           <li className="flex items-center gap-2"><span className="h-0.5 w-3 bg-request" />Requests</li>
           <li className="flex items-center gap-2"><span className="h-2 w-3 bg-muted/20" />Waste, between them</li>

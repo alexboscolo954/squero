@@ -1,6 +1,6 @@
-// The console's frame (slice 21.1): a sidebar of grouped pages with the Contract switcher at its
-// top, a header naming the page with the Kill switch beside it, and the page itself. Laid out after
-// ScaleOps' product UI; every page inside is still its own.
+// The console's frame (slice 21.1): a sidebar of grouped pages, a header naming the page with the
+// Kill switch beside it, then the page under its title row (slice 21.6a): the page's icon and name,
+// its counts and controls, and the Contract switcher at the right.
 import {
   Bot,
   Boxes,
@@ -19,7 +19,8 @@ import {
   Search,
   Server,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { createContext, type ReactNode, useContext, useState } from "react";
+import { createPortal } from "react-dom";
 import type * as api from "./api";
 import { cn } from "./ui/cn";
 
@@ -61,10 +62,23 @@ export const GROUPS: { title: string; pages: Page[] }[] = [
   },
 ];
 
+function page(view: string): Page {
+  const shown = view === "investigation" ? "investigations" : view;
+  const pages = GROUPS.flatMap((g) => g.pages);
+  return pages.find((p) => p.view === shown) ?? pages.find((p) => p.view === "")!;
+}
+
 /** The page's name for the header: an Investigation is under Investigations. */
 export function title(view: string): string {
-  const shown = view === "investigation" ? "investigations" : view;
-  return GROUPS.flatMap((g) => g.pages).find((p) => p.view === shown)?.label ?? "Workloads";
+  return page(view).label;
+}
+
+const Slot = createContext<HTMLElement | null>(null);
+
+/** A page's counts and controls, drawn in the Shell's title row beside its name (slice 21.6a). */
+export function PageTools({ children }: { children: ReactNode }) {
+  const slot = useContext(Slot);
+  return slot ? createPortal(children, slot) : null;
 }
 
 const KEY = "squero.sidebar";
@@ -107,25 +121,20 @@ function ContractSwitcher({
   contracts,
   shown,
   onContract,
-  collapsed,
 }: {
   contracts: api.ContractSummary[];
   shown: string;
   onContract: (id: string) => void;
-  collapsed: boolean;
 }) {
-  if (collapsed || !shown) return null;
-  if (contracts.length < 2) {
-    const one = contracts.find((c) => c.id === shown);
-    return <p className="m-0 truncate px-3 text-sm text-rail-text">{one?.name ?? shown}</p>;
-  }
+  // One Contract: the header's breadcrumb already names it.
+  if (!shown || contracts.length < 2) return null;
   return (
-    <label className="flex flex-col gap-1 px-3 text-[13px] font-medium text-rail-muted">
+    <label className="ml-auto flex items-center gap-2 text-[11px] font-semibold tracking-[0.05em] text-muted uppercase">
       Contract
       <select
         value={shown}
         onChange={(e) => onContract(e.target.value)}
-        className="rounded-lg border border-line bg-panel px-2 py-1.5 text-sm font-normal text-ink"
+        className="h-8 rounded-lg border border-line bg-panel px-2 text-sm font-normal tracking-normal text-ink normal-case"
       >
         {contracts.map((c) => (
           <option key={c.id} value={c.id}>
@@ -157,6 +166,7 @@ export function Shell({
   children: ReactNode;
 }) {
   const [collapsed, setCollapsed] = useState(remembered);
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
   const toggle = () => {
     remember(!collapsed);
     setCollapsed(!collapsed);
@@ -166,6 +176,7 @@ export function Shell({
   // like a page across Contracts, its header names none and the switcher hides.
   const across = view === "investigation" || GROUPS.flatMap((g) => g.pages).some((p) => p.across && p.view === view);
   const name = across ? "" : (contracts.find((c) => c.id === shown)?.name ?? "");
+  const Icon = page(view).icon;
   const href = (p: Page) =>
     p.across ? `/app/?view=${p.view}` : `/app/?${here}${p.view ? `&view=${p.view}` : ""}`;
   return (
@@ -180,13 +191,10 @@ export function Shell({
           <Ferro />
           <span className={cn(collapsed && "sr-only")}>squero</span>
         </a>
-        {view !== "investigation" && (
-          <ContractSwitcher contracts={contracts} shown={shown} onContract={onContract} collapsed={collapsed} />
-        )}
         <nav aria-label="Pages" className="flex flex-1 flex-col gap-4">
           {GROUPS.map((g) => (
             <div key={g.title} className="flex flex-col gap-0.5">
-              <p className={cn("m-0 px-4 pb-1 text-[13px] font-medium text-rail-muted", collapsed && "sr-only")}>
+              <p className={cn("m-0 px-4 pb-1 text-[11px] font-semibold tracking-[0.05em] text-rail-muted uppercase", collapsed && "sr-only")}>
                 {g.title}
               </p>
               {g.pages.map((p) => {
@@ -223,7 +231,7 @@ export function Shell({
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-10 flex min-h-14 flex-wrap items-center gap-3 border-b border-line bg-page/90 px-6 py-2 backdrop-blur">
-          {/* Not a heading: each page keeps its own h1 until 21.3 and 21.4 restyle it. */}
+          {/* Not a heading: the title row below holds the page's h1. */}
           <p className="m-0 mr-auto flex items-center gap-2 text-sm text-muted">
             {name && <span>{name}</span>}
             {name && <ChevronRight className="size-4" aria-hidden="true" />}
@@ -231,7 +239,25 @@ export function Shell({
           </p>
           {actions}
         </header>
-        <main className="mx-auto w-full max-w-7xl px-6 pt-5 pb-12">{children}</main>
+        <main className="mx-auto w-full max-w-7xl px-6 pt-5 pb-12">
+          {/* An Investigation's own page has its title as its h1. */}
+          {view !== "investigation" && (
+            <div className="mb-5 flex flex-wrap items-center gap-x-5 gap-y-2">
+              <h1 className="m-0 flex items-center gap-2.5 text-xl font-bold tracking-[-0.01em]">
+                <Icon className="size-5 shrink-0 text-muted" aria-hidden="true" />
+                {name && (
+                  <>
+                    <span className="sr-only">{name}:</span>{" "}
+                  </>
+                )}
+                {title(view)}
+              </h1>
+              <div ref={setSlot} className="flex flex-1 flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted" />
+              {!across && <ContractSwitcher contracts={contracts} shown={shown} onContract={onContract} />}
+            </div>
+          )}
+          <Slot.Provider value={slot}>{children}</Slot.Provider>
+        </main>
       </div>
     </div>
   );

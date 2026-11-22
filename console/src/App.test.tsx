@@ -70,6 +70,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+test("the Workloads title row counts its clusters and workloads, one or many (21.6a)", async () => {
+  answer({
+    "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]],
+    "/api/v1/contracts/demo-shop/workloads": [200, DATA],
+  });
+  render(<App />);
+  const one = await screen.findByText("1 cluster");
+  expect(one.parentElement?.previousElementSibling?.tagName).toBe("H1");
+  expect(screen.getByText("2 workloads")).toBeTruthy();
+});
+
 test("model and Hub text renders as text, never as markup", async () => {
   answer({
     "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]],
@@ -313,8 +324,9 @@ test("the Cost page groups by team on request, with no Workloads links and the H
     ],
   });
   const { container: page } = render(<App />);
-  expect(await screen.findByText("demo-shop: Cost by team")).toBeTruthy();
-  expect(screen.getByText("<b>payments</b>")).toBeTruthy();
+  expect(await screen.findByText("<b>payments</b>")).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 1, name: "demo-shop: Cost" })).toBeTruthy(); // the title row (21.6a)
+  expect((screen.getByLabelText(/Group by/) as HTMLSelectElement).value).toBe("team");
   expect(page.querySelector("b")).toBeNull();
   expect(screen.getByText(/no pod has label team/)).toBeTruthy();
   expect(screen.getByText(/Savings realized: none yet/)).toBeTruthy();
@@ -383,7 +395,8 @@ test("another Contract's Cost page starts by namespace", async () => {
   });
   render(<App />);
   fireEvent.change(await screen.findByLabelText("Contract"), { target: { value: "demo-bank" } });
-  await screen.findByText("demo-bank: Cost by namespace");
+  await screen.findByRole("heading", { level: 1, name: "demo-bank: Cost" });
+  await waitFor(() => expect(screen.queryByRole("table")).not.toBeNull());
   const calls = (fetch as unknown as { mock: { calls: string[][] } }).mock.calls.map((c) => c[0]);
   expect(calls).toContain("/api/v1/contracts/demo-bank/cost?by=namespace");
 });
@@ -498,7 +511,7 @@ test("a Contract with no billed cluster shows no bill line and no error", async 
     "/api/v1/contracts/demo-shop/cost": [200, COST],
   });
   render(<App />);
-  await screen.findByText(/Cost by namespace/);
+  await waitFor(() => expect(screen.queryByRole("table")).not.toBeNull());
   expect(screen.queryByText(/ bill \(/)).toBeNull();
   expect(screen.queryByText(/404/)).toBeNull();
 });
@@ -685,7 +698,7 @@ test("a Contract's Investigations list links each one, a failed Check as failed"
     ],
   });
   const { container: page } = render(<App />);
-  await screen.findByText("demo-shop: Investigations");
+  await waitFor(() => expect(page.querySelector(".investigations tbody tr")).not.toBeNull());
   const rows = [...page.querySelectorAll(".investigations tbody tr")].map((tr) => tr.textContent);
   expect(rows).toEqual([
     "2023-11-14 22:13 UTCcheckfailedapi answers",
@@ -928,7 +941,7 @@ test("Checks show each one's last Run and Open failure, and Deploy verifications
     "/api/v1/contracts/demo-shop/checks": [200, CHECKS],
   });
   const { container: page } = render(<App />);
-  await screen.findByText("demo-shop: Checks");
+  await screen.findByText("failed");
   expect(screen.getByText("failed").getAttribute("href")).toBe("/app/?view=investigation&id=r1");
   expect(screen.getByText("failing since this Run").getAttribute("href")).toBe("/app/?view=investigation&id=r1");
   expect(screen.getByText("2023-11-14 22:13 UTC: over budget")).toBeTruthy();
@@ -973,7 +986,7 @@ test("Nodes shows each node's Room, the Contract's pods by name and the rest as 
     ],
   });
   const { container: page } = render(<App />);
-  await screen.findByText("demo-shop: Nodes");
+  await waitFor(() => expect(page.querySelector("section.nodes")).not.toBeNull());
   const [kind, edge] = [...page.querySelectorAll("section.nodes")];
   expect(kind?.textContent).toContain("Read 2023-11-14 22:13 UTC. Autoscaler: karpenter.");
   expect(kind?.textContent).toContain("No Sizing asks more than 7.50 cores, 30.00 GiB: the largest Room after DaemonSets.");
@@ -1046,7 +1059,7 @@ test("Nodes shows a cluster's Placement, its Pinned nodes and which Workload to 
     ],
   });
   const { container: page } = render(<App />);
-  await screen.findByText("demo-shop: Nodes");
+  await waitFor(() => expect(page.querySelector("section.nodes")).not.toBeNull());
   expect(page.querySelector(".placement")?.textContent).toBe(
     "Placement: pods that can't move prefer the nodes labelled squero.io/pinned=yes (1 pinned), tolerating squero.io/pinned=yes:NoSchedule. Placed: shop/Deployment/api. ",
   );
@@ -1091,7 +1104,7 @@ test("Nodes shows the Workloads that could run on spot and those under a Spot ra
     ],
   });
   const { container: page } = render(<App />);
-  await screen.findByText("demo-shop: Nodes");
+  await waitFor(() => expect(page.querySelector("section.nodes")).not.toBeNull());
   const under = [...page.querySelectorAll(".spot-workloads li")].map((li) => li.textContent);
   expect(under).toEqual([
     "shop/Deployment/cart: 10 replicas, meant 3 on-demand and 7 on spot, running 1 and 9" +
@@ -1130,7 +1143,7 @@ test("Health shows each integration now, the error as text, spend against the bu
     ],
   });
   const { container: page } = render(<App />);
-  await screen.findByText("demo-shop: Health");
+  await screen.findByText("FAILING");
   expect(screen.getByText("FAILING").className).toBe("bad");
   expect(screen.getByText("<img src=x> timed out")).toBeTruthy();
   expect(page.querySelector("main img")).toBeNull();
@@ -1269,7 +1282,9 @@ test("the Fleet lists every Contract in its own currency, totals per currency, r
     ],
   });
   const { container: page } = render(<App />);
-  await screen.findByText("Fleet", { selector: "h1" });
+  await waitFor(() => expect(page.querySelector(".fleet")).not.toBeNull());
+  const n = page.querySelectorAll(".fleet section.contract").length;
+  expect(screen.getByText(`${n} Contracts`).getAttribute("href")).toBe("/app/?view=contracts"); // the title row (21.6a)
   // a card per Contract: its name and Kill switch, then each value under its name
   const cards = [...page.querySelectorAll(".fleet section.contract")].map((c) => c.textContent);
   expect(cards).toEqual([
@@ -1462,7 +1477,7 @@ test("Nodes shows GPU nodes, their GPUs in what could go and the Unrequested GPU
     ],
   });
   const { container: page } = render(<App />);
-  await screen.findByText("demo-shop: Nodes");
+  await waitFor(() => expect(page.querySelector("section.nodes")).not.toBeNull());
   const could = page.querySelector(".could-go")?.textContent ?? "";
   expect(could).toContain("Could go now: up to 1 (g1), 1,460.00 USD/month with 1 GPUs.");
   expect(could).toContain("with 1 GPUs (no GPU price: set gpu in its prices).");

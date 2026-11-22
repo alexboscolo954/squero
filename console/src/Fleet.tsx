@@ -1,8 +1,10 @@
 // The Fleet (slice 18.4): every Contract the Hub serves, a card each (slice 21.3b), read-only. Money in each
 // Contract's own currency, totals per currency, never converted.
+import { Coins, Cpu, Recycle } from "lucide-react";
 import { useEffect, useState } from "react";
 import * as api from "./api";
 import { money, whole } from "./format";
+import { PageTools } from "./Shell";
 import { Badge } from "./ui/badge";
 import { Card, Figures, Skeleton, Tile } from "./ui/card";
 
@@ -31,13 +33,17 @@ export function FleetPage() {
   if (!fleet) return <Skeleton />;
   return (
     <div className="fleet flex flex-col gap-5">
-      <h1 className="sr-only">Fleet</h1>
+      <PageTools>
+        <a href="/app/?view=contracts">
+          {fleet.rows.length} Contract{fleet.rows.length === 1 ? "" : "s"}
+        </a>
+      </PageTools>
       {fleet.totals.map((t) => (
         <Figures key={t.currency} className="total">
-          <Tile hero label={`${t.currency}, ${t.contracts} Contract${t.contracts === 1 ? "" : "s"}: waste a month`} value={whole(t.waste, t.currency)} />
-          <Tile label="Requests a month" value={whole(t.requests, t.currency)} />
-          <Tile label="Idle GPUs a month" value={whole(t.idle_gpus, t.currency)} />
-          <Tile label="Unrequested GPUs a month" value={whole(t.unrequested_gpus, t.currency)} />
+          <Tile icon={Recycle} label={`${t.currency}, ${t.contracts} Contract${t.contracts === 1 ? "" : "s"}: waste a month`} value={whole(t.waste, t.currency)} />
+          <Tile icon={Coins} label="Requests a month" value={whole(t.requests, t.currency)} />
+          <Tile icon={Cpu} label="Idle GPUs a month" value={whole(t.idle_gpus, t.currency)} />
+          <Tile icon={Cpu} label="Unrequested GPUs a month" value={whole(t.unrequested_gpus, t.currency)} />
         </Figures>
       ))}
       {fleet.rows.length === 0 ? (
@@ -47,7 +53,7 @@ export function FleetPage() {
           {fleet.rows.map((r) => (
             <Card key={r.id} className="contract flex flex-col gap-3">
               <div className="flex items-center gap-2">
-                <a className="mr-auto text-base font-semibold" href={`/app/?contract=${encodeURIComponent(r.id)}`}>
+                <a className="mr-auto text-[15px] font-semibold" href={`/app/?contract=${encodeURIComponent(r.id)}`}>
                   {r.name}
                 </a>
                 {!r.error && (

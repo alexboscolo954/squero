@@ -292,11 +292,11 @@ Anything else gets a 403. That includes a tagged device, which has no user.
   | Investigations | Investigations, Teachings, Checks, Health |
   | Settings | Contracts, Approver token |
 
-  - The Contract switcher is at its top; a Contract's pages link with the one picked.
+  - A Contract's pages link with the one picked.
   - "Collapse" at its bottom shrinks it to icons. The browser remembers it.
 - **The Overview** (from 0.64.0, slice 21.2) is a Contract at a glance:
   - tiles: monthly cost, wasted spend, Savings available and realized, Idle GPUs (with GPUs), the Agenda's count;
-  - a ring: the ready containers a Sizing rule automates where an Actuator runs;
+  - a meter: the ready containers a Sizing rule automates where an Actuator runs;
   - CPU and memory over 14 days, summed over the ready containers times their pods: requests, Sizings, usage (the Sizings' basis), the waste between requests and Sizings;
   - the Agenda's first five items.
   - Without prices, cores and GiB, never an amount. `GET /api/v1/contracts/{id}/totals` serves its charts.
@@ -308,7 +308,9 @@ Anything else gets a 403. That includes a tagged device, which has no user.
 - **Cost**: the grouping and comparison on top, tiles for the requests and the Savings available (with the change when compared), the realized Savings, then the groups.
 - **Nodes, Automation, Fleet** (slice 21.3b): each cluster or Contract a card; verdicts, Automation states and Kill switches as coloured badges; the Fleet's totals per currency as tiles on top, never converted.
 - **Investigations, Teachings, Checks, Health, Contracts** (slice 21.4): statuses as coloured badges, each integration's Health a tile (a failing one framed red), the action that goes ahead a filled button and Reject or Retire a red-outlined one.
-- **The look** (slice 21.5a): Hanken Grotesk and JetBrains Mono, served by the Hub itself; one accent (a teal-green) with the Savings in it and every other figure in ink; status colours only on badges; one large figure per page, the rest in a row without boxes; charts with the Sizings as their one coloured line, redrawn when the system changes theme; a flat block while a page loads; turning the Kill switch off asks first ("Yes, turn it off"), turning it on never does.
+- **The look** (slice 21.5a): Hanken Grotesk and JetBrains Mono, served by the Hub itself; one accent (a teal-green) with the Savings in it and every other figure in ink; status colours only on badges; charts with the Sizings as their one coloured line, redrawn when the system changes theme; a flat block while a page loads; turning the Kill switch off asks first ("Yes, turn it off"), turning it on never does.
+- **Density** (slice 21.6a): 13 px text, 36 px table rows, small uppercase labels on figures, table heads and sidebar groups; each figure in its own card, with a thin meter where it is a share and a footnote.
+- **The title row** (slice 21.6a) opens every page but an Investigation's: the page's icon and name, its counts (clusters, workloads, Contracts) and controls (Cost's grouping and comparison), and the Contract switcher at the right when there are several.
 - **The header** names the Contract and the page. On a Contract's own pages it has the Kill switch: "Turn on the Kill switch", or, while it is on, a red line saying since when and by whom, with "Turn it off".
 - The app uses one stylesheet and the app's own scripts.
 - The Hub serves them behind the same identity.
