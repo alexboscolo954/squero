@@ -1,6 +1,7 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Point, Workloads } from "./api";
+import { AgendaPanel } from "./Agenda";
 import App from "./App";
 import { series } from "./series";
 
@@ -218,7 +219,7 @@ test("Workloads rank by waste, a core like 4 GiB", async () => {
   });
   render(<App />);
   await screen.findByText("Deployment/memory-heavy");
-  const names = within(screen.getByRole("main")).getAllByRole("button").map((b) => b.textContent);
+  const names = [...document.querySelectorAll("tbody button")].map((b) => b.textContent);
   expect(names.slice(0, 2)).toEqual(["Deployment/memory-heavy", "Deployment/cpu-heavy"]);
   expect(screen.getByText(/Learning: kind\/lab\/StatefulSet\/db\/app \(24 h of 72 h\)/)).toBeTruthy();
 });
@@ -240,11 +241,12 @@ test("with prices, Workloads rank by the monthly cost of their waste and show it
   });
   render(<App />);
   await screen.findByText("Deployment/memory-heavy");
-  const names = within(screen.getByRole("main")).getAllByRole("button").map((b) => b.textContent);
+  const names = [...document.querySelectorAll("tbody button")].map((b) => b.textContent);
   expect(names.slice(0, 2)).toEqual(["Deployment/cpu-heavy", "Deployment/memory-heavy"]);
-  expect(screen.getByText("1,234.50 EUR/month")).toBeTruthy();
-  expect(screen.getByText("1,219.17 EUR/month")).toBeTruthy();
-  expect(screen.getByText("4,960.00 EUR/month")).toBeTruthy();
+  expect(screen.getByText("1,234.50 EUR").nextElementSibling?.textContent).toBe("Waste a month"); // its tile
+  expect(screen.getByText("1,219.17 EUR/month")).toBeTruthy(); // the row's Savings
+  fireEvent.click(screen.getByText("Deployment/cpu-heavy"));
+  expect(screen.getByText(/of 4,960\.00 EUR\/month in requests/)).toBeTruthy(); // its detail
   expect(screen.queryByText(/a core ranks like 4 GiB/)).toBeNull();
 });
 
@@ -420,7 +422,8 @@ test("comparing shows each group's change, a group gone since and what was left 
   expect(await screen.findByText("-36.50 USD/month")).toBeTruthy();
   expect(screen.getByText("-9.12 USD/month")).toBeTruthy(); // kind/old, gone since
   expect(screen.getAllByText("+0.00 USD/month")).toHaveLength(1);
-  expect(screen.getByText(/\(-45\.62 USD\/month, -18\.25 USD\/month\)/)).toBeTruthy();
+  expect(screen.getByText("-45.62 USD/month")).toBeTruthy(); // the requests' change, under its tile
+  expect(screen.getAllByText("-18.25 USD/month").length).toBeGreaterThan(0); // the Savings'
   expect(screen.getByText("kind: compared with its run of 1970-01-02 00:00 UTC")).toBeTruthy();
   expect(screen.getByText(/eu: no run that old, oldest 1970-01-03 00:00 UTC/)).toBeTruthy();
   expect(screen.getByText(/kind\/lab\/StatefulSet\/db\/db/)).toBeTruthy();
@@ -569,7 +572,7 @@ test("the Agenda lists what to look at now, in the Hub's order, each linking whe
       },
     ],
   });
-  const { container: page } = render(<App />);
+  const { container: page } = render(<AgendaPanel contract="demo-shop" />); // on the Overview from 21.3a
   await screen.findByText("Now");
   const items = [...page.querySelectorAll(".agenda li")].map((li) => li.textContent);
   expect(items).toEqual([
@@ -596,7 +599,7 @@ test("a quiet Contract's Agenda says so", async () => {
     "/api/v1/contracts/demo-shop/workloads": [200, DATA],
     "/api/v1/contracts/demo-shop/agenda": [200, { contract: "demo-shop", items: [] }],
   });
-  render(<App />);
+  render(<AgendaPanel contract="demo-shop" />);
   expect(await screen.findByText("Nothing needs you now.")).toBeTruthy();
 });
 
@@ -1367,10 +1370,10 @@ test("idle GPUs show beside the waste, per Workload and per GPU, as text (slice 
   });
   const { container: page } = render(<App />);
   fireEvent.click(await screen.findByText("Deployment/trainer"));
-  const total = [...page.querySelectorAll("p.total")].find((p) => p.textContent?.startsWith("Idle GPUs"));
-  expect(total?.querySelector("strong")?.textContent).toBe(idle.text);
+  const tile = screen.getByText("Idle GPUs", { selector: "main p" });
+  expect(tile.previousElementSibling?.textContent).toBe(idle.text); // its tile, beside the waste
   expect(screen.getByText("Idle GPUs", { selector: "th" })).toBeTruthy();
-  const cells = [...page.querySelectorAll("tbody tr")].map((tr) => tr.children[6]?.textContent);
+  const cells = [...page.querySelectorAll("tbody tr")].map((tr) => tr.children[7]?.textContent);
   expect(cells).toEqual(["-", idle.text]); // ranked by waste: plain first
   const listed = [...page.querySelectorAll(".one-container details li")].map((li) => li.textContent);
   expect(listed).toEqual([
@@ -1404,7 +1407,9 @@ test("the Cost page says the idle GPUs beside the Savings (slice 17.2b)", async 
     ],
   });
   render(<App />);
-  expect((await screen.findByText("0.5 of 1 GPUs idle")).tagName).toBe("STRONG");
+  const value = await screen.findByText("0.5 of 1 GPUs idle");
+  expect(value.nextElementSibling?.textContent).toBe("Idle GPUs");
+  expect(screen.getByText("beside the Savings, never in them")).toBeTruthy();
 });
 
 test("Nodes shows GPU nodes, their GPUs in what could go and the Unrequested GPUs (slice 17.5b)", async () => {

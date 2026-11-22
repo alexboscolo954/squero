@@ -12,11 +12,11 @@ This page says where the project is and what comes next. Each phase has its own 
 - **Phase 17 (GPU and LLM inference):** built on fixtures; the paid GPU check is deferred.
 - **Phase 19 (Integrations breadth):** grilled; 1 of 8 slices built (19.1a).
 - **Phase 20 (JVM, Spark and batch):** not grilled yet.
-- **Phase 21 (Console design):** grilled 2026-11-21; 21.1 (the shell) and 21.2 (the Overview) built; the rest next, before Phase 19 continues.
+- **Phase 21 (Console design):** grilled 2026-11-21; 21.1 (the shell), 21.2 (the Overview) and 21.3a (Workloads, Cost) built; the rest next, before Phase 19 continues.
 
 ## Next
 
-1. **21.3:** the optimizer pages restyled, then 21.4, in [Phase 21](roadmap/phase-21.md) (21.1, the shell, and 21.2, the Overview, are built).
+1. **21.3b:** Nodes, Automation and Fleet restyled, then 21.4, in [Phase 21](roadmap/phase-21.md) (21.1 the shell, 21.2 the Overview and 21.3a Workloads and Cost are built).
 2. **19.1b:** `sigv4` auth for Amazon Managed Prometheus, then 19.1c, 19.2, … in [Phase 19](roadmap/phase-19.md)'s order.
 3. The paid GPU check when the quota allows, and the phase's done-when on real GPUs (see [Phase 17](roadmap/phase-17.md)).
 

@@ -1,6 +1,6 @@
 // The Overview (slice 21.2): the tiles from the Hub's own numbers, money only with prices, the
 // Automation ring, the charts' columns, and the Agenda's first items.
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type * as api from "./api";
 import { automation, figures, OverviewPage } from "./Overview";
@@ -108,7 +108,9 @@ test("the page shows the tiles, the ring, both charts and the Agenda's first fiv
   expect(screen.getByText("memory chart")).toBeTruthy();
   const listed = [...document.querySelectorAll(".agenda li")].map((li) => li.textContent);
   expect(listed).toEqual(["item 1", "item 2", "item 3", "item 4", "item 5"].map((t, i) => `kind/shop/Deployment/w${i}: ${t}`));
-  expect(screen.getByText("See all 7").getAttribute("href")).toBe("/app/?contract=shop");
+  fireEvent.click(screen.getByText("See all 7"));
+  expect(document.querySelectorAll(".agenda li")).toHaveLength(7);
+  expect(screen.queryByText("See all 7")).toBeNull();
 });
 
 test("no GPUs, no GPU tile; no stored runs, no chart; a failed cost read is no error", async () => {

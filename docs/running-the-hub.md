@@ -300,6 +300,12 @@ Anything else gets a 403. That includes a tagged device, which has no user.
   - CPU and memory over 14 days, summed over the ready containers times their pods: requests, Sizings, usage (the Sizings' basis), the waste between requests and Sizings;
   - the Agenda's first five items.
   - Without prices, cores and GiB, never an amount. `GET /api/v1/contracts/{id}/totals` serves its charts.
+- **Workloads** (from 0.64.0, slice 21.3a): tiles for the waste, the requests' cost and the count, then a table of Workloads ranked by their waste:
+  - Savings, CPU and memory as "request → Sizing" per pod (summed over the Workload's containers), pods, the policies as pills, Automation ("automated", "partly", "no"), risks;
+  - chips for Automated and Not automated, the cluster and namespace, a search over the names (each kept in the address);
+  - a Workload's waste in cores and GiB and its requests' cost in its detail, under the table.
+  - Automation shows, never changes there: it is a pull request to the contracts repo, `propose_change` in Claude Code.
+- **Cost**: the grouping and comparison on top, tiles for the requests and the Savings available (with the change when compared), the realized Savings, then the groups.
 - **The header** names the Contract and the page. On a Contract's own pages it has the Kill switch: "Turn on the Kill switch", or, while it is on, a red line saying since when and by whom, with "Turn it off".
 - The app uses one stylesheet and the app's own scripts.
 - The Hub serves them behind the same identity.
@@ -525,7 +531,7 @@ Loading rules:
 
 ### Now
 
-**Now** sits above the Workloads. It is the Contract's Agenda: what to look at now.
+**Now** is on the Overview (from 0.64.0; above the Workloads before): its first five items, and "See all" for the rest. It is the Contract's Agenda: what to look at now.
 
 The Hub ranks it without a model, in a fixed order of urgency:
 

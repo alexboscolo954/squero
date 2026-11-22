@@ -208,7 +208,7 @@ This is slice 17.2a. Each hourly run stores a verdict for each GPU of a GPU-requ
   - `Idle GPUs: 1 of 4 GPUs idle, 1,240.00 USD/month.`
 - A priced Contract with a cluster that has no GPU price says so. It doesn't show a partial total.
 - The console's Workloads page shows:
-  - the total under the waste;
+  - the total as a tile beside the waste;
   - an Idle GPUs column;
   - in a Workload's detail, each GPU with its verdict, busiest hour, hours, share of the window held and peak memory.
 - The Cost page shows the total beside the Savings.

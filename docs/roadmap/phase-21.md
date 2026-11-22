@@ -2,7 +2,7 @@
 
 **In short:** the console works but looks like raw HTML: a link bar, headings and bare forms. This phase gives it a real dashboard design, in the style of ScaleOps' product UI, without changing what any page does. It is built next, before Phase 19 continues.
 
-**Status:** grilled 2026-11-21; 21.1 and 21.2 built.
+**Status:** grilled 2026-11-21; 21.1, 21.2 and 21.3a built.
 
 **Goal:** a console the Operator is glad to open every day: a sidebar, an Overview dashboard, and every page laid out as number tiles, charts and tables in cards.
 
@@ -12,7 +12,8 @@
 |---|---|---|
 | [21.1](#211-the-shell) | The shell: sidebar, header, Contract switcher, Kill switch, design tokens and components | ✅ built |
 | [21.2](#212-the-overview) | The Overview dashboard | ✅ built |
-| 21.3 | The optimizer pages restyled: Workloads, Cost, Nodes, Automation, Fleet | ⏳ |
+| [21.3a](#213-the-optimizer-pages) | Workloads and Cost restyled | ✅ built |
+| 21.3b | Nodes, Automation and Fleet restyled | ⏳ |
 | 21.4 | The triage pages restyled: Investigations, Teachings, Checks, Health, Contracts | ⏳ |
 
 ## Why this phase exists
@@ -113,6 +114,23 @@ Two rounds, all answers the recommended ones.
 - Workloads: tiles, charts, and the table with "request → Sizing", the policy pill, the Automation badge and its menu.
 - Nodes: the nodes that could go as a "before → after" card, Blockers as badges.
 - Fleet: one card per Contract, totals per currency (never converted, as before).
+
+**Decided (grill, 2026-11-21, all recommended):**
+- Split: 21.3a Workloads and Cost, 21.3b Nodes, Automation and Fleet.
+- The Workloads table, one row per Workload: Savings (the waste's monthly cost; cores and GiB without prices), CPU and memory as "request → Sizing" per pod summed over its containers (the new value green), pods, the policies as lavender pills, Automation as a badge, risks. The CPU and memory waste and the requests' cost move into the Workload's detail.
+- No "Propose Automation…" in the console yet: the pull-request flow exists only in the Hub MCP server (`propose_change`). The badge and a hint saying so; a console route for it is a write path into the contracts repo, its own slice and grill.
+- Filters: chips for Automated and Not automated, the cluster and namespace selects, a search over the names.
+- A Workload's detail stays a card under the table (its `workload=` address keeps working).
+- The Agenda leaves the Workloads page (decided in 21.2): the Overview's "See all" now opens the rest in place.
+
+**Built 21.3a (2026-11-21):**
+- Workloads: tiles (the waste a month with its cores and GiB, the requests a month, the Workload count, Idle GPUs), the table as decided, `automated=` and `q=` in the address like the cluster and namespace, "No Workload matches." when the filters leave none; the detail opens with the Workload's waste and requests' cost; Learning and Excluded in a card.
+- Cost: the grouping and comparison on top, tiles for the requests and the Savings available (the change, when compared, under each), the realized Savings in a card, the groups' table with the Savings in green.
+- Each restyled page's `h1` is for screen readers only; the header names the page. `ui/badge.tsx`: `Badge` and `Change` ("before → after").
+
+**Tests:** 3 in `Workloads.test.tsx` (request → Sizing per pod with an unset request, Automation all, some or none, the table's cells, the chips and the search with their address), and 9 existing tests moved to the new markup (the Agenda's now render its panel; the compared change, the totals and Idle GPUs read their tiles). 9 mutations, all caught.
+
+**Checked:** in Chrome on a local build with the Hub's CSP and sample data: both pages, no CSP violation. Dark theme only.
 
 ### 21.4 The triage pages
 

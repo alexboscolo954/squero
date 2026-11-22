@@ -28,12 +28,14 @@ export function AgendaPanel({ contract }: { contract: string }) {
 
 /** An Agenda already read: its first `limit` items, and a link to all of them. */
 export function AgendaList({ contract, agenda, limit }: { contract: string; agenda: api.Agenda; limit?: number }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? undefined : limit;
   if (agenda.items.length === 0) return <p className="hint">Nothing needs you now.</p>;
   return (
     <section className="agenda">
       <h2>Now</h2>
       <ol>
-        {agenda.items.slice(0, limit).map((i, n) => {
+        {agenda.items.slice(0, shown).map((i, n) => {
           const href = link(contract, i);
           const where = i.cluster && !i.workload ? `${i.cluster}: ` : i.workload ? `${i.workload}: ` : "";
           const time = i.kind === "approval" ? ` (goes Stale ${when(i.at)})` : i.at ? ` (${when(i.at)})` : "";
@@ -45,8 +47,10 @@ export function AgendaList({ contract, agenda, limit }: { contract: string; agen
           );
         })}
       </ol>
-      {limit !== undefined && agenda.items.length > limit && (
-        <a href={`/app/?contract=${encodeURIComponent(contract)}`}>See all {agenda.items.length}</a>
+      {shown !== undefined && agenda.items.length > shown && (
+        <button type="button" className="link" onClick={() => setAll(true)}>
+          See all {agenda.items.length}
+        </button>
       )}
     </section>
   );

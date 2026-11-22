@@ -22,9 +22,10 @@ import { FleetPage } from "./Fleet";
 import { NodesPage } from "./Nodes";
 import { OverviewPage } from "./Overview";
 import { amount, change, cores, cpu, gib, memory, money, pct, rank, when } from "./format";
-import { AgendaPanel } from "./Agenda";
 import { Shell } from "./Shell";
+import { Badge, Change } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Card, Tile } from "./ui/card";
 
 /** The pages across every Contract: no Kill switch. */
 const ACROSS = ["contracts", "fleet"];
@@ -138,7 +139,6 @@ export default function App() {
         {view === "investigation" && id && <InvestigationPage id={id} />}
         {view === "contracts" && <ContractsPage />}
         {view === "fleet" && <FleetPage />}
-        {shown && workloadsView && <AgendaPanel contract={shown} />}
         {data && workloadsView && <Page contract={shown} data={data} />}
         {shown && view === "overview" && <OverviewPage contract={shown} />}
         {shown && view === "investigations" && <InvestigationList contract={shown} />}
@@ -317,9 +317,27 @@ function Floors({ data, cluster, namespace }: { data: Workloads; cluster: string
   );
 }
 
+/** A Workload's requests and Sizings per pod, summed over its containers (slice 21.3a). */
+export function perPod(w: Workload, res: "cpu" | "memory"): { from: number; to: number } | null {
+  const sized = w.containers.filter((c) => c[res]);
+  if (sized.length === 0) return null;
+  const sum = (f: "current" | "target") => sized.reduce((t, c) => t + (c[res]?.[f] ?? 0), 0);
+  return { from: sum("current"), to: sum("target") };
+}
+
+/** Whether a Workload's containers are automated: all, some, or none. */
+export function automatedOf(w: Workload): "all" | "some" | "none" {
+  const n = w.containers.filter((c) => c.automated).length;
+  return n === 0 ? "none" : n === w.containers.length ? "all" : "some";
+}
+
+const AUTOMATED = { all: "automated", some: "partly", none: "no" };
+
 function Page({ contract, data }: { contract: string; data: Workloads }) {
   const [cluster, setCluster] = useParam("cluster");
   const [namespace, setNamespace] = useParam("namespace");
+  const [automated, setAutomated] = useParam("automated");
+  const [query, setQuery] = useParam("q");
   const [picked, setPicked] = useParam("workload");
   const clusters = Object.keys(data.clusters).sort();
   const namespaces = [...new Set(data.workloads.map((w) => w.namespace))].sort();
@@ -327,15 +345,20 @@ function Page({ contract, data }: { contract: string; data: Workloads }) {
     () =>
       data.workloads
         .filter((w) => (!cluster || w.cluster === cluster) && (!namespace || w.namespace === namespace))
+        .filter((w) => !automated || (automated === "yes") === (automatedOf(w) !== "none"))
+        .filter((w) => !query || `${w.kind}/${w.name}`.toLowerCase().includes(query.toLowerCase()))
         .sort((a, b) => rank(b) - rank(a) || a.workload.localeCompare(b.workload)),
-    [data, cluster, namespace],
+    [data, cluster, namespace, automated, query],
   );
   const selected = data.workloads.find((w) => w.workload === picked);
+  const priced = Boolean(data.currency && data.cost);
+  const savings = (w: Workload) =>
+    data.currency && w.cost ? money(w.cost.waste, data.currency) : `${cores(w.waste.cpu ?? 0)}, ${gib(w.waste.memory ?? 0)}`;
 
   return (
-    <>
-      <h1>{data.contract}: Workloads</h1>
-      <ul className="clusters">
+    <div className="flex flex-col gap-5">
+      <h1 className="sr-only">{data.contract}: Workloads</h1>
+      <ul className="clusters m-0 flex list-none flex-wrap gap-x-5 gap-y-1 p-0 text-sm">
         {clusters.map((name) => {
           const st = data.clusters[name];
           return (
@@ -348,91 +371,138 @@ function Page({ contract, data }: { contract: string; data: Workloads }) {
       </ul>
       {clusters.length === 0 && <p>No Sizings stored yet: the Hub stores them hourly.</p>}
       <PriceNotes notes={data.prices} />
-      {data.currency && data.cost ? (
-        <p className="total">
-          Waste: <strong>{money(data.cost.waste, data.currency)}</strong> ({cores(data.total.cpu ?? 0)},{" "}
-          {gib(data.total.memory ?? 0)}) of {money(data.cost.requests, data.currency)} in requests{" "}
-          <span className="hint">(requests above the Sizings; requests are what pods reserve, not the nodes)</span>
-        </p>
-      ) : (
-        <p className="total">
-          Waste: <strong>{cores(data.total.cpu ?? 0)}</strong>, <strong>{gib(data.total.memory ?? 0)}</strong>{" "}
-          <span className="hint">(requests above the Sizings; a core ranks like 4 GiB)</span>
-        </p>
-      )}
-      {data.gpus && (
-        <p className="total">
-          Idle GPUs: <strong>{data.gpus.text}</strong>{" "}
-          <span className="hint">(busiest hour under 5% busy, each GPU by the share of the window it was held; beside the waste, never in it)</span>
-        </p>
-      )}
-      <div className="filters">
-        <label>
-          Cluster{" "}
-          <select value={cluster} onChange={(e) => setCluster(e.target.value)}>
-            <option value="">all</option>
-            {clusters.map((c) => <option key={c}>{c}</option>)}
-          </select>
-        </label>
-        <label>
-          Namespace{" "}
-          <select value={namespace} onChange={(e) => setNamespace(e.target.value)}>
-            <option value="">all</option>
-            {namespaces.map((n) => <option key={n}>{n}</option>)}
-          </select>
-        </label>
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Workload</th>
-            <th>Pods</th>
-            <th>CPU waste</th>
-            <th>Memory waste</th>
-            {data.currency && <th>Waste cost</th>}
-            {data.currency && <th>Requests cost</th>}
-            {data.gpus && <th>Idle GPUs</th>}
-            <th>Risks</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((w) => (
-            <tr
-              key={w.workload}
-              className={w.workload === picked ? "picked" : ""}
-              onClick={() => setPicked(w.workload)}
-            >
-              <td>
-                <button type="button" className="link">{w.kind}/{w.name}</button>
-                <div className="hint">{w.cluster}/{w.namespace}</div>
-              </td>
-              <td>{w.pods}</td>
-              <td>{cores(w.waste.cpu ?? 0)}</td>
-              <td>{gib(w.waste.memory ?? 0)}</td>
-              {data.currency && <td>{w.cost ? money(w.cost.waste, data.currency) : "-"}</td>}
-              {data.currency && <td>{w.cost ? money(w.cost.requests, data.currency) : "-"}</td>}
-              {data.gpus && <td>{w.gpus ? w.gpus.text : "-"}</td>}
-              <td>
-                {[...new Set(w.risks.map((r) => r.kind))].sort().map((k) => (
-                  <span key={k} className="chip">{k}</span>
-                ))}
-              </td>
+      <Card className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-y-3 p-3">
+        <Tile
+          label={priced ? "Waste a month" : "Waste"}
+          value={priced ? amount(data.cost!.waste, data.currency!) : cores(data.total.cpu ?? 0)}
+          tone="waste"
+          note={priced ? `${cores(data.total.cpu ?? 0)}, ${gib(data.total.memory ?? 0)}` : gib(data.total.memory ?? 0)}
+        />
+        {priced && <Tile label="Requests a month" value={amount(data.cost!.requests, data.currency!)} tone="money" />}
+        <Tile label="Workloads" value={String(data.workloads.length)} note={`${data.learning.length} learning`} />
+        {data.gpus && <Tile label="Idle GPUs" value={data.gpus.text} tone="waste" />}
+      </Card>
+      <p className="m-0 -mt-3 text-xs text-muted">
+        {priced
+          ? "Waste: requests above the Sizings; requests are what pods reserve, not the nodes."
+          : "Waste: requests above the Sizings; a core ranks like 4 GiB."}
+        {data.gpus && " Idle GPUs: busiest hour under 5% busy, each GPU by the share of the window it was held; beside the waste, never in it."}
+      </p>
+      <Card className="flex flex-col gap-3 p-0">
+        <div className="filters flex flex-wrap items-center gap-3 px-4 pt-4">
+          <div className="flex gap-1" role="group" aria-label="Automation">
+            {(
+              [
+                ["", "All"],
+                ["yes", "Automated"],
+                ["no", "Not automated"],
+              ] as const
+            ).map(([v, label]) => (
+              <button
+                key={label}
+                type="button"
+                aria-pressed={automated === v}
+                onClick={() => setAutomated(v)}
+                className="cursor-pointer rounded-full border border-line bg-panel px-3 py-1 text-xs text-ink aria-pressed:border-accent aria-pressed:text-accent"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <label className="text-sm">
+            Cluster{" "}
+            <select value={cluster} onChange={(e) => setCluster(e.target.value)}>
+              <option value="">all</option>
+              {clusters.map((c) => <option key={c}>{c}</option>)}
+            </select>
+          </label>
+          <label className="text-sm">
+            Namespace{" "}
+            <select value={namespace} onChange={(e) => setNamespace(e.target.value)}>
+              <option value="">all</option>
+              {namespaces.map((n) => <option key={n}>{n}</option>)}
+            </select>
+          </label>
+          <input
+            type="search"
+            aria-label="Search Workloads"
+            placeholder="Search…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="ml-auto rounded-md border border-line bg-panel px-3 py-1 text-sm text-ink"
+          />
+        </div>
+        <table className="workloads rounded-none border-x-0 border-b-0">
+          <thead>
+            <tr>
+              <th>Workload</th>
+              <th>Savings</th>
+              <th>CPU request → Sizing</th>
+              <th>Memory request → Sizing</th>
+              <th>Pods</th>
+              <th>Policy</th>
+              <th>Automated</th>
+              {data.gpus && <th>Idle GPUs</th>}
+              <th>Risks</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-      {selected && <Detail contract={contract} workload={selected} />}
-      <Floors data={data} cluster={cluster} namespace={namespace} />
-      {data.learning.length > 0 && (
-        <p>
-          Learning:{" "}
-          {data.learning
-            .map((c) => `${c.workload} (${c.history_h ?? 0} h of ${c.needs_h ?? 0} h)`)
-            .join(", ")}
+          </thead>
+          <tbody>
+            {rows.map((w) => {
+              const c = perPod(w, "cpu");
+              const m = perPod(w, "memory");
+              const auto = automatedOf(w);
+              return (
+                <tr key={w.workload} className={w.workload === picked ? "picked" : ""} onClick={() => setPicked(w.workload)}>
+                  <td>
+                    <button type="button" className="link">{w.kind}/{w.name}</button>
+                    <div className="hint">{w.cluster}/{w.namespace}</div>
+                  </td>
+                  <td className="text-saving">{savings(w)}</td>
+                  <td>{c ? <Change from={cpu(c.from)} to={cpu(c.to)} /> : "-"}</td>
+                  <td>{m ? <Change from={memory(m.from)} to={memory(m.to)} /> : "-"}</td>
+                  <td>{w.pods}</td>
+                  <td>
+                    <span className="flex flex-wrap gap-1">
+                      {[...new Set(w.containers.map((x) => x.policy))].sort().map((p) => (
+                        <Badge key={p} tone="policy">{p}</Badge>
+                      ))}
+                    </span>
+                  </td>
+                  <td>
+                    <Badge tone={auto === "none" ? "muted" : "good"}>{AUTOMATED[auto]}</Badge>
+                  </td>
+                  {data.gpus && <td>{w.gpus ? w.gpus.text : "-"}</td>}
+                  <td>
+                    {[...new Set(w.risks.map((r) => r.kind))].sort().map((k) => (
+                      <span key={k} className="chip">{k}</span>
+                    ))}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {rows.length === 0 && data.workloads.length > 0 && <p className="hint px-4">No Workload matches.</p>}
+        <p className="hint m-0 px-4 pb-4">
+          Automation is changed by a pull request to the contracts repo: <code>propose_change</code> in Claude Code.
         </p>
+      </Card>
+      {selected && <Detail contract={contract} workload={selected} currency={data.currency} />}
+      <Floors data={data} cluster={cluster} namespace={namespace} />
+      {(data.learning.length > 0 || data.excluded.length > 0) && (
+        <Card className="text-sm">
+          {data.learning.length > 0 && (
+            <p className="m-0">
+              Learning:{" "}
+              {data.learning
+                .map((c) => `${c.workload} (${c.history_h ?? 0} h of ${c.needs_h ?? 0} h)`)
+                .join(", ")}
+            </p>
+          )}
+          {data.excluded.length > 0 && <p className="m-0">Excluded: {data.excluded.map((c) => c.workload).join(", ")}</p>}
+        </Card>
       )}
-      {data.excluded.length > 0 && <p>Excluded: {data.excluded.map((c) => c.workload).join(", ")}</p>}
-    </>
+    </div>
   );
 }
 
@@ -457,12 +527,9 @@ function CostPage({
     currency && g.cost ? money(g.cost[key], currency) : `${cores(g[key].cpu ?? 0)}, ${gib(g[key].memory ?? 0)}`;
   const cmp = data.compare;
   return (
-    <>
-      <h1>{data.contract}: Cost by {label}</h1>
-      <p className="hint">
-        Requests in the Contract's namespaces, not the nodes; the available Savings is what the requests above the
-        Sizings cost.
-      </p>
+    <div className="flex flex-col gap-5">
+      <h1 className="sr-only">{data.contract}: Cost by {label}</h1>
+      <div className="flex flex-wrap items-center gap-4 text-sm">
       {data.groupings.length > 1 && (
         <label>
           Group by{" "}
@@ -482,6 +549,7 @@ function CostPage({
           ))}
         </select>
       </label>
+      </div>
       {data.warnings.map((w) => (
         <p key={w} className="notice">{w}</p>
       ))}
@@ -498,19 +566,21 @@ function CostPage({
       {cmp && cmp.left_out.length > 0 && (
         <p className="notice">Left out of the change, requests or labels unknown then: {cmp.left_out.join(", ")}</p>
       )}
-      <p className="total">
-        Requests: <strong>{shown(data.total, "requests")}</strong>, Savings available:{" "}
-        <strong>{shown(data.total, "waste")}</strong>
-        {cmp && ` (${change(cmp.change, "requests", currency)}, ${change(cmp.change, "waste", currency)})`}
+      <Card className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-y-3 p-3">
+        <Tile label="Requests" value={shown(data.total, "requests")} tone="money" note={cmp ? change(cmp.change, "requests", currency) : undefined} />
+        <Tile label="Savings available" value={shown(data.total, "waste")} tone="saving" note={cmp ? change(cmp.change, "waste", currency) : undefined} />
+        {data.gpus && <Tile label="Idle GPUs" value={data.gpus.text} tone="waste" note="beside the Savings, never in them" />}
+      </Card>
+      <p className="m-0 -mt-3 text-xs text-muted">
+        Requests in the Contract's namespaces, not the nodes; the available Savings is what the requests above the
+        Sizings cost.
       </p>
-      {data.gpus && (
-        <p className="total">
-          Idle GPUs: <strong>{data.gpus.text}</strong> <span className="hint">(beside the Savings, never in them)</span>
-        </p>
-      )}
-      <Realized data={data.realized} />
+      <Card>
+        <Realized data={data.realized} />
+      </Card>
       {data.groups.length === 0 && <p>No Sizings stored yet: the Hub stores them hourly.</p>}
-      <table>
+      <Card className="p-0">
+      <table className="rounded-none border-0">
         <thead>
           <tr>
             <th>{label[0].toUpperCase() + label.slice(1)}</th>
@@ -530,7 +600,7 @@ function CostPage({
                 <td>{data.by === "namespace" ? <a href={`/app/?${q}`}>{g.group}</a> : g.group}</td>
                 <td>{g.workloads}</td>
                 <td>{shown(g, "requests")}</td>
-                <td>{shown(g, "waste")}</td>
+                <td className="text-saving">{shown(g, "waste")}</td>
                 {cmp && <td>{g.change ? change(g.change, "requests", currency) : "-"}</td>}
                 {cmp && <td>{g.change ? change(g.change, "waste", currency) : "-"}</td>}
               </tr>
@@ -538,17 +608,18 @@ function CostPage({
           })}
         </tbody>
       </table>
-    </>
+      </Card>
+    </div>
   );
 }
 
 function Realized({ data }: { data: Allocation["realized"] }) {
   const lowered = data.floors ?? [];
   if (data.drops.length === 0 && lowered.length === 0)
-    return <p className="hint">Savings realized: none yet. A request lowered to its Sizing shows after the next hourly run.</p>;
+    return <p className="hint m-0">Savings realized: none yet. A request lowered to its Sizing shows after the next hourly run.</p>;
   const cur = data.currency;
   return (
-    <p className="total">
+    <p className="total m-0">
       Savings realized:{" "}
       {cur && data.cost ? (
         <>
@@ -571,10 +642,14 @@ function Realized({ data }: { data: Allocation["realized"] }) {
   );
 }
 
-function Detail({ contract, workload }: { contract: string; workload: Workload }) {
+function Detail({ contract, workload, currency }: { contract: string; workload: Workload; currency?: string | null }) {
   return (
-    <section className="detail">
+    <section className="detail rounded-xl">
       <h2>{workload.kind}/{workload.name}</h2>
+      <p className="hint">
+        Waste: {cores(workload.waste.cpu ?? 0)} CPU, {gib(workload.waste.memory ?? 0)} memory
+        {currency && workload.cost && `; ${money(workload.cost.waste, currency)} of ${money(workload.cost.requests, currency)} in requests`}
+      </p>
       {workload.containers.map((c) => (
         <ContainerDetail key={c.container} contract={contract} c={c} />
       ))}
