@@ -237,10 +237,10 @@ export function NodesPage({ contract }: { contract: string }) {
                         <span key={t} className="chip bg-line text-muted">{t}</span>
                       ))}
                     </td>
-                    <td>{both(n.allocatable)}</td>
+                    <td className="num">{both(n.allocatable)}</td>
                     <td>
                       <details>
-                        <summary>
+                        <summary className="num">
                           {n.mine.pods} pods: {both(n.mine)}
                         </summary>
                         <ul>
@@ -252,11 +252,11 @@ export function NodesPage({ contract }: { contract: string }) {
                         </ul>
                       </details>
                     </td>
-                    <td>
+                    <td className="num">
                       {n.others.pods} pods: {both(n.others)}
                     </td>
-                    <td>{both(n.daemonsets)}</td>
-                    <td>{both(n.room)}</td>
+                    <td className="num">{both(n.daemonsets)}</td>
+                    <td className="num">{both(n.room)}</td>
                     <td>
                       {n.verdict.state === "clear" && <Badge tone="good">yes: nothing on it blocks</Badge>}
                       {n.verdict.state === "unknown" && (

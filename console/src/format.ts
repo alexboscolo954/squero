@@ -31,9 +31,21 @@ export function change(c: { cost?: { requests: number; waste: number } | null; r
   return `${sign(cpu)}${cores(Math.abs(cpu))}, ${sign(mem)}${gib(Math.abs(mem))}`;
 }
 
+/** Cores and GiB as one number, a core weighing as much as 4 GiB. */
+export const weigh = (v: { cpu?: number; memory?: number }) => (v.cpu ?? 0) + (v.memory ?? 0) / GI / 4;
+
 /** One number to sort by: the waste's monthly cost when the Contract has prices, else
  * cores and GiB with a core weighing as much as 4 GiB. */
 export const rank = (w: {
   waste: { cpu?: number; memory?: number };
   cost?: { waste: number } | null;
-}) => (w.cost ? w.cost.waste : (w.waste.cpu ?? 0) + (w.waste.memory ?? 0) / GI / 4);
+}) => (w.cost ? w.cost.waste : weigh(w.waste));
+
+/** A row's share of the largest row shown, for its cell's bar (slice 21.6c); none when there is
+ * nothing to compare with. */
+export const share = (v: number, top: number): number | null => (v > 0 && top > 0 ? Math.min(1, v / top) : null);
+
+/** The share of its request a Sizing keeps; none for a raise (a full bar would read as "fine")
+ * or an unset request. */
+export const kept = (from: number | null | undefined, to: number): number | null =>
+  from != null && from > 0 && to <= from ? to / from : null;

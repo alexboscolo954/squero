@@ -22,11 +22,11 @@ import { FleetPage } from "./Fleet";
 import { NodesPage } from "./Nodes";
 import { NoSizings, OverviewPage } from "./Overview";
 import { UsageCharts } from "./Usage";
-import { amount, change, cores, cpu, gib, memory, money, pct, rank, when } from "./format";
+import { amount, change, cores, cpu, gib, kept, memory, money, pct, rank, share, weigh, when } from "./format";
 import { PageTools, Shell } from "./Shell";
 import { Badge, Change } from "./ui/badge";
 import { Button } from "./ui/button";
-import { Card, Figures, Skeleton, Tile } from "./ui/card";
+import { Bar, Card, Figures, Skeleton, Tile } from "./ui/card";
 
 /** The pages across every Contract: no Kill switch. */
 const ACROSS = ["contracts", "fleet"];
@@ -341,11 +341,12 @@ function Floors({ data, cluster, namespace }: { data: Workloads; cluster: string
 }
 
 /** A Workload's requests and Sizings per pod, summed over its containers (slice 21.3a). */
-export function perPod(w: Workload, res: "cpu" | "memory"): { from: number; to: number } | null {
+export function perPod(w: Workload, res: "cpu" | "memory"): { from: number; to: number; whole: boolean } | null {
   const sized = w.containers.filter((c) => c[res]);
   if (sized.length === 0) return null;
   const sum = (f: "current" | "target") => sized.reduce((t, c) => t + (c[res]?.[f] ?? 0), 0);
-  return { from: sum("current"), to: sum("target") };
+  // whole: every container's request is set, so the two sums are over the same containers
+  return { from: sum("current"), to: sum("target"), whole: sized.every((c) => c[res]?.current != null) };
 }
 
 /** Whether a Workload's containers are automated: all, some, or none. */
@@ -375,8 +376,20 @@ function Page({ contract, data }: { contract: string; data: Workloads }) {
   );
   const selected = data.workloads.find((w) => w.workload === picked);
   const priced = Boolean(data.currency && data.cost);
+  const paid = (w: Workload) => Boolean(data.currency && w.cost);
   const savings = (w: Workload) =>
-    data.currency && w.cost ? money(w.cost.waste, data.currency) : `${cores(w.waste.cpu ?? 0)}, ${gib(w.waste.memory ?? 0)}`;
+    paid(w) ? money(w.cost!.waste, data.currency!) : `${cores(w.waste.cpu ?? 0)}, ${gib(w.waste.memory ?? 0)}`;
+  // The rows shown, money and cores apart: they never share a scale or a sum (slice 21.6c).
+  const size = (w: Workload) => (paid(w) ? w.cost!.waste : weigh(w.waste));
+  const [inMoney, inCores] = [rows.filter(paid), rows.filter((w) => !paid(w))];
+  const top = { money: Math.max(0, ...inMoney.map(size)), cores: Math.max(0, ...inCores.map(size)) };
+  const sum = (ws: Workload[], f: (w: Workload) => number) => ws.reduce((t, w) => t + f(w), 0);
+  const total = [
+    inMoney.length > 0 && money(sum(inMoney, (w) => w.cost!.waste), data.currency!),
+    inCores.length > 0 && `${cores(sum(inCores, (w) => w.waste.cpu ?? 0))}, ${gib(sum(inCores, (w) => w.waste.memory ?? 0))}`,
+  ]
+    .filter(Boolean)
+    .join(" + ");
 
   return (
     <div className="flex flex-col gap-5">
@@ -458,6 +471,7 @@ function Page({ contract, data }: { contract: string; data: Workloads }) {
             className="ml-auto rounded-md border border-line bg-panel px-3 py-1 text-sm text-ink"
           />
         </div>
+        <div className="overflow-x-auto">
         <table className="workloads rounded-none border-x-0 border-b-0">
           <thead>
             <tr>
@@ -483,10 +497,19 @@ function Page({ contract, data }: { contract: string; data: Workloads }) {
                     <button type="button" className="link">{w.kind}/{w.name}</button>
                     <div className="hint">{w.cluster}/{w.namespace}</div>
                   </td>
-                  <td className="text-saving">{savings(w)}</td>
-                  <td>{c ? <Change from={cpu(c.from)} to={cpu(c.to)} /> : "-"}</td>
-                  <td>{m ? <Change from={memory(m.from)} to={memory(m.to)} /> : "-"}</td>
-                  <td>{w.pods}</td>
+                  <td className="num text-saving">
+                    {savings(w)}
+                    <Bar accent share={share(size(w), paid(w) ? top.money : top.cores)} />
+                  </td>
+                  <td className="num">
+                    {c ? <Change from={cpu(c.from)} to={cpu(c.to)} /> : "-"}
+                    {c && <Bar share={c.whole ? kept(c.from, c.to) : null} />}
+                  </td>
+                  <td className="num">
+                    {m ? <Change from={memory(m.from)} to={memory(m.to)} /> : "-"}
+                    {m && <Bar share={m.whole ? kept(m.from, m.to) : null} />}
+                  </td>
+                  <td className="num">{w.pods}</td>
                   <td>
                     <span className="flex flex-wrap gap-1">
                       {[...new Set(w.containers.map((x) => x.policy))].sort().map((p) => (
@@ -507,8 +530,31 @@ function Page({ contract, data }: { contract: string; data: Workloads }) {
               );
             })}
           </tbody>
+          {rows.length > 0 && (
+            <tfoot>
+              <tr>
+                <td>
+                  Total, {rows.length} workload{rows.length === 1 ? "" : "s"}
+                </td>
+                <td className="num text-saving">{total}</td>
+                <td />
+                <td />
+                <td className="num">{sum(rows, (w) => w.pods)}</td>
+                <td />
+                <td />
+                {data.gpus && <td />}
+                <td />
+              </tr>
+            </tfoot>
+          )}
         </table>
+        </div>
         {rows.length === 0 && data.workloads.length > 0 && <p className="hint px-4">No Workload matches.</p>}
+        <p className="hint m-0 px-4">
+          Bars: under Savings, the row's share of the largest shown; under CPU and memory, the share of the request
+          its Sizing keeps (none for a raise, or where a container has no request set). The Total adds the rows shown; a request and a Sizing are per pod, so
+          they have no sum.
+        </p>
         <p className="hint m-0 px-4 pb-4">
           Automation is changed by a pull request to the contracts repo: <code>propose_change</code> in Claude Code.
         </p>
@@ -552,6 +598,13 @@ function CostPage({
   const shown = (g: { cost?: { requests: number; waste: number } | null; requests: { cpu?: number; memory?: number }; waste: { cpu?: number; memory?: number } }, key: "requests" | "waste") =>
     currency && g.cost ? money(g.cost[key], currency) : `${cores(g[key].cpu ?? 0)}, ${gib(g[key].memory ?? 0)}`;
   const cmp = data.compare;
+  // One scale per column: money when priced, else cores and GiB as one number (slice 21.6c).
+  const size = (g: Allocation["groups"][number], key: "requests" | "waste") =>
+    currency && g.cost ? g.cost[key] : weigh(g[key]);
+  const top = {
+    requests: Math.max(0, ...data.groups.map((g) => size(g, "requests"))),
+    waste: Math.max(0, ...data.groups.map((g) => size(g, "waste"))),
+  };
   return (
     <div className="flex flex-col gap-5">
       <PageTools>
@@ -606,8 +659,8 @@ function CostPage({
         <Realized data={data.realized} />
       </Card>
       {data.groups.length === 0 && <p>No Sizings stored yet: the Hub stores them hourly.</p>}
-      <Card className="p-0">
-      <table className="rounded-none border-0">
+      <Card className="overflow-x-auto p-0">
+      <table className="cost rounded-none border-0">
         <thead>
           <tr>
             <th>{label[0].toUpperCase() + label.slice(1)}</th>
@@ -625,16 +678,37 @@ function CostPage({
             return (
               <tr key={g.group}>
                 <td>{data.by === "namespace" ? <a href={`/app/?${q}`}>{g.group}</a> : g.group}</td>
-                <td>{g.workloads}</td>
-                <td>{shown(g, "requests")}</td>
-                <td className="text-saving">{shown(g, "waste")}</td>
-                {cmp && <td>{g.change ? change(g.change, "requests", currency) : "-"}</td>}
-                {cmp && <td>{g.change ? change(g.change, "waste", currency) : "-"}</td>}
+                <td className="num">{g.workloads}</td>
+                <td className="num">
+                  {shown(g, "requests")}
+                  <Bar share={share(size(g, "requests"), top.requests)} />
+                </td>
+                <td className="num text-saving">
+                  {shown(g, "waste")}
+                  <Bar accent share={share(size(g, "waste"), top.waste)} />
+                </td>
+                {cmp && <td className="num">{g.change ? change(g.change, "requests", currency) : "-"}</td>}
+                {cmp && <td className="num">{g.change ? change(g.change, "waste", currency) : "-"}</td>}
               </tr>
             );
           })}
         </tbody>
+        {data.groups.length > 0 && (
+          <tfoot>
+            <tr>
+              <td>Total</td>
+              <td className="num">{data.groups.reduce((t, g) => t + g.workloads, 0)}</td>
+              <td className="num">{shown(data.total, "requests")}</td>
+              <td className="num text-saving">{shown(data.total, "waste")}</td>
+              {cmp && <td className="num">{change(cmp.change, "requests", currency)}</td>}
+              {cmp && <td className="num">{change(cmp.change, "waste", currency)}</td>}
+            </tr>
+          </tfoot>
+        )}
       </table>
+      {data.groups.length > 0 && (
+        <p className="hint m-0 px-3 py-3">Bars: each group's share of the largest; the Total is the Hub's own.</p>
+      )}
       </Card>
     </div>
   );

@@ -54,13 +54,22 @@ export function Tile({
   );
 }
 
-/** A thin meter for a share, 0 to 1. */
-export function Meter({ share }: { share: number }) {
+/** A thin meter for a share, 0 to 1; `accent` for a Savings. */
+export function Meter({ share, accent = false, className }: { share: number; accent?: boolean; className?: string }) {
   return (
-    <div className="h-1.5 w-full overflow-hidden rounded-full bg-raised" aria-hidden="true">
-      <div className="h-full rounded-full bg-muted" style={{ width: `${Math.min(1, Math.max(0, share)) * 100}%` }} />
+    <div className={cn("h-1.5 w-full overflow-hidden rounded-full bg-raised", className)} aria-hidden="true">
+      <div
+        className={cn("h-full rounded-full", accent ? "bg-accent" : "bg-muted")}
+        style={{ width: `${Math.min(1, Math.max(0, share)) * 100}%` }}
+      />
     </div>
   );
+}
+
+/** A table cell's bar under its number (slice 21.6c): nothing when there is no share to show.
+ * It adds no text: the cell reads the same. */
+export function Bar({ share, accent }: { share: number | null; accent?: boolean }) {
+  return share == null ? null : <Meter share={share} accent={accent} className="bar mt-1 h-1 max-w-28 bg-line" />;
 }
 
 /** A flat block in a shape of what loads (slice 21.5b): no pulse, no spinner. */

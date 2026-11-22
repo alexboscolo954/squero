@@ -2,7 +2,7 @@
 
 **In short:** the console works but looks like raw HTML: a link bar, headings and bare forms. This phase gives it a real dashboard design, in the style of ScaleOps' product UI, without changing what any page does. It is built next, before Phase 19 continues.
 
-**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6 grilled (2026-11-22); 21.6a and 21.6b built. Owed: a look at the light theme and at every page with real data.
+**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6 built (2026-11-22), not released. Owed: a look at the light theme and at every page with real data.
 
 **Goal:** a console the Operator is glad to open every day: a sidebar, an Overview dashboard, and every page laid out as number tiles, charts and tables in cards.
 
@@ -19,7 +19,7 @@
 | [21.5b](#215-refinement-after-two-design-skills) | Number tiles, charts, empty and loading states; the checklist on every page | ✅ built |
 | [21.6a](#216-density-and-layout-after-a-live-reference) | Denser type, a title row on every page, figures in cards, uppercase small labels | ✅ built |
 | [21.6b](#216-density-and-layout-after-a-live-reference) | The Overview as a grid of cards | ✅ built |
-| [21.6c](#216-density-and-layout-after-a-live-reference) | Tables: bars in cells, a Total row, numbers in mono | ⬜ next |
+| [21.6c](#216-density-and-layout-after-a-live-reference) | Tables: bars in cells, a Total row, numbers in mono | ✅ built |
 
 ## Why this phase exists
 
@@ -276,4 +276,28 @@ Two rounds, all answers the recommended ones.
 - The Overview makes six reads where it made four.
 - Not seen: a narrow window (the grid goes to two columns, then one).
 - No API change beyond one schema's description (types regenerated), no eval rerun, no isolation test: every read is the Contract's own, by its id.
+
+**Decided for 21.6c (2026-11-22, all recommended):**
+- **Which tables:** Workloads and Cost get bars and a Total row: the two that rank things by money or resources. Every other table gets mono numbers only.
+- **What a bar measures:** under a Savings, or a group's requests and Savings, the row's share of the largest row shown; under a CPU or memory "request → Sizing", the share of the request the Sizing keeps. A raise draws none: a full bar would read as "fine".
+- **The Total row** adds the rows shown, so on Workloads it follows the filters; the whole Contract's totals stay in the cards above.
+
+**Built 21.6c (2026-11-22):**
+- Workloads: a bar under each Savings (in the accent) and under each CPU and memory (neutral); a Total row with the Savings and pods of the rows shown. Money and cores never share a scale or a sum: a row without a price is scaled against the other unpriced rows and totalled apart ("150.00 EUR/month + 0.50 cores, 0.00 GiB").
+- Cost: a bar under each group's requests and Savings; a Total row with the Hub's own total and, when comparing, its change. Unpriced, cores and GiB scale the bars as one number, a core weighing 4 GiB, as the ranking does.
+- A bar adds no text and no column. No bar where there is nothing to compare: a zero, a raise, a Workload with a container whose request is unset (its sums are over different containers), a group gone since.
+- Numbers in mono (`.num`): quantities and money in the Workloads, Cost, Nodes, Automation and Contracts tables; they never break from their unit. Dates and names stay in the text face.
+- The Workloads, Cost, Automation and Contracts tables scroll sideways inside their card when the window is narrow (the page itself clips overflow); Nodes already did.
+- One line under each table says what its bars mean.
+
+**Tests:** 2 new (a bar's share and the share a Sizing keeps; Workloads' bars, mixed units and a Total that follows the search), and 4 Cost tests extended (bars priced and unpriced, the Total row with and without a comparison, none without groups). 81 console tests. 17 mutations, all caught.
+
+**Checked:** in Chrome with the Hub's CSP and sample data: Workloads priced and unpriced (with the Idle GPUs column) and Cost in dark, Workloads in light (tokens set by hand); the page squeezed to 560 px: the table scrolls inside its card and the page does not. The browser console read from the first page load: no error, no CSP refusal.
+
+**Known limits:**
+- The per-pod CPU and memory columns have no Total.
+- The Workloads Total is the console's sum of the rows shown; unfiltered it is the same sum the Hub makes for the cards.
+- Not seen in a browser: the Cost page while comparing (tested), the Nodes, Automation and Contracts tables in mono (no sample data), a real narrow window (the window would not resize; the page was squeezed instead).
+- For the owner's eye: the numbers are 12 px mono beside 13 px text, and the Savings column carries more of the accent than before.
+- No API change, no eval rerun, no isolation test.
 

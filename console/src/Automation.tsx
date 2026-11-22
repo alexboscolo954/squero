@@ -48,6 +48,7 @@ export function AutomationPage({ contract }: { contract: string }) {
           {cl.containers.length === 0 ? (
             <p className="hint px-5 pb-4">Nothing reported yet.</p>
           ) : (
+            <div className="overflow-x-auto">
             <table className="rounded-none border-x-0 border-b-0">
               <thead>
                 <tr>
@@ -72,8 +73,10 @@ export function AutomationPage({ contract }: { contract: string }) {
                         {h.outcome}, {h.pods} pods, {when(h.at)}
                       </td>
                       <td>
-                        {h.cpu != null && `cpu ${cpu(h.cpu)} `}
-                        {h.memory != null && `memory ${memory(h.memory)}`}
+                        <span className="num">
+                          {h.cpu != null && `cpu ${cpu(h.cpu)} `}
+                          {h.memory != null && `memory ${memory(h.memory)}`}
+                        </span>
                         {h.stepped != null && <div className="hint">Step-up: memory limit {memory(h.stepped)}</div>}
                         {h.burst != null && <div className="hint">Burst: CPU limit {cpu(h.burst)}</div>}
                       </td>
@@ -94,6 +97,7 @@ export function AutomationPage({ contract }: { contract: string }) {
                 })}
               </tbody>
             </table>
+            </div>
           )}
         </Card>
       ))}

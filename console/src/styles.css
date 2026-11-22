@@ -127,6 +127,12 @@
     font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
     color: var(--muted); white-space: nowrap;
   }
+  /* A Total row (slice 21.6c), and quantities and money in mono so their digits line up. */
+  tfoot td { font-weight: 600; border-top: 1px solid var(--line); border-bottom: 0; }
+  .num {
+    font-family: "JetBrains Mono Variable", ui-monospace, Menlo, monospace; font-size: 12px;
+    white-space: nowrap; /* an amount never breaks from its unit; a narrow table scrolls */
+  }
   tbody tr { cursor: pointer; }
   tbody tr:hover td { background: var(--raised); }
   tbody tr.picked td { background: var(--accent-bg); }

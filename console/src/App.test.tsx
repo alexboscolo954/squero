@@ -64,6 +64,9 @@ function answer(routes: Record<string, [number, unknown]>) {
   );
 }
 
+/** The widths of a row's cell bars (slice 21.6c). */
+const bars = (tr: Element) => [...tr.querySelectorAll(".bar > div")].map((d) => (d as HTMLElement).style.width);
+
 beforeEach(() => history.replaceState(null, "", "/app/"));
 afterEach(() => {
   cleanup();
@@ -292,8 +295,18 @@ test("the Cost page lists namespaces by what their requests cost, each linking i
   render(<App />);
   const lab = await screen.findByRole("link", { name: "kind/lab" });
   expect(lab.getAttribute("href")).toBe("/app/?contract=demo-shop&cluster=kind&namespace=lab");
-  expect(screen.getAllByText("74.65 USD/month")).toHaveLength(2); // kind/lab's and the total Savings
-  expect(screen.getByText("150.81 USD/month")).toBeTruthy(); // the total of the requests
+  expect(screen.getAllByText("74.65 USD/month")).toHaveLength(3); // kind/lab's, the card's and the Total row's
+  expect(screen.getAllByText("150.81 USD/month")).toHaveLength(2); // the requests: the card's and the Total row's
+  // slice 21.6c: a Total row, the Hub's own; bars, each group's share of the largest; numbers in mono
+  const foot = [...document.querySelectorAll("table.cost tfoot td")];
+  expect(foot.map((td) => td.textContent)).toEqual(["Total", "10", "150.81 USD/month", "74.65 USD/month"]);
+  const [labRow, demoRow] = [...document.querySelectorAll("table.cost tbody tr")];
+  expect(bars(labRow)).toEqual(["100%", "100%"]);
+  expect(bars(demoRow)).toHaveLength(1); // nothing to save: no bar under its Savings
+  expect(parseFloat(bars(demoRow)[0])).toBeCloseTo((2.31 / 148.5) * 100, 3);
+  expect(labRow.children[2].className).toBe("num");
+  expect(labRow.children[0].className).toBe(""); // a name is no number
+  expect(screen.getByText(/Bars: each group's share of the largest/)).toBeTruthy();
   expect(screen.queryByText("Δ requests")).toBeNull(); // nothing compared
   expect(screen.getByText("77.53 USD/month")).toBeTruthy(); // realized
   expect(screen.getByText(/1\.06 USD so far, 77\.53 USD\/month from this week's/)).toBeTruthy();
@@ -326,6 +339,11 @@ test("the Cost page groups by team on request, with no Workloads links and the H
   const { container: page } = render(<App />);
   expect(await screen.findByText("<b>payments</b>")).toBeTruthy();
   expect(screen.getByRole("heading", { level: 1, name: "demo-shop: Cost" })).toBeTruthy(); // the title row (21.6a)
+  // unpriced, cores and GiB as one number scale the bars (21.6c): 0.5 cores against 2 cores and 4 GiB
+  const [payments, none] = [...page.querySelectorAll("table.cost tbody tr")];
+  expect(bars(payments)).toEqual(["100%", "100%"]);
+  expect(bars(none)).toHaveLength(1);
+  expect(parseFloat(bars(none)[0])).toBeCloseTo((0.5 / 3) * 100, 3);
   expect((screen.getByLabelText(/Group by/) as HTMLSelectElement).value).toBe("team");
   expect(page.querySelector("b")).toBeNull();
   expect(screen.getByText(/no pod has label team/)).toBeTruthy();
@@ -435,7 +453,12 @@ test("comparing shows each group's change, a group gone since and what was left 
   expect(await screen.findByText("-36.50 USD/month")).toBeTruthy();
   expect(screen.getByText("-9.12 USD/month")).toBeTruthy(); // kind/old, gone since
   expect(screen.getAllByText("+0.00 USD/month")).toHaveLength(1);
-  expect(screen.getByText("-45.62 USD/month")).toBeTruthy(); // the requests' change, under its tile
+  expect(screen.getAllByText("-45.62 USD/month")).toHaveLength(2); // the requests' change: its card's and the Total row's
+  const foot = [...document.querySelectorAll("table.cost tfoot td")].map((td) => td.textContent);
+  expect(foot).toEqual(["Total", "9", "147.29 USD/month", "74.65 USD/month", "-45.62 USD/month", "-18.25 USD/month"]);
+  expect(document.querySelectorAll("table.cost thead th")).toHaveLength(foot.length); // a cell under every head
+  const gone = screen.getByText("kind/old").closest("tr")!;
+  expect(bars(gone)).toEqual([]); // nothing left of it: no bar
   expect(screen.getAllByText("-18.25 USD/month").length).toBeGreaterThan(0); // the Savings'
   expect(screen.getByText("kind: compared with its run of 1970-01-02 00:00 UTC")).toBeTruthy();
   expect(screen.getByText(/eu: no run that old, oldest 1970-01-03 00:00 UTC/)).toBeTruthy();
@@ -514,6 +537,7 @@ test("a Contract with no billed cluster shows no bill line and no error", async 
   await waitFor(() => expect(screen.queryByRole("table")).not.toBeNull());
   expect(screen.queryByText(/ bill \(/)).toBeNull();
   expect(screen.queryByText(/404/)).toBeNull();
+  expect(document.querySelector("tfoot")).toBeNull(); // no group, no Total row
 });
 
 test("the Cost page draws CPU and memory over time from its own read (21.6b)", async () => {

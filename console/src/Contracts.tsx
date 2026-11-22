@@ -19,6 +19,7 @@ export function ContractsPage() {
       {rows.length === 0 ? (
         <p className="hint">No Contracts loaded.</p>
       ) : (
+        <div className="overflow-x-auto">
         <table className="investigations">
           <thead>
             <tr>
@@ -44,7 +45,7 @@ export function ContractsPage() {
                 <td>
                   <code>{c.model ?? "Hub default"}</code>
                 </td>
-                <td>
+                <td className="num">
                   {usd(c.spent_usd)}
                   {c.budget_usd != null &&
                     ` of $${c.budget_usd.toFixed(2)} (${Math.round((100 * c.spent_usd) / c.budget_usd)}%)`}
@@ -53,6 +54,7 @@ export function ContractsPage() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </>
   );

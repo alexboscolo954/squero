@@ -311,14 +311,18 @@ Anything else gets a 403. That includes a tagged device, which has no user.
 - **Workloads** (from 0.64.0, slice 21.3a): tiles for the waste, the requests' cost and the count, then a table of Workloads ranked by their waste:
   - Savings, CPU and memory as "request → Sizing" per pod (summed over the Workload's containers), pods, the policies as pills, Automation ("automated", "partly", "no"), risks;
   - chips for Automated and Not automated, the cluster and namespace, a search over the names (each kept in the address);
+  - a bar under each Savings (the row's share of the largest shown) and under each CPU and memory (the share of the request its Sizing keeps; none for a raise, or where a container has no request set);
+  - a Total row: the Savings and pods of the rows shown, so it follows the filters. A request and a Sizing are per pod, so they have no sum;
   - a Workload's waste in cores and GiB and its requests' cost in its detail, under the table.
   - Automation shows, never changes there: it is a pull request to the contracts repo, `propose_change` in Claude Code.
 - **Cost**: the grouping and comparison on top, tiles for the requests and the Savings available (with the change when compared), the realized Savings, the groups, then the charts.
+  - The groups' table (slice 21.6c): a bar under each group's requests and Savings (its share of the largest group), and a Total row, the Hub's own total and change.
   - The charts (here since slice 21.6b): CPU and memory over 14 days, summed over the ready containers times their pods: requests, Sizings, usage (the Sizings' basis), the waste between requests and Sizings. `GET /api/v1/contracts/{id}/totals` serves them, read on its own; regrouping or comparing the cost never redraws them.
 - **Nodes, Automation, Fleet** (slice 21.3b): each cluster or Contract a card; verdicts, Automation states and Kill switches as coloured badges; the Fleet's totals per currency as tiles on top, never converted.
 - **Investigations, Teachings, Checks, Health, Contracts** (slice 21.4): statuses as coloured badges, each integration's Health a tile (a failing one framed red), the action that goes ahead a filled button and Reject or Retire a red-outlined one.
 - **The look** (slice 21.5a): Hanken Grotesk and JetBrains Mono, served by the Hub itself; one accent (a teal-green) with the Savings in it and every other figure in ink; status colours only on badges; charts with the Sizings as their one coloured line, redrawn when the system changes theme; a flat block while a page loads; turning the Kill switch off asks first ("Yes, turn it off"), turning it on never does.
 - **Density** (slice 21.6a): 13 px text, 36 px table rows, small uppercase labels on figures, table heads and sidebar groups; each figure in its own card, with a thin meter where it is a share and a footnote.
+- **Numbers** (slice 21.6c): quantities and money in tables are in JetBrains Mono, so their digits line up, and never break from their unit; dates and names are not. A table too wide for its window scrolls sideways inside its card.
 - **The title row** (slice 21.6a) opens every page but an Investigation's: the page's icon and name, its counts (clusters, workloads, Contracts) and controls (Cost's grouping and comparison), and the Contract switcher at the right when there are several.
 - **The header** names the Contract and the page. On a Contract's own pages it has the Kill switch: "Turn on the Kill switch", or, while it is on, a red line saying since when and by whom, with "Turn it off".
 - The app uses one stylesheet and the app's own scripts.
