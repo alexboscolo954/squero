@@ -3,25 +3,46 @@
 // field is rendered as text, line breaks kept, never as markup, and an Evidence link
 // stays text too. Deciding, Report feedback and Jira filing (slice 11.5b), and asking
 // or following up a Question (slice 11.7a), post to the API and show the Investigation as
-// it is after.
+// it is after. The page pattern (slice 21.6e): figures and filter chips over the list, and a
+// header card with figures on an Investigation's own page.
+import { CircleAlert, Coins, EyeOff, Hand, Hash, Loader, Wrench } from "lucide-react";
 import { useEffect, useState } from "react";
 import * as api from "./api";
-import { Skeleton } from "./ui/card";
+import { useParam } from "./params";
+import { PageTools } from "./Shell";
+import { Card, Figures, Skeleton, Tile } from "./ui/card";
 import { Badge } from "./ui/badge";
+import { Chips } from "./ui/chips";
 import { when } from "./format";
 
 export const page = (id: string) => `/app/?view=investigation&id=${encodeURIComponent(id)}`;
 
+/** An Investigation's one status, for its badge, the figures and the chips: a failed Check and a
+ * failed Run are both "failed". */
 export function state(t: { status: string; failed: boolean }): string {
   return t.failed ? "failed" : t.status.replace("_", " ");
 }
+
+/** Its badge's colour: failed red, done green, the rest (and a status not known here) neutral. */
+export const tone = (t: { status: string; failed: boolean }) =>
+  state(t) === "failed" ? "bad" : t.status === "done" ? "good" : "muted";
+
+const KINDS = [["", "All kinds"], ["triage", "Triages"], ["question", "Questions"], ["check", "Checks"]] as const;
+// The badges' own words, capitalised: one vocabulary for a status on the page.
+const STATES = [
+  ["", "Any status"],
+  ["awaiting approval", "Awaiting approval"],
+  ["running", "Running"],
+  ["failed", "Failed"],
+  ["done", "Done"],
+] as const;
 
 /** Ask a Question about this Contract; its page opens while it is answered. */
 function AskForm({ contract }: { contract: string }) {
   const [question, setQuestion] = useState("");
   const [failed, setFailed] = useState("");
   return (
-    <section className="panel">
+    <section className="panel m-0">
       <h2>Ask a Question</h2>
       <p>
         <textarea
@@ -55,6 +76,8 @@ function AskForm({ contract }: { contract: string }) {
 export function InvestigationList({ contract }: { contract: string }) {
   const [rows, setRows] = useState<api.Brief[] | null>(null);
   const [error, setError] = useState("");
+  const [kind, setKind] = useParam("kind");
+  const [status, setStatus] = useParam("status");
   useEffect(() => {
     setRows(null);
     setError("");
@@ -62,39 +85,64 @@ export function InvestigationList({ contract }: { contract: string }) {
   }, [contract]);
   if (error) return <p className="notice">The Hub didn't answer: {error}</p>;
   if (!rows) return <Skeleton />;
+  const count = (s: string) => String(rows.filter((t) => state(t) === s).length);
+  // The Hub lists its latest 100: say "latest" only when the list is that long.
+  const listed = rows.length >= 100 ? `the latest ${rows.length}` : `${rows.length} listed`;
+  const shown = rows.filter((t) => (!kind || t.kind === kind) && (!status || state(t) === status));
   return (
-    <>
-      <AskForm contract={contract} />
-      <p className="hint">Newest first. Passing Checks are left out.</p>
-      {rows.length === 0 ? (
-        <p>None yet.</p>
-      ) : (
-        <table className="investigations">
-          <thead>
-            <tr>
-              <th>Started</th>
-              <th>Kind</th>
-              <th>Status</th>
-              <th>Title</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((t) => (
-              <tr key={t.id}>
-                <td className="hint">{when(t.started)}</td>
-                <td>{t.kind}</td>
-                <td>
-                  <Badge tone={t.failed ? "bad" : t.status === "done" ? "good" : "muted"}>{state(t)}</Badge>
-                </td>
-                <td>
-                  <a href={page(t.id)}>{t.title}</a>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <div className="flex flex-col gap-5">
+      <PageTools>
+        <span>{listed}</span>
+      </PageTools>
+      {rows.length > 0 && (
+        <Figures>
+          <Tile icon={Hand} label="Awaiting approval" value={count("awaiting approval")} note={`of ${listed}`} />
+          <Tile icon={Loader} label="Running" value={count("running")} />
+          <Tile icon={CircleAlert} label="Failed" value={count("failed")} note="a failed Run or a failed Check" />
+        </Figures>
       )}
-    </>
+      <AskForm contract={contract} />
+      <Card className="flex flex-col gap-3 p-0">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-4 pt-4">
+          <h2 className="m-0 mr-auto text-[15px]">Investigations</h2>
+          {rows.length > 0 && <Chips label="Kind" value={kind} onChange={setKind} options={KINDS} />}
+          {rows.length > 0 && <Chips label="Status" value={status} onChange={setStatus} options={STATES} />}
+        </div>
+        {rows.length === 0 ? (
+          <p className="m-0 px-4">None yet.</p>
+        ) : shown.length === 0 ? (
+          <p className="hint m-0 px-4">No Investigation matches.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="investigations rounded-none border-x-0 border-b-0">
+              <thead>
+                <tr>
+                  <th>Started</th>
+                  <th>Kind</th>
+                  <th>Status</th>
+                  <th>Title</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((t) => (
+                  <tr key={t.id}>
+                    <td className="hint nowrap">{when(t.started)}</td>
+                    <td>{t.kind}</td>
+                    <td>
+                      <Badge tone={tone(t)}>{state(t)}</Badge>
+                    </td>
+                    <td>
+                      <a href={page(t.id)}>{t.title}</a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="hint m-0 px-4 pb-4">Newest first. Passing Checks are left out.</p>
+      </Card>
+    </div>
   );
 }
 
@@ -167,23 +215,41 @@ export function InvestigationPage({ id }: { id: string }) {
     return () => clearTimeout(timer);
   }, [id, t]);
   if (error) return <p className="notice">The Hub didn't answer: {error}</p>;
-  if (!t) return null;
+  if (!t) return <Skeleton />;
   const act = (change: Promise<api.InvestigationPage>) => {
     setFailed("");
     change.then(setT, (e: Error) => setFailed(e.message));
   };
   const masked = Object.entries(t.masked);
+  const broke = t.tool_calls.filter((c) => c.is_error).length;
+  const figures = (
+    <Figures className="my-4">
+      <Tile icon={Hash} label="Tokens" value={`${t.usage.input_tokens.toLocaleString("en-US")} in`} note={`${t.usage.output_tokens.toLocaleString("en-US")} out`} />
+      <Tile icon={Coins} label="Cost" value={t.usage.cost_usd == null ? "-" : `$${t.usage.cost_usd.toFixed(4)}`} />
+      <Tile icon={Wrench} label="Tool calls" value={String(t.tool_calls.length)} note={broke ? `${broke} failed` : undefined} />
+      {masked.length > 0 && (
+        <Tile
+          icon={EyeOff}
+          label="Masked for the LLM"
+          value={masked.map(([kind, n]) => `${n} ${kind}${n === 1 ? "" : "s"}`).join(", ")}
+        />
+      )}
+    </Figures>
+  );
   return (
     <>
-      <h1>{t.title}</h1>
-      <p className="meta">
-        {state(t)} · {t.contract} · {t.kind} · started {when(t.started)} · <code>{t.id}</code>
-        <br />
-        Tokens: {t.usage.input_tokens} in, {t.usage.output_tokens} out · cost:{" "}
-        {t.usage.cost_usd == null ? "-" : `$${t.usage.cost_usd.toFixed(4)}`}
-        {masked.length > 0 &&
-          ` · masked for the LLM: ${masked.map(([kind, n]) => `${n} ${kind}${n === 1 ? "" : "s"}`).join(", ")}`}
-      </p>
+      {/* This page's own title row: the Shell draws none here (slice 21.6e). */}
+      <Card className="flex flex-col gap-2">
+        <h1 className="m-0">{t.title}</h1>
+        <p className="meta m-0 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <Badge tone={tone(t)}>{state(t)}</Badge>
+          <span>{t.kind}</span>
+          {/* its own Contract, never the one picked in the switcher */}
+          <a href={`/app/?contract=${encodeURIComponent(t.contract)}&view=investigations`}>{t.contract}</a>
+          <span>started {when(t.started)}</span>
+          <code>{t.id}</code>
+        </p>
+      </Card>
       {t.error && <p className="notice">Failed: {t.error}</p>}
       {t.status === "running" && <p className="hint">Working on it: this page updates every 5 seconds.</p>}
       {failed && <p className="notice">Couldn't: {failed}</p>}
@@ -206,6 +272,8 @@ export function InvestigationPage({ id }: { id: string }) {
           </p>
         </section>
       )}
+      {/* Under the decision, so what waits for you stays first on the page. */}
+      {figures}
       {t.check_result && (
         <section className="panel">
           <h2>Check</h2>
@@ -263,6 +331,8 @@ export function InvestigationPage({ id }: { id: string }) {
           <span className="hint">The agent keeps this Question's earlier exchange.</span>
         </section>
       )}
+      {(t.jira || t.scenario) && (
+        <section className="panel">
       {t.jira && (
         <p>
           Jira:{" "}
@@ -287,6 +357,8 @@ export function InvestigationPage({ id }: { id: string }) {
           </a>{" "}
           <span className="hint">a draft to edit and commit to the contracts repo.</span>
         </p>
+      )}
+        </section>
       )}
       {(t.can_judge || t.feedback.length > 0 || t.taught.length > 0) && (
         <section className="panel">
@@ -324,9 +396,10 @@ export function InvestigationPage({ id }: { id: string }) {
         </section>
       )}
       {t.related.length > 0 && (
-        <>
+        <section className="panel">
           <h2>Related alert groups</h2>
           <p className="hint">They joined this Triage instead of starting their own.</p>
+          <div className="overflow-x-auto">
           <table>
             <thead>
               <tr>
@@ -354,12 +427,15 @@ export function InvestigationPage({ id }: { id: string }) {
               ))}
             </tbody>
           </table>
-        </>
+          </div>
+        </section>
       )}
+      <section className="panel">
       <h2>Decisions</h2>
       {t.decisions.length === 0 ? (
-        <p className="hint">None.</p>
+        <p className="hint m-0">None.</p>
       ) : (
+        <div className="overflow-x-auto">
         <table>
           <thead>
             <tr>
@@ -375,17 +451,22 @@ export function InvestigationPage({ id }: { id: string }) {
               <tr key={n}>
                 <td className="hint">{when(d.at)}</td>
                 <td>{d.decided_by}</td>
-                <td>{d.approve ? "approved" : "rejected"}</td>
+                <td>
+                  <Badge tone={d.approve ? "good" : "muted"}>{d.approve ? "approved" : "rejected"}</Badge>
+                </td>
                 <td>{d.actions.join(", ")}</td>
                 <td>{d.message}</td>
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
       )}
+      </section>
+      <section className="panel">
       <h2>Tool calls</h2>
       {t.tool_calls.length === 0 ? (
-        <p className="hint">None.</p>
+        <p className="hint m-0">None.</p>
       ) : (
         <ol className="calls">
           {t.tool_calls.map((c, n) => (
@@ -402,6 +483,7 @@ export function InvestigationPage({ id }: { id: string }) {
           ))}
         </ol>
       )}
+      </section>
     </>
   );
 }

@@ -8,7 +8,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { AgendaList } from "./Agenda";
 import * as api from "./api";
 import { cores, gib, pct, when, whole } from "./format";
-import { state } from "./Investigations";
+import { state, tone } from "./Investigations";
 import { PageTools } from "./Shell";
 import { Badge } from "./ui/badge";
 import { Card, Empty, Meter, Skeleton } from "./ui/card";
@@ -191,7 +191,7 @@ export function OverviewPage({ contract }: { contract: string }) {
                   {t.title}
                 </a>
                 <p className="m-0 flex items-center gap-2">
-                  <Badge tone={t.failed ? "bad" : t.status === "done" ? "good" : "muted"}>{state(t)}</Badge>
+                  <Badge tone={tone(t)}>{state(t)}</Badge>
                   <span className="text-xs text-muted">{when(t.started)}</span>
                 </p>
               </li>

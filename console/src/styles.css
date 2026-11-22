@@ -144,7 +144,7 @@
   }
   .detail {
     margin-top: 1.25rem; padding: 1rem 1.25rem; background: var(--panel);
-    border: 1px solid var(--line); border-radius: 12px;
+    border: 1px solid var(--line); border-radius: 10px; /* the Card's radius */
   }
   .risks { padding-left: 1rem; }
   .range { display: flex; gap: 0.5rem; margin: 0.5rem 0; }
@@ -155,7 +155,7 @@
   .text { white-space: pre-wrap; }
   .panel {
     margin: 1rem 0; padding: 1rem 1.25rem; background: var(--panel);
-    border: 1px solid var(--line); border-radius: 12px;
+    border: 1px solid var(--line); border-radius: 10px; /* the Card's radius */
   }
   .panel h2 { margin-top: 0; }
   .panel.waiting { border-left: 4px solid var(--wait); }

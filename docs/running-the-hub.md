@@ -322,6 +322,7 @@ Anything else gets a 403. That includes a tagged device, which has no user.
   - **Nodes** (slice 21.6d): figures on top (nodes read, Nodes that could go now and after the Sizings, spot nodes where a cluster names a spot label, clusters not read); each cluster's facts as a list (read, autoscaler, largest Room, whose rules, the last report of Blockers, Placement, spot); a table that fits its card. The figures of nodes that could go are in ink: an upper bound, not part of Savings.
   - **Automation** (slice 21.6d): figures of the containers' states, one state each (on, off, stopped by a Revert, ended by rollbacks), counting the containers its Actuators reported on in 90 days; chips All, On and Not on, kept in the address; each last outcome a badge.
 - **Investigations, Teachings, Checks, Health, Contracts** (slice 21.4): statuses as coloured badges, each integration's Health a tile (a failing one framed red), the action that goes ahead a filled button and Reject or Retire a red-outlined one.
+  - **Investigations** (slice 21.6e): figures and filter chips over the list, the table in a card; an Investigation's page opens with a header card and its figures. See [Investigations](#investigations).
 - **The look** (slice 21.5a): Hanken Grotesk and JetBrains Mono, served by the Hub itself; one accent (a teal-green) with the Savings in it and every other figure in ink; status colours only on badges; charts with the Sizings as their one coloured line, redrawn when the system changes theme; a flat block while a page loads; turning the Kill switch off asks first ("Yes, turn it off"), turning it on never does.
 - **Density** (slice 21.6a): 13 px text, 36 px table rows, small uppercase labels on figures, table heads and sidebar groups; each figure in its own card, with a thin meter where it is a share and a footnote.
 - **Numbers** (slice 21.6c): quantities and money in tables are in JetBrains Mono, so their digits line up, and never break from their unit; dates and names are not. A table too wide for its window scrolls sideways inside its card.
@@ -409,7 +410,14 @@ Development:
 
 **Investigations** (`/app/?view=investigations`) lists a Contract's Investigations, newest first. Passing Checks are left out.
 
-Each Investigation opens its own page. The page shows:
+On top (slice 21.6e):
+
+- three figures: awaiting approval, running, failed. They count the list, which holds the Hub's latest 100;
+- chips for the kind (Triages, Questions, Checks) and the status (awaiting approval, running, failed, done: the badges' own words), kept in the address.
+
+An Investigation has one status: a failed Check and a failed Run are both "failed", in red.
+
+Each Investigation opens its own page. It starts with a header card (the title, its status, kind, Contract and start time), then what waits for a decision, then four figures: tokens, cost, tool calls (with how many failed) and what was masked. The page shows:
 
 - the Report, Answer or Check verdict, as fields:
   - summary;

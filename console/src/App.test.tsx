@@ -786,10 +786,122 @@ test("an Investigation shows its Report as text, an Evidence link never as a lin
   expect(page.querySelector('a[href^="https://evil"]')).toBeNull();
   expect(screen.getByText("evict shop/checkout-1")).toBeTruthy();
   expect(screen.getByText(/Goes Stale at 2023-11-14 22:23 UTC/)).toBeTruthy();
-  expect(screen.getByText(/masked for the LLM: 2 names/)).toBeTruthy();
-  expect(screen.getByText("not now")).toBeTruthy();
+  // slice 21.6e: a header card of its own (the Shell draws no title row here), then its figures
+  const h1 = page.querySelectorAll("h1");
+  expect([...h1].map((h) => h.textContent)).toEqual(["<b>OOM</b> in checkout"]); // the page's one h1
+  const meta = h1[0].nextElementSibling!;
+  expect([...meta.children].map((c) => c.textContent)).toEqual(["awaiting approval", "triage", "demo-shop", "started 2023-11-14 22:13 UTC", "t1"]);
+  expect(meta.querySelector("a")?.getAttribute("href")).toBe("/app/?contract=demo-shop&view=investigations"); // its own Contract
+  expect(meta.firstElementChild?.className).toContain("text-muted"); // not done, not failed
+  expect(figure("Tokens")).toBe("Tokens10 in5 out");
+  expect(figure("Cost")).toBe("Cost$0.0012");
+  expect(figure("Tool calls")).toBe("Tool calls1"); // none failed: no note
+  expect(figure("Masked for the LLM")).toBe("Masked for the LLM2 names");
+  // the decision stays above the figures, its words and controls as they were
+  const waiting = screen.getByText("Waiting for your decision").closest("section")!;
+  expect(waiting.className).toBe("panel waiting");
+  expect(waiting.compareDocumentPosition(screen.getByText("Tokens")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.getByText("Approve").className).toBe("primary");
+  expect(screen.getByText("Reject").className).toBe("danger");
+  expect(screen.getByText("not now").closest("section")?.querySelector("h2")?.textContent).toBe("Decisions"); // in a card
+  expect(screen.getByText("rejected").className).toContain("text-muted");
   expect(screen.getByText("<script>x</script>")).toBeTruthy();
   expect(screen.queryByText("Save as Scenario")).toBeNull();
+});
+
+test("an Investigation's figures: a cost not known is a dash, failed tool calls are counted, nothing masked says nothing", async () => {
+  history.replaceState(null, "", "/app/?view=investigation&id=t1");
+  const calls = [{ ...PAGE.tool_calls[0], is_error: true }, PAGE.tool_calls[0], { ...PAGE.tool_calls[0], is_error: true }];
+  answer({
+    "/api/v1/contracts": [200, [{ id: "other", name: "Other" }, { id: "demo-shop", name: "Demo shop" }]], // "other" is the one picked
+    "/api/v1/investigations/t1": [
+      200,
+      { ...PAGE, status: "failed", error: "the model refused", pending: [], deadline: null, masked: {}, tool_calls: calls,
+        usage: { input_tokens: 125430, output_tokens: 2310, cost_usd: null },
+        decisions: [{ ...PAGE.decisions[0], approve: true, message: "go" }] },
+    ],
+  });
+  const { container: page } = render(<App />);
+  await screen.findByText("<b>OOM</b> in checkout");
+  expect(figure("Cost")).toBe("Cost-"); // never $0
+  expect(figure("Tokens")).toBe("Tokens125,430 in2,310 out");
+  expect(figure("Tool calls")).toBe("Tool calls32 failed");
+  expect(screen.queryByText("Masked for the LLM")).toBeNull();
+  const badge = page.querySelector("h1")!.nextElementSibling!.firstElementChild!;
+  expect([badge.textContent, badge.className.includes("text-bad")]).toEqual(["failed", true]); // a failed Run is red
+  expect(screen.queryByText("Waiting for your decision")).toBeNull();
+  // its own Contract's list, by its id, whatever Contract the switcher would pick
+  expect(screen.getByText("demo-shop", { selector: "a" }).getAttribute("href")).toBe("/app/?contract=demo-shop&view=investigations");
+  expect(screen.getByText("approved").className).toContain("text-ok"); // a decision is a badge
+});
+
+test("an Investigation's page shows a flat block while it loads", () => {
+  history.replaceState(null, "", "/app/?view=investigation&id=t1");
+  vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+  render(<App />);
+  expect(screen.getByLabelText("Loading")).toBeTruthy();
+});
+
+test("the Investigations list counts by status, filters by kind and status, and sits in a card (21.6e)", async () => {
+  history.replaceState(null, "", "/app/?view=investigations");
+  const row = (id: string, kind: string, status: string, failed = false) =>
+    ({ id, contract: "demo-shop", kind, title: `title ${id}`, status, failed, started: 1_700_000_000 });
+  answer({
+    "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]],
+    "/api/v1/contracts/demo-shop/investigations": [
+      200,
+      [
+        row("a", "triage", "awaiting_approval"), row("b", "triage", "running"), row("c", "check", "done", true),
+        row("d", "question", "failed"), row("e", "question", "done"), row("f", "triage", "paused"), // a status not known here
+      ],
+    ],
+  });
+  const { container: page } = render(<App />);
+  await screen.findByText("title a");
+  expect(figure("Awaiting approval")).toBe("Awaiting approval1of 6 listed");
+  expect(figure("Running")).toBe("Running1");
+  expect(figure("Failed")).toBe("Failed2a failed Run or a failed Check"); // c and d
+  expect(screen.getByText("6 listed", { selector: "main div span" }).parentElement?.previousElementSibling?.tagName).toBe("H1");
+  const ids = () => [...page.querySelectorAll(".investigations tbody tr a")].map((a) => a.textContent?.slice(-1));
+  expect(ids()).toEqual(["a", "b", "c", "d", "e", "f"]);
+  expect(page.querySelector("table.investigations")?.closest("section")?.querySelector("h2")?.textContent).toBe("Investigations");
+  const badge = (id: string) => screen.getByText(`title ${id}`).closest("tr")!.children[2].firstElementChild!;
+  expect([badge("d").textContent, badge("d").className.includes("text-bad")]).toEqual(["failed", true]); // a failed Run, red too
+  expect(badge("f").className).toContain("text-muted");
+  fireEvent.click(screen.getByRole("button", { name: "Failed" }));
+  expect(ids()).toEqual(["c", "d"]);
+  expect(new URLSearchParams(location.search).get("status")).toBe("failed");
+  expect([figure("Failed"), figure("Running")]).toEqual(["Failed2a failed Run or a failed Check", "Running1"]); // the figures stay whole
+  fireEvent.click(screen.getByRole("button", { name: "Questions" }));
+  expect(ids()).toEqual(["d"]);
+  expect(new URLSearchParams(location.search).get("kind")).toBe("question");
+  fireEvent.click(screen.getByRole("button", { name: "Awaiting approval" }));
+  expect(screen.getByText("No Investigation matches.")).toBeTruthy(); // filtered out, not "None yet."
+  expect(screen.queryByText("None yet.")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "All kinds" }));
+  expect(ids()).toEqual(["a"]);
+  fireEvent.click(screen.getByRole("button", { name: "Any status" }));
+  expect(ids()).toHaveLength(6); // the unknown status shows under no filter, in no figure
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  expect(ids()).toEqual(["e"]); // a failed Check is failed, not finished
+  fireEvent.click(screen.getByRole("button", { name: "Running" }));
+  expect(ids()).toEqual(["b"]);
+});
+
+test("the Investigations list says the latest 100 only when it holds 100, and None yet when empty", async () => {
+  history.replaceState(null, "", "/app/?view=investigations");
+  const hundred = Array.from({ length: 100 }, (_, i) => ({ id: `i${i}`, contract: "demo-shop", kind: "triage", title: `t${i}`, status: "done", failed: false, started: 1 }));
+  answer({ "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]], "/api/v1/contracts/demo-shop/investigations": [200, hundred] });
+  render(<App />);
+  await screen.findByText("t0");
+  expect(figure("Awaiting approval")).toBe("Awaiting approval0of the latest 100");
+  cleanup();
+  answer({ "/api/v1/contracts": [200, [{ id: "demo-shop", name: "demo-shop" }]], "/api/v1/contracts/demo-shop/investigations": [200, []] });
+  render(<App />);
+  expect(await screen.findByText("None yet.")).toBeTruthy();
+  expect(screen.queryByText("Awaiting approval")).toBeNull(); // no figures of nothing, and no chips
+  expect(screen.queryByRole("button", { name: "All kinds" })).toBeNull();
+  expect(screen.getByText("0 listed")).toBeTruthy();
 });
 
 test("a finished Investigation offers its Scenario download", async () => {

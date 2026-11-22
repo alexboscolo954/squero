@@ -2,7 +2,7 @@
 
 **In short:** the console works but looks like raw HTML: a link bar, headings and bare forms. This phase gives it a real dashboard design, in the style of ScaleOps' product UI, without changing what any page does. It is built next, before Phase 19 continues.
 
-**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6a to 21.6d built (2026-11-22), not released; 21.6e and 21.6f grilled: one release, 0.66.0, after 21.6f. Owed: a look at the light theme and at every page with real data.
+**Status:** 21.1 to 21.4 released in 0.64.0 (2026-11-22), running on the mini PC's Hub. 21.5 released in 0.65.0 (2026-11-22). 21.6a to 21.6e built (2026-11-22), not released; 21.6f grilled: one release, 0.66.0, after it. Owed: a look at the light theme and at every page with real data.
 
 **Goal:** a console the Operator is glad to open every day: a sidebar, an Overview dashboard, and every page laid out as number tiles, charts and tables in cards.
 
@@ -21,8 +21,8 @@
 | [21.6b](#216-density-and-layout-after-a-live-reference) | The Overview as a grid of cards | ✅ built |
 | [21.6c](#216-density-and-layout-after-a-live-reference) | Tables: bars in cells, a Total row, numbers in mono | ✅ built |
 | [21.6d](#216d-to-216f-the-same-pattern-on-every-page) | Nodes and Automation in the page pattern | ✅ built |
-| [21.6e](#216d-to-216f-the-same-pattern-on-every-page) | Investigations and an Investigation's page | ⬜ next |
-| [21.6f](#216d-to-216f-the-same-pattern-on-every-page) | Checks, Health, Teachings, Contracts, Approver token, the Workload detail, Cost's lines | ⬜ |
+| [21.6e](#216d-to-216f-the-same-pattern-on-every-page) | Investigations and an Investigation's page | ✅ built |
+| [21.6f](#216d-to-216f-the-same-pattern-on-every-page) | Checks, Health, Teachings, Contracts, Approver token, the Workload detail, Cost's lines | ⬜ next |
 
 ## Why this phase exists
 
@@ -351,4 +351,26 @@ Two rounds, all answers the recommended ones.
 
 **Known limits:**
 - Not seen in a browser: a cluster with Placement and spot facts, and the spot Workloads lists (tested).
+- No API change, no eval rerun, no isolation test.
+
+**Built 21.6e (2026-11-22):**
+- **The list:** three figures (awaiting approval, running, failed) over the list; the title row says how many are listed, "the latest 100" only when the list is that long. No figures of an empty list.
+- Chips for the kind and the status, kept in the address (`kind`, `status`), the status in the badges' own words (awaiting approval, running, failed, done); none over an empty list; the figures stay whole under a filter; a filter that matches nothing says "No Investigation matches.", never "None yet.".
+- The table sits in a card with its title and the chips. Rows keep their text.
+- **One status per Investigation**, for its badge, the figures and the chips: a failed Run (`status: failed`) is now red like a failed Check, here and in the Overview's card; it was grey. A status this console doesn't know shows under no filter, in no figure, neutral.
+- **An Investigation's page:** a header card with the title (the page's one `h1`), its status badge, kind, its own Contract as a link to that Contract's list, start time and id.
+- Four figures: tokens (in, with out under it), cost (a dash when not known, never $0), tool calls (with how many failed), and what was masked for the LLM (only when something was). They sit under "Waiting for your decision", so what waits stays first.
+- Its Decisions, Tool calls, related alert groups and the Jira and Scenario lines each sit in a card; a decision is a badge. A flat block shows while the page loads (it was empty).
+- The approval panel is untouched: its words, Approve, Reject with its reason, and the Stale deadline.
+- The legacy card style (`.panel`, `.detail`) took the Card's 10 px radius, so the two no longer differ side by side.
+
+**Decided while building:** the figure is labelled "Awaiting approval", the badge's own words, not "Waiting for you": a list row carries no deadline, so the console can't tell whether an approval can still be given. The Agenda stays the place for what needs the Operator.
+
+**Tests:** 4 new (the list's figures, chips and card; "the latest 100" and an empty list; a page's figures with an unknown cost, failed calls and nothing masked; the loading block); the page test extended (header, link, figures, the decision above them, its controls unchanged); the link checked with another Contract picked, an approved decision's badge; the status test now has a failed Run. 86 console tests. 14 mutations, all caught (one after a tighter assertion).
+
+**Checked:** in Chrome with the Hub's CSP and the tests' own sample data: the list unfiltered and filtered in dark, a Triage awaiting approval top to bottom in dark, a followed-up Question in light (tokens set by hand), Teachings after the radius change. The browser console read from the first page load: no error, no CSP refusal.
+
+**Known limits:**
+- The figures count the list, not every Investigation the Contract ever had.
+- Not seen in a browser: a page with related alert groups, Report feedback or the Jira line (tested before, their text unchanged), a narrow window.
 - No API change, no eval rerun, no isolation test.
