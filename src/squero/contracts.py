@@ -317,6 +317,31 @@ class PagerDuty(Strict):
         return self
 
 
+class Webhook(Strict):
+    """The Contract's Outbound webhook (slice 19.3): what its Operator channel gets, as
+    signed JSON events to one URL. An Operator-side destination, never a client's: it
+    carries the Report with its Evidence, and sends on its own. Both are names in
+    secrets.sops.yaml: a receiver's URL often holds a key."""
+
+    url_secret: str  # an https:// URL
+    signing_secret: str  # the HMAC key the receiver checks each event with
+
+
+def webhook_refusal(url: str) -> str | None:
+    """Why an Outbound webhook's URL can't be used, never quoting it (it may hold a key):
+    https only, a host, and no user or password (httpx would send them as Basic auth)."""
+    try:
+        u = urlsplit(url)
+        host, _ = u.hostname, u.port  # a port that isn't one raises here
+    except ValueError:
+        return "its URL is not a URL"
+    if u.scheme != "https" or not host:  # urlsplit gives the scheme in lower case
+        return "its URL must be an https:// URL"
+    if u.username is not None or u.password is not None:
+        return "its URL must not carry a user or a password"
+    return None
+
+
 class Kubernetes(Strict):
     name: Literal["kubernetes"]
     enable_actions: bool = False
@@ -1011,6 +1036,7 @@ class Contract(Strict):
     integrations: list[Integration] = Field(min_length=1)
     slack: Slack | None = None  # where the Operator follows this Contract's Investigations
     pagerduty: PagerDuty | None = None  # its incidents as Alert groups (slice 19.2)
+    webhook: Webhook | None = None  # what its Operator channel gets, as events (slice 19.3)
     # The Hub's SQUERO_MODEL unless set; through the Hub's gateway and key (same prefix).
     model: str | None = None
     monthly_budget_usd: float | None = Field(None, gt=0)  # calendar month, UTC
@@ -1250,7 +1276,8 @@ class Contract(Strict):
         """Every `*_secret` field and every value of a `*_secrets` map, so a new
         integration's credentials are checked without being listed here."""
         refs: set[str] = set()
-        for item in (*self.clusters, *self.integrations, *filter(None, [self.pagerduty])):
+        own = filter(None, [self.pagerduty, self.webhook])
+        for item in (*self.clusters, *self.integrations, *own):
             for field in type(item).model_fields:
                 value = getattr(item, field)
                 if field.endswith("_secret") and value is not None:
@@ -1510,6 +1537,9 @@ def _load_one(path: Path) -> tuple[Contract, set[str]]:
         secrets = _decrypt(secrets_path)
     for name in sorted(contract.secret_refs() - secrets.keys()):
         problems.append(f"{path}: secret {name!r} is not in {SECRETS_FILE}")
+    hook = contract.webhook  # slice 19.3: its URL is a secret, so checked here, unquoted
+    if hook and (refusal := webhook_refusal(secrets.get(hook.url_secret, "https://unset"))):
+        problems.append(f"{path}: webhook: {refusal}")
     for i, cluster in enumerate(contract.clusters):
         if cluster.kubeconfig_secret in secrets:
             kubeconfig = _yaml_or_none(secrets[cluster.kubeconfig_secret])

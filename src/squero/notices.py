@@ -8,7 +8,7 @@ and a recovery reply Slack refuses is not tried again (its row is gone with it).
 
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Literal, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 from squero import relay, usage
 from squero.contracts import Contract
@@ -22,6 +22,14 @@ STALE_AFTER = 3 * 3600.0  # three missed hourly runs
 REMIND_EVERY = 24 * 3600.0
 Kind = Literal["sizing", "relay", "bill"]
 Post = Callable[[str, str, str | None], Awaitable[str | None]]  # channel, text, thread: ts
+Emit = Callable[[str, dict[str, Any]], None]  # an Outbound webhook's event and its fields
+
+
+def _event(key: tuple[str, str], state: str, since: float, error: str | None) -> dict[str, Any]:
+    """A notice as an event (slice 19.3): which read of which cluster, where it stands, and
+    its error as the notice shows one (a Relay's says only that it is offline)."""
+    out = {"cluster": key[0], "kind": key[1], "state": state, "since": since}
+    return out | ({"error": error} if error and key[1] != "relay" else {})
 
 
 class Failing(NamedTuple):
@@ -101,10 +109,18 @@ def recovered(cluster: str, kind: Kind, since: float, now: float) -> str:
     return f":white_check_mark: {clean(cluster)}: {what} {did}, after {_span(now - since)}"
 
 
-async def tick(st: Store, c: Contract, now: float, post: Post, console_url: str | None) -> None:
+async def tick(
+    st: Store,
+    c: Contract,
+    now: float,
+    post: Post,
+    console_url: str | None,
+    emit: Emit | None = None,
+) -> None:
     """One look at the Contract's reads: note each new failure, post a notice once one
     has lasted STALE_AFTER, remind a day later in its thread, and reply when it reads
-    again. Nothing without the Contract's Slack channel (its Agenda still shows them)."""
+    again. Nothing without the Contract's Slack channel (its Agenda still shows them).
+    emit: each notice Slack took, as an Outbound webhook's event (slice 19.3)."""
     if c.slack is None:
         return
     channel = c.slack.operator_channel
@@ -120,7 +136,9 @@ async def tick(st: Store, c: Contract, now: float, post: Post, console_url: str 
             ended = await st.end_stale(c.id, *key)
             # a cluster no longer read (gone from the Contract) ends quietly: not "again"
             if ended and row["ts"] and key[0] in reads.get(key[1], set()):
-                await post(channel, recovered(*key, row["since"], now), row["ts"])
+                took = await post(channel, recovered(*key, row["since"], now), row["ts"])
+                if took and emit:
+                    emit("stale_notice", _event(key, "recovered", row["since"], None))
             continue
         if now - row["since"] < STALE_AFTER:
             continue
@@ -132,6 +150,9 @@ async def tick(st: Store, c: Contract, now: float, post: Post, console_url: str 
         if not await st.claim_stale(c.id, *key, now, due):
             continue
         ts = await post(channel, text, thread)
+        if ts and emit:  # a post Slack didn't take is tried again: one event, not many
+            state = "failing" if thread is None else "still_failing"
+            emit("stale_notice", _event(key, state, row["since"], still.error))
         # a post Slack didn't take: undone, so the next look tries again
         await st.told_stale(c.id, *key, ts, now if ts else row["told_at"])
         log.info("stale notice %s/%s %s: %s", c.id, key[0], key[1], "posted" if ts else "not")

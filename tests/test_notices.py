@@ -299,7 +299,7 @@ def test_one_contract_failing_stops_none_of_the_others(
     settings.slack_bot_token = SecretStr(TOKEN)
     seen: list[str] = []
 
-    async def tick(st: Any, c: Any, now: float, post: Any, url: Any) -> None:
+    async def tick(st: Any, c: Any, now: float, post: Any, url: Any, emit: Any) -> None:
         seen.append(c.id)
         if c.id == "acme":
             raise RuntimeError("boom")

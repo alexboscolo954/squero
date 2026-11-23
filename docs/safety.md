@@ -102,6 +102,7 @@ The Operator's Revert (`revert_sizing`) puts a container's pods back to their te
 ## Contract scope
 
 - Every tool checks its `cluster` and `namespace` against its own Contract server-side, on top of RBAC.
+- A Contract's [Outbound webhook](contracts.md#outbound-webhook) sends what its Operator channel gets to one URL the Contract names, signed with that Contract's own secret. It carries Reports with their Evidence, so it is for an Operator-side system only. One Contract's events never go to another's URL.
 - Each Contract's alerts arrive on their own URL with their own token ([Contracts](contracts.md)). [PagerDuty](contracts.md#pagerduty)'s arrive on the Contract's own URL too, checked by a signature made with that Contract's own secret.
 - The Hub's own Prometheus reads for Sizings name the Contract's namespaces in every query.
 - **One exception:** a node's Room ([Nodes](optimizer.md#nodes)) needs every pod on the node. Pods outside the Contract's namespaces are read as one sum and one count per node:

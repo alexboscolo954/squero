@@ -104,6 +104,8 @@ src/squero/
                    signature; an incident's alerts read; the Client report as a note.
   billing.py       Cloud bills (AWS Cost Explorer, Azure Cost Management, GCP's BigQuery
                    billing export) vs the estimate.
+  webhooks.py      Outbound webhooks (19.3): what a Contract's Operator channel gets, as
+                   signed JSON events to one URL; in order, retried, never blocking the Hub.
   evals.py         Scenario replay and scoring.
   cli.py           The `squero` command.
   servers/         One MCP server per integration: kubernetes, prometheus, runbooks, jira,
@@ -159,7 +161,7 @@ examples/          Example inputs.
 Use the terms in `CONTEXT.md` exactly and do not invent synonyms: Contract, Operator,
 Integration, Hub, Alert, Alert group, Investigation, Triage, Question, Check, Report,
 Evidence, Runbook, Category, Recommendation, Proposed action, Approval decision, Executed
-action, Teaching, Workload, Sizing, Sizing policy, Waste, Idle GPU, Unrequested GPU, Stale notice, Automation, Actuator, Actuation, Revert, Reflex, Step-up, Startup boost, Burst, OOM kill, Need, Floor, Weekly profile, Backtest, Room, Blocker, Node that could go, Placement, Pinned node, Spot node, Spot ratio, On-demand minimum, Protocol, Fleet,
+action, Teaching, Workload, Sizing, Sizing policy, Waste, Idle GPU, Unrequested GPU, Stale notice, Outbound webhook, Automation, Actuator, Actuation, Revert, Reflex, Step-up, Startup boost, Burst, OOM kill, Need, Floor, Weekly profile, Backtest, Room, Blocker, Node that could go, Placement, Pinned node, Spot node, Spot ratio, On-demand minimum, Protocol, Fleet,
 List price, Bill, Savings, Scenario, Expectation. A *Sizing* is machine output for a
 Workload; a *Recommendation* is human advice in a Report, so do not mix them.
 

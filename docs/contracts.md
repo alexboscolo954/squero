@@ -479,6 +479,107 @@ Known limits:
 - US accounts only. The EU service region has another host.
 - One signing secret per Contract. While PagerDuty rotates a secret it sends two signatures, and the Hub accepts the one it knows.
 
+## Outbound webhook
+
+**In short:** a Contract can name one URL that gets what its Operator channel gets, as signed JSON events. It is for an Operator-side system (ticketing, a data store, automation). It sends on its own, with the full Report and its Evidence, so never point it at a client's system. This is slice 19.3.
+
+```yaml
+webhook:
+  url_secret: webhook-url              # an https:// URL, in secrets.sops.yaml
+  signing_secret: webhook-signing-key  # the key your receiver checks each event with
+```
+
+| Field | What it is |
+|---|---|
+| `url_secret` | A name in `secrets.sops.yaml` holding the URL. *Why a secret:* a receiver's URL often carries a key in its path. Only its host is ever logged. |
+| `signing_secret` | A name in `secrets.sops.yaml` holding a long random string you choose. The Hub signs every event with it. |
+
+The URL must be `https://`, with no user or password in it. A Contract whose URL isn't is refused at load, without quoting it.
+
+### The events
+
+Every event has the same envelope:
+
+```json
+{
+  "version": 1,
+  "id": "2f1c6e0a-…",
+  "event": "report.finished",
+  "contract": "acme",
+  "at": "2026-11-23T10:15:00+00:00",
+  "investigation": {"id": "…", "kind": "triage", "title": "KubePodCrashLooping shop", "status": "done", "started": 1795428900.0},
+  "report": {"summary": "…", "category": "resource_limits", "probable_root_cause": "…", "confidence": "high", "severity": "high", "affected": ["shop/deployment/checkout"], "evidence": [{"source": "kubernetes_pod_logs", "finding": "…", "link": null}], "recommended_actions": ["…"], "runbook": null},
+  "executed_actions": []
+}
+```
+
+| `event` | When | What it adds to the envelope |
+|---|---|---|
+| `approval.needed` | A Triage or a Check waits for a decision | `investigation`, `proposed` (each tool and its arguments), `deadline` |
+| `approval.decided` | The decision is made, by a person or by the Hub when it goes Stale | `investigation`, `approve`, `by` (`operator` for the API, `slack:<user id>`, `console:<login>`, `mcp:<login>`, or `stale`), `actions` (their names), `reason` |
+| `action.executed` | A Run executed approved actions | `investigation`, `actions`: what that Run executed, from the Hub's own record |
+| `report.finished` | A Triage has its Report; a Check failed, or recovered | `investigation`, `report`, `executed_actions`; for a Check also `verdict` (`passed`, `summary`, `evidence`) |
+| `investigation.failed` | A Run failed, or was refused (over budget) | `investigation`, `error` |
+| `rollback` | The Operator channel was told of a Rollback | `cluster`, `namespace`, `kind`, `name`, `container`, `outcome`, `reason`, `actuated_at`; `automation_ended: true` on the one that ends its Workload's Automation |
+| `actuation` | The Operator channel was told of a Step-up, a Burst, or a container still at its cap | The same fields; a Step-up's also `memory` and a Burst's `cpu`, the limit Slack's line names |
+| `stale_notice` | The Operator channel got a Stale notice | `cluster`, `kind` (`sizing`, `relay`, `bill`), `state` (`failing`, `still_failing`, `recovered`), `since`, `error` |
+
+What an event never holds:
+
+- The raw Alert group, the Slack thread, or who was sent the Client report. An event is built from a fixed list of fields.
+- The Hub's instruction to the model. A Stale decision's `reason` is why it went Stale.
+- A secret the Hub recognises: every string is redacted as Slack's is, and cut at 4,000 characters. A list is cut at 50 items.
+
+What sends no event:
+
+- A Question. It is the Operator's own conversation.
+- A passing Check with nothing open. It is quiet in Slack too.
+- The Client report.
+
+### Checking an event in your receiver
+
+Each request carries `Squero-Signature: t=<unix time>,v1=<hex>`. The `v1` value is the HMAC-SHA256 of the time, a dot and the raw body, with your signing secret.
+
+```python
+import hashlib, hmac, time
+
+
+def verified(secret: str, header: str, raw_body: bytes) -> bool:
+    parts = dict(p.split("=", 1) for p in header.split(","))
+    signed = parts["t"].encode() + b"." + raw_body
+    want = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    fresh = abs(time.time() - int(parts["t"])) < 300  # refuse an old event
+    return fresh and hmac.compare_digest(want, parts["v1"])
+```
+
+1. Check the signature over the raw bytes, before parsing the JSON.
+2. Refuse a time more than a few minutes old.
+3. Drop an `id` you have already seen. A retry keeps its `id` (also in the `Squero-Id` header), with a fresh time and signature.
+4. Answer any 2xx within 10 seconds.
+5. Treat every text field as text. A Report is the model's own prose, and Slack shows any URL in it as plain text, because a prompt injection could plant one. JSON can't do that for you: only `evidence[].link` came from a tool, so never turn any other URL into a link.
+
+### How it is delivered
+
+| Rule | Value |
+|---|---|
+| Order | One event at a time per Contract, in the order they happened |
+| One attempt | 10 seconds in all |
+| Retried | A connection error, a timeout, a 5xx, a 429: three more times, after 1, 5 and 25 seconds |
+| Dropped at once | Any other answer, a redirect included. The Hub never follows one. |
+| Given up | A log line naming the host and the status, and `squero_webhook_events_total{outcome="failed"}` |
+| Waiting | 1,000 events per Contract at most; more are dropped and counted |
+
+- A receiver that fails never slows or fails the Hub's own work.
+- **It is a copy, not the record.** Events wait in memory: a Hub restart loses the ones not yet delivered, a Rollback's among them. Slack and the console keep everything.
+- The Health page shows a `webhook` row with the last delivery's outcome. It makes no request to do so.
+
+### What depends on Slack
+
+- `rollback`, `actuation` and `stale_notice` fire only once Slack took the message. So they need the Contract's `slack:` block and the Hub's Slack token, and a Slack outage delays them.
+- The hourly "N more Rollbacks" line in Slack has no event.
+- A Check's recovery is tracked through its Slack thread, so its recovery event needs Slack too.
+- The Investigation events (`approval.*`, `action.executed`, `report.finished`, `investigation.failed`) don't depend on Slack.
+
 ## Scheduled Checks
 
 A Check runs on a schedule, with no alert.

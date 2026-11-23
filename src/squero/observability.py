@@ -21,6 +21,9 @@ TRIAGE_SECONDS = Histogram(
     "squero_triage_seconds", "End-to-end triage time", buckets=(5, 10, 20, 30, 60, 120, 300)
 )
 PENDING_APPROVALS = Gauge("squero_pending_approvals", "Actions waiting for a human decision")
+WEBHOOK_EVENTS = Counter(  # slice 19.3
+    "squero_webhook_events_total", "Outbound webhook events, by how they ended", ["outcome"]
+)
 
 
 class AuditMiddleware(Middleware):

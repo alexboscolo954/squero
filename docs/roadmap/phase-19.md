@@ -1,8 +1,8 @@
 # Phase 19: Integrations breadth
 
-**In short:** Phase 19 adds the alert sources, paging tools and outbound channels that clients use. It starts with managed Prometheus logins, so the optimizer works for clients on managed clouds. 19.1a, 19.1b, 19.1c and 19.2 are built so far.
+**In short:** Phase 19 adds the alert sources, paging tools and outbound channels that clients use. It starts with managed Prometheus logins, so the optimizer works for clients on managed clouds. 19.1a, 19.1b, 19.1c, 19.2 and 19.3 are built so far.
 
-**Status:** grilled 2026-11-21. 4 of 8 slices built (19.1a, 2026-11-21; 19.1b, 19.1c and 19.2, 2026-11-22).
+**Status:** grilled 2026-11-21. 5 of 8 slices built (19.1a, 2026-11-21; 19.1b, 19.1c and 19.2, 2026-11-22; 19.3, 2026-11-23).
 
 **Goal:** integrations only, through the Phase 4 framework: managed Prometheus logins, PagerDuty, outbound webhooks, Microsoft Teams and Google Chat, ServiceNow, and Datadog and New Relic.
 
@@ -14,7 +14,7 @@
 | [19.1b](#191b-sigv4-for-amp) | `sigv4` for Amazon Managed Prometheus | ✅ built, AWS check owed |
 | [19.1c](#191c-azure-and-google) | `azure` and `google` Prometheus auth | ✅ built, Azure and Google checks owed |
 | [19.2](#192-pagerduty) | PagerDuty | ✅ built, live check owed |
-| 19.3 | Outbound webhooks | Not built |
+| [19.3](#193-outbound-webhooks) | Outbound webhooks | ✅ built |
 | 19.4 | Microsoft Teams and Google Chat | Not built |
 | 19.5 | ServiceNow | Not built |
 | 19.6 | Datadog and New Relic | Not built |
@@ -189,6 +189,35 @@ Two rounds, all answers the recommended ones.
 - Signed with HMAC-SHA256, using a per-Contract SOPS secret, in a `Squero-Signature` header with a timestamp.
 - `https://` only.
 - Three retries with backoff, then a log line and a metric.
+
+**Decided while building (grill, 2026-11-23, all recommended):**
+- **An Operator-side destination**, never a client's: it gets the Operator's thread (the Report with its Evidence), on its own. The client's channels are 19.4.
+- **The URL is a secret** (`url_secret`), as 19.4's are. *Why:* a receiver's URL often holds a key.
+- **Structured fields, not Slack's text.** *Why:* Slack's markup and escaping are no use to a program.
+- **Rollbacks and Stale notices mirror Slack:** the event fires once Slack took the message. They need the Contract's Slack channel and the Hub's Slack token.
+- **In memory.** A restart loses the events not yet delivered. An outbox comes if a receiver needs every event.
+- **Triages and Checks** send events; a Question none. A failed Run is one more event, `investigation.failed`.
+
+**Built (2026-11-23):**
+- A top-level `webhook:` block (`url_secret`, `signing_secret`). One per Contract, no event filter: the receiver filters by `event`.
+- `webhooks.Sender`: one queue and one worker per Contract, so events arrive in order. An attempt has 10 seconds in all; a connection error, a timeout, a 5xx or a 429 is retried after 1, 5 and 25 seconds; any other answer is dropped at once; a redirect is never followed.
+- **Emitting never raises and never waits.** A full queue (1,000 per Contract), an event that can't be written or a secret that is gone drops that event, logged and counted, and the next one still goes.
+- **Eight events**, each from the one place the Operator's thread is told: `approval.needed`, `report.finished` and `investigation.failed` from `notify` (a Check's as `check_slack` speaks), `approval.decided` from `settle`, `action.executed` for what a Run added to the Hub's own list, `rollback` and `actuation` after Slack took the line, `stale_notice` after Slack took the notice.
+- **An allowlist.** An event is built from named fields, never from the stored Investigation: no raw Alert group, no Slack thread. Every string is redacted and cut at 4,000 characters; a list at 50 items. The envelope's fields can't be replaced by an event's own.
+- **A decision's reason** is the Operator's words, or why it went Stale. Never the instruction the Hub gives the model.
+- **Signature:** `Squero-Signature: t=<unix>,v1=<hex>`, HMAC-SHA256 of `<t>.<body>`. Each retry is signed afresh and keeps its `id`.
+- **Health:** a `webhook` row from the last delivery's outcome; no request is made for it. Metric: `squero_webhook_events_total{outcome}`.
+- A Rollback's event carries no CPU or memory: Slack's line names none. A Step-up's carries its `memory` and a Burst's its `cpu`.
+- The URL is checked at load (https, a host, no user or password) and never quoted; a log line names its host and the status only.
+
+**Tests:** 67 in two files. `test_webhooks.py` (50): the signature, the redaction and cuts, the allowlist against a sentinel in the stored Investigation, the exact request, the envelope that can't be replaced, order under a slow delivery, the retries each signed afresh, 12 answers dropped at once, the 10 seconds in all, 9 URLs refused unquoted (at delivery and at load), a full queue and a missing secret, the log by host only, the guide's own receiver run as written, and the metric. `test_webhooks_hub.py` (17): each event from where the thread is told, two approvals in one Triage, a Stale decision without the model's instruction, a failed Run, a Check as its thread speaks, a Rollback and a Stale notice only once Slack took them, a Question sending none, a failing receiver, and Health. Isolation: two Contracts, each its own URL and secret, in the Sender and through the Hub. 112 mutations, all caught; two more were equivalent and their code was removed. No eval rerun: nothing the model is told changes. No API change for the console.
+
+**Known limits:**
+- A Hub restart loses queued events. A retry can delay the events behind it by up to about 70 seconds.
+- The hourly "N more Rollbacks" line, the budget notices and the Client report have no event.
+- A Check's recovery event needs its Slack thread, as its recovery in Slack does.
+- No `investigation.started` event: the decided list has none.
+- Not checked against a real receiver; the unit tests play one.
 
 ## 19.4 Microsoft Teams and Google Chat
 

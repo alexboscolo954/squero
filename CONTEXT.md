@@ -148,6 +148,11 @@ This file is the glossary. Each entry gives the term in bold, its definition, th
 - It never holds Evidence, Executed actions, the Runbook used, or any approval control.
 - _Avoid_: Client delivery (for the message)
 
+**Outbound webhook**: The copy of what a Contract's Operator channel gets, sent as signed JSON events to one URL the Contract names.
+- It goes to an Operator-side system (ticketing, a data store, automation), never to a client's: it carries the full Report with its Evidence, and it sends on its own.
+- The Client report is not one of its events.
+- _Avoid_: Notification, callback
+
 **Answer**: The result of a Question: a direct reply backed by Evidence, with no Category or Assessed severity.
 - A Question that finds a fault still ends with an Answer, which says so.
 

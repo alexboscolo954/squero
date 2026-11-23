@@ -21,6 +21,7 @@ atomic) but share no limit.
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
 import re
@@ -66,6 +67,7 @@ from squero import (
     teachings,
     usage,
     webapp,
+    webhooks,
 )
 from squero.config import Settings
 from squero.contracts import Jira, Kubernetes
@@ -295,6 +297,7 @@ def create_app(
         async with connect(database_url) as pool, slack_http or httpx.AsyncClient() as http:
             db["slack"] = Slack(settings.slack_bot_token, http)
             db["http"] = http  # no default headers: each caller sets its own auth
+            db["hooks"] = app.state.hooks = webhooks.Sender(http)  # slice 19.3
             db["store"] = Store(pool)
             await store().migrate()
             db["checkpointer"] = AsyncPostgresSaver(pool, serde=agent.CHECKPOINT_SERDE)
@@ -320,6 +323,7 @@ def create_app(
                 for task in [*tasks, *sizing_task]:
                     task.cancel()
                 await asyncio.gather(*tasks, *sizing_task, return_exceptions=True)
+                await db["hooks"].close()  # events still queued are lost with the Hub
 
     app = FastAPI(title="squero", lifespan=lifespan)
 
@@ -341,6 +345,28 @@ def create_app(
     def approver_auth(creds: HTTPAuthorizationCredentials = Depends(bearer)) -> None:  # noqa: B008
         check(creds, approver_token)
 
+    def emit(contract_id: str, event: str, data: dict[str, Any]) -> None:
+        """One event for the Contract's Outbound webhook (slice 19.3), if it has one:
+        queued, never waited for, and never a failure of what it tells of."""
+        if "hooks" in db:
+            db["hooks"].emit(by_id.get(contract_id), event, data)
+
+    def announce(t: Investigation) -> None:
+        """Where a Triage or a Check stands, as its thread says it (slice 19.3): it waits
+        for a decision, it has its Report, or its Run failed. A Question is the
+        Operator's own conversation: none."""
+        if t.kind == "question":
+            return
+        about = {"investigation": webhooks.investigation(t)}
+        if t.status == "awaiting_approval":
+            asked = {"proposed": webhooks.proposed(t.pending), "deadline": t.deadline}
+            emit(t.contract_id, "approval.needed", about | asked)
+        elif t.status == "done":
+            done = webhooks.report(t) | {"executed_actions": t.executed_actions}
+            emit(t.contract_id, "report.finished", about | done)
+        elif t.status == "failed":
+            emit(t.contract_id, "investigation.failed", about | {"error": t.error})
+
     async def notify(t: Investigation) -> None:
         log.info("investigation %s %s", t.id, t.status)
         PENDING_APPROVALS.set(await store().pending_count())
@@ -350,6 +376,7 @@ def create_app(
         if t.status in ("done", "failed"):
             TRIAGES.labels(t.status).inc()
             TRIAGE_SECONDS.observe(now() - t.started)
+        announce(t)
         done = t.kind == "triage" and t.status == "done"
         await to_slack(t, await reflexes_of(t) if done else None)
 
@@ -427,12 +454,15 @@ def create_app(
         open_id = row["failing_id"] if row else None
         verdict = t.check_result
         if t.status == "done" and verdict and verdict.passed:
+            if t.slack_ts or open_id:  # as Slack: a passing Check is quiet unless it
+                announce(t)  # ends a failure, or a decision was asked in its thread
             if t.slack_ts:  # resumed after a decision in its own thread
                 await to_slack(t)
             if open_id and await store().set_failing(t.contract_id, name, None, open_id):
                 text = f":white_check_mark: Recovered: {clean(verdict.summary, 1000)} · `{t.id}`"
                 await note_in(open_id, text)
             return
+        announce(t)
         if open_id and not t.slack_ts and t.status != "awaiting_approval":
             what = verdict.summary if verdict else f"the Run failed: {t.error or 'unknown error'}"
             await note_in(open_id, f":x: Still failing: {clean(what, 1000)} · `{t.id}`")
@@ -680,6 +710,7 @@ def create_app(
     ) -> None:
         """teach: (the Operator's words, who): a Teaching is drafted once the Run ends,
         with its Report as context, never alongside it."""
+        before = len(t.executed_actions)  # the list grows over a Triage's Runs
         if t.kind != "check" or t.slack_ts:  # a Check speaks only once it has a verdict
             await to_slack(t, note)  # "investigating", in a new or the existing thread
         async with shares.get(t.contract_id) or contextlib.nullcontext(), slots:
@@ -715,6 +746,12 @@ def create_app(
                     None,
                 )
         await store().save(t)
+        # What this Run executed (slice 19.3), from the Hub's own record. A Run that
+        # failed adds none (its list is as it was): its error says its actions may or may
+        # not have run.
+        if ran := t.executed_actions[before:]:
+            about = {"investigation": webhooks.investigation(t), "actions": ran}
+            emit(t.contract_id, "action.executed", about)
         if t.status == "awaiting_approval":
             fresh = await store().get(t.id)  # the group may have resolved during the Run
             if fresh and fresh.group_resolved:
@@ -754,11 +791,14 @@ def create_app(
         decided_by: str,
         note: str,
         reason: str | None = None,
+        why: str | None = None,
     ) -> bool:
         """The one decision path (API, Slack buttons, Stale): claim the pause named
         by its deadline, record who decided, resume. False when that pause is
         already decided, Stale, or not the current one. reason: what the Operator
-        typed when rejecting, which has a Teaching drafted after the Run.
+        typed when rejecting, which has a Teaching drafted after the Run. why: what made
+        it Stale. Either is the reason an Outbound webhook gets (slice 19.3), never
+        `message`: that is the Hub's instruction to the model.
         KillSwitchOn: an approval while the Contract's Kill switch is on; nothing is
         claimed, so the pause can still be rejected, or approved once it is off."""
         if approve and await kill_switch_on(t.contract_id):
@@ -779,6 +819,14 @@ def create_app(
             for _ in pending
         ]
         t.status, t.pending, t.deadline = "running", [], None
+        decided = {  # slice 19.3; a Question never pauses, so never one's
+            "investigation": webhooks.investigation(t),
+            "approve": approve,
+            "by": decided_by,
+            "actions": [p["name"] for p in pending],
+            "reason": why or reason or None,
+        }
+        emit(t.contract_id, "approval.decided", decided)
         teach = None
         if reason and not approve:
             names = ", ".join(sorted({p["name"] for p in pending}))
@@ -794,7 +842,7 @@ def create_app(
             return False
         msg = f"{reason}. The action was not executed. Do not retry; finish the report."
         note = f":hourglass: Stale, rejected automatically: {clean(reason, 500)}."
-        return await settle(t, deadline, False, msg, "stale", note)
+        return await settle(t, deadline, False, msg, "stale", note, why=reason)
 
     async def interact(p: dict[str, Any]) -> None:
         try:
@@ -1382,7 +1430,8 @@ def create_app(
 
         for cid, c in by_id.items():
             try:
-                await notices.tick(store(), c, at, post, settings.console_url)
+                took = functools.partial(emit, cid)  # slice 19.3: what Slack took
+                await notices.tick(store(), c, at, post, settings.console_url, took)
             except Exception:
                 log.exception("stale notices %s failed", cid)
 
@@ -1752,6 +1801,9 @@ def create_app(
             detail = await pagerduty.reachable(db["http"], c.secret(c.pagerduty.api_key_secret))
             ms = round(1000 * (time.monotonic() - start))
             states.append({"name": "pagerduty", "ok": not detail, "ms": ms, "detail": detail})
+        if c.webhook:  # slice 19.3: by its last delivery, no request made to say so
+            ok, text = db["hooks"].health(c.id)
+            states.append({"name": "webhook", "ok": ok, "ms": 0, "detail": text})
         for s in states:
             s["detail"] = redact_capped(s["detail"], 300)
         try:
@@ -1966,6 +2018,19 @@ def create_app(
                     return  # told at a later pass, the others after it
                 posts.append(at)
                 await store().mark_told(cid, [r])
+                # slice 19.3: once Slack took it, so a refused post's retries send no
+                # second event. The hourly "N more" line is Slack's alone.
+                rolled = r["outcome"] == "rolled_back"
+                told_of = {k: r[k] for k in ("namespace", "kind", "name", "container")}
+                told_of |= {"cluster": cluster, "outcome": r["outcome"], "reason": r["reason"]}
+                told_of |= {"actuated_at": r["at"]}  # the Actuator's own time
+                # the limit Slack's line names, and no other: a Step-up's memory, a Burst's CPU
+                limit = {"stepped_up": "memory", "burst": "cpu"}.get(r["outcome"])
+                if limit and r[limit]:
+                    told_of[limit] = r[limit]
+                if rolled and third and (cluster, *w) in automated:
+                    told_of["automation_ended"] = True
+                emit(cid, "rollback" if rolled else "actuation", told_of)
             rest = waiting - len(rows)
             if rest <= 0 or at - summed.get(key, 0.0) < 3600:
                 continue  # none over its hour's posts; or said within the hour: counted next

@@ -965,7 +965,7 @@ The test payloads were captured from Grafana 13.2. See [`tests/fixtures/grafana-
 | `POST /contracts/{id}/pagerduty` | PagerDuty's signature, with that Contract's signing secret | [PagerDuty](contracts.md#pagerduty)'s V3 webhook: an incident starting or ending as an Alert group, then as above. A wrong signature gets 401; a signed delivery is never refused |
 | `GET /investigations`, `GET /investigations/{id}` | approver | Status, kind (`triage` for now), Contract, report, proposed and executed actions |
 | `POST /investigations/{id}/decision` | approver | `{"approve": true}` or `{"approve": false, "message": "..."}` |
-| `GET /metrics`, `GET /healthz` | none | `squero_triages_total`, `squero_triage_seconds`, `squero_tool_calls_total`, `squero_pending_approvals` |
+| `GET /metrics`, `GET /healthz` | none | `squero_triages_total`, `squero_triage_seconds`, `squero_tool_calls_total`, `squero_pending_approvals`, `squero_webhook_events_total` (an [Outbound webhook](contracts.md#outbound-webhook)'s events, by `outcome`: `delivered`, `failed`, `dropped`) |
 
 ### The container
 
