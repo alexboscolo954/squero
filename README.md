@@ -93,7 +93,7 @@ To run it for real, start with [Running the Hub](docs/running-the-hub.md).
 | Document | What it covers |
 |---|---|
 | [Running the Hub](docs/running-the-hub.md) | The compose stack, Slack, the web console, the Hub MCP server, one-cluster mode, models and cost, every `SQUERO_*` setting |
-| [Contracts](docs/contracts.md) | The Contract file: layout and secrets, Masking, GitOps, Jira, Checks, Teachings, vendor integrations, Azure, Google Cloud, AWS |
+| [Contracts](docs/contracts.md) | The Contract file: layout and secrets, Masking, GitOps, Jira, ServiceNow, Checks, Teachings, vendor integrations, Azure, Google Cloud, AWS |
 | [Resource optimizer](docs/optimizer.md) | Sizings, policies, prices, the Bill check, cost by team, Savings, the weekly digest, the lab |
 | [The client's cluster](docs/client-cluster.md) | The Relay and the Actuator: what each one may do and how to install it |
 | [Safety model](docs/safety.md) | Every layer of control, in full |

@@ -410,6 +410,19 @@ class Jira(Strict):
     issue_type: str = "Task"  # for the Create Jira issue button: as the project names it
 
 
+class ServiceNow(Strict):
+    """The Contract's ServiceNow instance: one assignment group's past incidents as
+    Evidence (slice 19.5a)."""
+
+    name: Literal["servicenow"]
+    # Basic auth: never over plain http. No user in it: every link shown starts with it.
+    url: str = Field(pattern=r"^https://[^/\s@]+/?$")
+    user: str
+    password_secret: str
+    # the assignment group's sys_id: every read stays inside it, checked on each row
+    group: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
 class Aws(Strict):
     """The Contract's AWS account, read-only: CloudWatch metrics, alarms and logs, and
     CloudTrail's management events, with an IAM user's key; also its bill (Cost
@@ -498,7 +511,16 @@ class Vendor(Strict):
         return self
 
 
-BUILTINS = ("kubernetes", "prometheus", "runbooks", "jira", "aws", "incidents", "sizing")
+BUILTINS = (
+    "kubernetes",
+    "prometheus",
+    "runbooks",
+    "jira",
+    "servicenow",
+    "aws",
+    "incidents",
+    "sizing",
+)
 
 
 def _kind(value: Any) -> str:
@@ -511,6 +533,7 @@ Integration = Annotated[
     | Annotated[Prometheus, Tag("prometheus")]
     | Annotated[Runbooks, Tag("runbooks")]
     | Annotated[Jira, Tag("jira")]
+    | Annotated[ServiceNow, Tag("servicenow")]
     | Annotated[Aws, Tag("aws")]
     | Annotated[Incidents, Tag("incidents")]
     | Annotated[Sizings, Tag("sizing")]
@@ -1522,7 +1545,7 @@ def identifiers(c: Contract) -> dict[str, str]:
         if cl.prometheus_url:
             found[_own_host(cl.prometheus_url)] = "Prometheus host"
     for i in c.integrations:
-        if isinstance(i, Prometheus | Jira):
+        if isinstance(i, Prometheus | Jira | ServiceNow):
             found[_own_host(i.url)] = f"{i.name} host"
         if isinstance(i, Jira):
             found[i.project] = "Jira project"

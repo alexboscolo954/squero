@@ -28,7 +28,7 @@ Read next, in this order when you need depth:
 | [`CONTEXT.md`](CONTEXT.md) | The vocabulary. Every domain term is defined here. |
 | [`README.md`](README.md) | The overview: what the Hub, Relay and Actuator are, the quick start, and a map of the docs below. |
 | [`docs/running-the-hub.md`](docs/running-the-hub.md) | Running the Hub: compose stack, Slack, console, Hub MCP server, models and cost, the `SQUERO_*` configuration table. |
-| [`docs/contracts.md`](docs/contracts.md) | The Contract YAML reference (triage side: Masking, GitOps, Jira, Checks, Teachings, vendors, clouds). |
+| [`docs/contracts.md`](docs/contracts.md) | The Contract YAML reference (triage side: Masking, GitOps, Jira, ServiceNow, Checks, Teachings, vendors, clouds). |
 | [`docs/optimizer.md`](docs/optimizer.md) | The optimizer: Sizings, policies, prices, Bill check, cost allocation, Savings, the digest. |
 | [`docs/client-cluster.md`](docs/client-cluster.md) | The Relay and the Actuator in a client's cluster, and their settings. |
 | [`docs/safety.md`](docs/safety.md) | The full safety model. |
@@ -111,8 +111,8 @@ src/squero/
   evals.py         Scenario replay and scoring.
   cli.py           The `squero` command.
   servers/         One MCP server per integration: kubernetes, prometheus, runbooks, jira,
-                   aws, incidents, sizing, and vendors.py (the registry of vendor servers,
-                   with snapshots/ of their tool schemas).
+                   servicenow, aws, incidents, sizing, and vendors.py (the registry of vendor
+                   servers, with snapshots/ of their tool schemas).
 tests/             pytest. conftest.py has make_contract(); fake_prometheus.py; fixtures/.
 evals/             scenarios/ (recorded tool outputs), results/ (committed runs), record_*.py.
 deploy/            base/ (kustomize), actions/ and gitops/ (RBAC overlays), hub/ (compose stack).

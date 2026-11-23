@@ -51,6 +51,7 @@ from squero.contracts import (
     Kubernetes,
     Prometheus,
     Runbooks,
+    ServiceNow,
     Sizings,
     Vendor,
 )
@@ -65,6 +66,7 @@ from squero.servers import (
     kubernetes,
     prometheus,
     runbooks,
+    servicenow,
     sizing,
     vendors,
 )
@@ -353,6 +355,8 @@ def build_mcp(
             guides.append(kubernetes.GUIDE.format(name=i.name))
         if isinstance(i, Jira):
             guides.append(jira.GUIDE)
+        if isinstance(i, ServiceNow):
+            guides.append(servicenow.GUIDE)
         if isinstance(i, Aws):
             guides.append(aws.GUIDE.format(name=i.name, regions=", ".join(i.regions)))
         if isinstance(i, Vendor):
@@ -404,6 +408,9 @@ def probes(contract: Contract) -> list[tuple[str, str | None, dict[str, Any]]]:
             checks.append(("runbooks", "runbooks_search_runbooks", {"keywords": "health"}))
         elif isinstance(i, Jira):
             checks.append(("jira", "jira_search_issues", {"text": "health", "days": 1, "limit": 1}))
+        elif isinstance(i, ServiceNow):
+            day = {"text": "health", "days": 1, "limit": 1}
+            checks.append(("servicenow", "servicenow_search_incidents", day))
         elif isinstance(i, Aws):
             checks.append(("aws", "aws_describe_alarms", {"state": "ALARM"}))
         elif isinstance(i, Incidents):
@@ -462,6 +469,12 @@ def integration_server(
         token = contract.secret(integration.token_secret)
         server = jira.build_server(integration.url, integration.email, token, integration.project)
         return server, jira.ACCESS
+    if isinstance(integration, ServiceNow):
+        password = contract.secret(integration.password_secret)
+        server = servicenow.build_server(
+            integration.url, integration.user, password, integration.group
+        )
+        return server, servicenow.ACCESS
     if isinstance(integration, Aws):
         secret = contract.secret(integration.secret_access_key_secret)
         return aws.build_server(integration.regions, integration.access_key_id, secret), aws.ACCESS

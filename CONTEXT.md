@@ -221,6 +221,7 @@ This file is the glossary. Each entry gives the term in bold, its definition, th
 
 **Similar incident**: A past Report from the same Contract that the agent finds, by its words or by meaning, and uses as a lead.
 - It never comes from another Contract.
+- _Not_: a ticket in the client's own Jira or ServiceNow. The agent reads those as Evidence too, with other tools (`jira_`, `servicenow_`), and they are the client's records, not the Hub's.
 
 **Feedback**: The Operator's verdict on a finished Triage Report: right, or wrong with a correction.
 - A correction, like a reason the Operator typed when rejecting a Proposed action, makes the agent propose a Teaching.

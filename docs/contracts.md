@@ -10,6 +10,7 @@ Fields for the cluster agents are in [client-cluster.md](client-cluster.md), opt
 - [Masking](#masking)
 - [GitOps](#gitops)
 - [Jira](#jira)
+- [ServiceNow](#servicenow)
 - [Scheduled Checks](#scheduled-checks)
 - [Deploy verification](#deploy-verification)
 - [Similar incidents](#similar-incidents)
@@ -382,6 +383,94 @@ If something goes wrong:
 After filing, the thread and the console show the issue's key and link.
 
 The agent never files. Creating is Hub code behind the button, not a tool.
+
+## ServiceNow
+
+A builtin integration gives the agent the past incidents of **one assignment group** in the client's ServiceNow, as Evidence. That means an earlier incident with the same cause, and how it was resolved.
+
+It reads only. A Create ServiceNow incident button is the next slice (19.5b).
+
+### Config
+
+```yaml
+integrations:
+  - name: servicenow
+    url: https://acme.service-now.com            # the instance; https only (Basic auth)
+    user: squero.reader                          # a ServiceNow user for the Hub
+    password_secret: servicenow-password         # a name in secrets.sops.yaml
+    group: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6      # the assignment group's sys_id
+```
+
+| Field | Example | What it does |
+|---|---|---|
+| `url` | `https://acme.service-now.com` | The instance. Must be https with no path (Basic auth) |
+| `user` | `squero.reader` | The user the Hub signs in as |
+| `password_secret` | `servicenow-password` | A name in `secrets.sops.yaml` |
+| `group` | 32 characters, `0-9` and `a-f` | The assignment group's `sys_id`. Every read stays inside it |
+
+A Contract can have ServiceNow and [Jira](#jira) together.
+
+### Set it up
+
+1. **Make a user for the Hub** in ServiceNow. Someone with the `user_admin` role does this:
+   - open the Users list (in the app's menu, **User Administration**, then **Users**) and press **New**;
+   - set a **User ID** (this is `user`) and a **Password**;
+   - set **Identity type** to **Machine**. That ticks **Web service access only**: the user can call the API and can't sign in to the app;
+   - give it a role that reads incidents of the group, and nothing else you'd mind the agent reading.
+2. **Find the group's `sys_id`.** Ask the instance, signed in as that user (curl asks for the password; it is not in the command):
+
+   ```bash
+   curl -u squero.reader -H "Accept: application/json" \
+     "https://acme.service-now.com/api/now/table/sys_user_group?sysparm_query=name=Payments%20SRE&sysparm_fields=name,sys_id"
+   ```
+
+   The answer holds `"sys_id": "<32 characters>"`. An empty `result` means the name is wrong, or the user can't read groups.
+3. **Add the password** to the Contract's secrets: `sops edit acme/secrets.sops.yaml`, then a line `servicenow-password: <the password>`. See [Layout and secrets](#layout-and-secrets).
+4. **Add the block above** to `contract.yaml` and run `squero contracts validate <contracts dir>`.
+5. **Restart the Hub**, then open the console's Health page for the Contract: a `servicenow` row says ok, or shows ServiceNow's error.
+
+**Not confirmed from ServiceNow's pages** (they did not load, and there is no instance to try yet):
+
+- the menu path in step 1, and which role the user needs. `itil` is the usual one for reading incidents;
+- the table name `sys_user_group` in step 2. In the ServiceNow app, the same id is on the group's form: its menu has **Copy sys_id**.
+
+### What the agent can read
+
+The agent gets two read tools:
+
+- `servicenow_search_incidents`: incidents whose short description or description has every word given (at most 5), newest first.
+- `servicenow_get_incident`: one incident's description, its resolution code and its resolution notes.
+
+Each incident comes with its number, state, when it was opened and resolved, and a link.
+
+### How a read stays inside the group
+
+- **The Hub writes every query.** The model passes only words. A `^`, a `=`, a comma or `javascript:` never reaches ServiceNow.
+- **Every row is checked.** ServiceNow drops a part of a query it can't read and answers with the rest. So the Hub checks the group stored on each row that comes back, and drops any other.
+- **A dropped row is logged** by its count only.
+- `servicenow_get_incident` also checks the number that came back is the one asked for.
+
+These are the client's own tickets. The Hub's own past Reports are [Similar incidents](#similar-incidents), with other tools.
+
+### If something goes wrong
+
+| What you see | What it means |
+|---|---|
+| `ServiceNow error 401: ...` | The user or the password is wrong. Or the user has multi-factor sign-in enforced: the API can't pass it, so use a user without it |
+| `ServiceNow error 403: ...` | The user may not read incidents through the API |
+| `ServiceNow error 302: Found` | The instance sent the Hub somewhere else, usually a login page. Check the URL is the instance's own |
+| `ServiceNow error: its answer was not the Table API's` | The instance answered with a page, not data. A developer instance that is asleep may do this (not confirmed) |
+| `ServiceNow unreachable: ...` | No connection, or no answer in 15 seconds |
+| Searches find nothing | The `group` isn't the group's `sys_id`, or the incidents are older than `days` |
+
+An error shows ServiceNow's status and its message on one line, cut at 200 characters. It never shows the password or the reply's page.
+
+### Known limits
+
+- Comments and work notes are not read. The resolution notes carry how it was fixed.
+- A search needs every word in the short description or the description. Fewer words find more.
+- Two Contracts may name the same instance and group. Nothing refuses it, as with Jira.
+- Built on ServiceNow's documented answers. A real instance has not been read yet.
 
 ## PagerDuty
 

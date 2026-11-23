@@ -662,7 +662,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--port", type=int, default=8080)
 
     m = sub.add_parser("mcp", help="run one MCP server standalone (e.g. for Claude Code)")
-    m.add_argument("server", choices=["kubernetes", "prometheus", "runbooks", "jira"])
+    m.add_argument("server", choices=["kubernetes", "prometheus", "runbooks", "jira", "servicenow"])
     m.add_argument("--contract", required=True, help="serve this Contract's integration")
     m.add_argument("--transport", choices=["stdio", "http"], default="stdio")
     m.add_argument("--host", default="127.0.0.1")

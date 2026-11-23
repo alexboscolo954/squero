@@ -1,8 +1,8 @@
 # Phase 19: Integrations breadth
 
-**In short:** Phase 19 adds the alert sources, paging tools and outbound channels that clients use. It starts with managed Prometheus logins, so the optimizer works for clients on managed clouds. 19.1a, 19.1b, 19.1c, 19.2, 19.3 and 19.4 are built so far.
+**In short:** Phase 19 adds the alert sources, paging tools and outbound channels that clients use. It starts with managed Prometheus logins, so the optimizer works for clients on managed clouds. 19.1a, 19.1b, 19.1c, 19.2, 19.3, 19.4 and 19.5a are built so far.
 
-**Status:** grilled 2026-11-21. 6 of 8 slices built (19.1a, 2026-11-21; 19.1b, 19.1c and 19.2, 2026-11-22; 19.3 and 19.4, 2026-11-23).
+**Status:** grilled 2026-11-21. 7 of 9 slices built (19.1a, 2026-11-21; 19.1b, 19.1c and 19.2, 2026-11-22; 19.3, 19.4 and 19.5a, 2026-11-23).
 
 **Goal:** integrations only, through the Phase 4 framework: managed Prometheus logins, PagerDuty, outbound webhooks, Microsoft Teams and Google Chat, ServiceNow, and Datadog and New Relic.
 
@@ -16,7 +16,8 @@
 | [19.2](#192-pagerduty) | PagerDuty | ✅ built, live check owed |
 | [19.3](#193-outbound-webhooks) | Outbound webhooks | ✅ built |
 | [19.4](#194-microsoft-teams-and-google-chat) | Microsoft Teams and Google Chat | ✅ built, live check owed |
-| 19.5 | ServiceNow | Not built |
+| [19.5a](#195a-past-incidents-as-evidence) | ServiceNow: past incidents as Evidence | ✅ built, live check, Scenario and eval owed |
+| [19.5b](#195b-the-create-servicenow-incident-button) | ServiceNow: the Create ServiceNow incident button | Not built |
 | 19.6 | Datadog and New Relic | Not built |
 
 ## Decisions (grill, 2026-11-21)
@@ -265,6 +266,48 @@ Two rounds, all answers the recommended ones.
 - Basic auth. `https://` only.
 - A Personal Developer Instance (free) for the fixtures and the Scenario.
 
+**Decided while building (grill, 2026-11-23, all recommended):**
+- **Two slices, as 4.4 was.** 19.5a is the two read tools. 19.5b is the button, with a migration, Slack, the API and the console.
+- **Built now, on the documented answers.** The live check, the recorded Scenario and its eval wait for the owner's developer instance. *Why:* 4.4 did the same, and no existing Scenario has ServiceNow.
+- **The assignment group is its `sys_id`.** *Why:* it is the documented form for a search and for a create, and a name can be renamed or used twice.
+- **Search is `LIKE` on the short description and the description.** Every word must appear, at most 5. *Why:* the keyword search is not documented for the Table API and depends on the instance's search setup.
+- **For 19.5b:**
+  - The incident holds the Report's summary (one line, 160 characters), the full Report as plain text (redacted, 4,000 characters) and the Contract's group. Nothing else is set.
+  - Jira and ServiceNow may be in one Contract, each with its own button and claim.
+  - `incidents_read` shows the ServiceNow number when one was filed.
+
+### 19.5a Past incidents as Evidence
+
+**What:** two read tools over the Table API, inside the Contract's assignment group.
+
+**Built (2026-11-23):**
+- A `servicenow` builtin: `url` (https, no path, no user in it), `user`, `password_secret`, `group`. Tools `servicenow_search_incidents` and `servicenow_get_incident`, both reads on the Hub's list.
+- **Every row is checked against the group.** *Why:* ServiceNow drops a query part it can't read and answers with the rest, so the query alone proves nothing. A dropped row is logged by its count.
+- **Only word characters reach the query.** No `^`, `=`, comma or `javascript:` from the model.
+- `get_incident` also checks the number that came back. One message whether the incident is missing or another group's.
+- The answer may be `{display_value, value}`, `{link, value}` or a plain string: all three are read. A state is its name, a time is the stored one (UTC).
+- An error is the status and ServiceNow's message on one line, cut at 200 characters. An answer that isn't the Table API's (a login page) is an error with no reply text.
+- A guide in the prompt only when the Contract has ServiceNow. Health searches one day. Save as Scenario and replay handle it. `squero mcp servicenow` runs it alone.
+- The instance's host is one of the names Shared knowledge may not hold.
+- `CONTEXT.md`: a ticket in the client's Jira or ServiceNow is not a Similar incident.
+
+**Tests:** 60 in `test_servicenow.py`: the exact query and request, an injection attempt, the word rules, the bounds, 9 rows of which 6 are dropped, the three answer shapes, an incident that isn't the one asked for, 11 odd numbers, the cuts, 15 errors by status only, the Contract's fields, the client the Hub builds, the guide and Health, a replayed Scenario. Isolation: two Contracts each with their own instance and password, and two Contracts on one instance that ignores the query, each seeing its own group's only. 118 mutations, all caught. No eval rerun: no existing Scenario has ServiceNow. No API change for the console.
+
+**Known limits:**
+- No real instance has been read. Unconfirmed, for the developer instance:
+  - whether a search finds the right rows: how `^OR` groups, `opened_at` as the field, `javascript:gs.daysAgoStart` through the Table API, and the `{display_value, value}` answer. None of these decides the group: the row check does;
+  - the error body, the answer of an instance that is asleep, the roles the user needs, the link to an incident (`incident.do?sys_id=`).
+- Two Contracts may name the same instance and group, as with Jira.
+- No recorded Scenario and no eval yet, which the phase's done-when asks for.
+- Comments and work notes are not read: their shape is not documented on the pages that loaded.
+- A search needs every word. The model is told that fewer words find more.
+
+**Checked:** when the owner has a Personal Developer Instance.
+
+### 19.5b The Create ServiceNow incident button
+
+Not built. Its decisions are above.
+
 ## 19.6 Datadog and New Relic
 
 **What:** triage only, through their official MCP servers, as remote vendor servers in the registry.
@@ -276,3 +319,4 @@ Two rounds, all answers the recommended ones.
 
 - Grafana Cloud with `basic` auth (19.1a): owed, needs the owner's free account.
 - Teams and Google Chat (19.4): owed, needs a Microsoft 365 or Google Workspace account.
+- ServiceNow (19.5a): owed, needs the owner's free Personal Developer Instance. Then the recorded Scenario and its eval (a cost estimate and the owner's yes first).

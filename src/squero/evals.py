@@ -134,6 +134,16 @@ def scenario_contract(
                     "project": "REPLAY",
                 }
             )
+        elif name == "servicenow":  # placeholder: never reached
+            built.append(
+                {
+                    "name": name,
+                    "url": "https://replay.invalid",
+                    "user": "replay",
+                    "password_secret": "replay",
+                    "group": "0" * 32,
+                }
+            )
         elif name == "aws":  # placeholder: never reached
             built.append(
                 {
