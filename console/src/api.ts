@@ -87,6 +87,7 @@ export const decide = (id: string, deadline: number, approve: boolean, reason: s
 export const judge = (id: string, correct: boolean, correction: string) =>
   send<InvestigationPage>(`${at(id)}/feedback`, { correct, correction });
 export const fileJira = (id: string) => send<InvestigationPage>(`${at(id)}/jira`);
+export const fileServiceNow = (id: string) => send<InvestigationPage>(`${at(id)}/servicenow`);
 /** A Question about this Contract (slice 11.7a): it opens running. */
 export const ask = (contract: string, question: string) =>
   send<InvestigationPage>(`/contracts/${encodeURIComponent(contract)}/questions`, { question });

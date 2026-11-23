@@ -2881,6 +2881,16 @@
             "title": "Scenario",
             "type": "boolean"
           },
+          "servicenow": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ServiceNowState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "started": {
             "title": "Started",
             "type": "number"
@@ -2935,6 +2945,7 @@
           "taught",
           "scenario",
           "jira",
+          "servicenow",
           "can_judge",
           "can_follow_up",
           "asked",
@@ -3983,6 +3994,63 @@
           "after"
         ],
         "title": "Scenarios",
+        "type": "object"
+      },
+      "ServiceNowState": {
+        "description": "The Contract's ServiceNow for this Report (slice 19.5b): its incident once filed,\nwho is filing it while there is none yet, or nothing: it can be filed.",
+        "properties": {
+          "by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "By"
+          },
+          "incident": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Incident"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "incident",
+          "url",
+          "by",
+          "since"
+        ],
+        "title": "ServiceNowState",
         "type": "object"
       },
       "Share": {
@@ -6316,6 +6384,46 @@
           }
         },
         "summary": "Scenario"
+      }
+    },
+    "/api/v1/investigations/{investigation_id}/servicenow": {
+      "post": {
+        "description": "The Report into the Contract's ServiceNow assignment group, once.",
+        "operationId": "servicenow_incident_api_v1_investigations__investigation_id__servicenow_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "investigation_id",
+            "required": true,
+            "schema": {
+              "title": "Investigation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvestigationPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Servicenow Incident"
       }
     },
     "/api/v1/overview": {

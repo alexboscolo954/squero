@@ -749,6 +749,7 @@ const PAGE = {
   taught: [],
   scenario: false,
   jira: null,
+  servicenow: null,
   can_judge: false,
   can_follow_up: false,
   asked: null,
@@ -1018,6 +1019,50 @@ test("a finished Report takes feedback and files into Jira, then links the issue
     ["/api/v1/investigations/t1/feedback", { correct: true, correction: "" }],
     ["/api/v1/investigations/t1/jira", null],
   ]);
+});
+
+test("a finished Report files into ServiceNow beside Jira, then links the incident", async () => {
+  history.replaceState(null, "", "/app/?view=investigation&id=t1");
+  const jira = { project: "OPS", issue: null, url: null, by: null, since: null };
+  const done = { ...PAGE, status: "done", pending: [], deadline: null, jira, servicenow: { incident: null, url: null, by: null, since: null } };
+  const url = "https://acme.service-now.com/incident.do?sys_id=c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6";
+  const filed = { ...done, servicenow: { incident: "INC0010001", url, by: "console:alex@example.com", since: 1 } };
+  const sent: [string, unknown][] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string, init?: RequestInit) => {
+      const path = input.split("?")[0];
+      if (init?.method === "POST") {
+        sent.push([path, init.body ? JSON.parse(String(init.body)) : null]);
+        return new Response(JSON.stringify(filed), { status: 200 });
+      }
+      const body = path === "/api/v1/contracts" ? [{ id: "demo-shop", name: "demo-shop" }] : done;
+      return new Response(JSON.stringify(body), { status: 200 });
+    }),
+  );
+  render(<App />);
+  fireEvent.click(await screen.findByText("Create ServiceNow incident"));
+  const incident = await screen.findByText("INC0010001");
+  expect(incident.getAttribute("href")).toBe(url);
+  expect(incident.closest("p")?.textContent).toBe("ServiceNow: INC0010001, filed by console:alex@example.com.");
+  expect(screen.getByText("Create Jira issue")).toBeTruthy(); // Jira's is still offered
+  expect(screen.queryByText("Create ServiceNow incident")).toBeNull();
+  expect(sent).toEqual([["/api/v1/investigations/t1/servicenow", null]]);
+});
+
+test("a ServiceNow incident still being filed offers no button and says to check", async () => {
+  history.replaceState(null, "", "/app/?view=investigation&id=t1");
+  const filing = { ...PAGE, status: "done", pending: [], deadline: null, servicenow: { incident: null, url: null, by: "slack:U1", since: 1_700_000_000 } };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string) => {
+      const body = input.split("?")[0] === "/api/v1/contracts" ? [{ id: "demo-shop", name: "demo-shop" }] : filing;
+      return new Response(JSON.stringify(body), { status: 200 });
+    }),
+  );
+  render(<App />);
+  expect(await screen.findByText(/being filed by slack:U1 since .*, or ServiceNow didn't answer: check the assignment group's incidents before filing it by hand\./)).toBeTruthy();
+  expect(screen.queryByText("Create ServiceNow incident")).toBeNull();
 });
 
 const TEACHING = { alerts: [], source_id: null, correction: null, contradicts: null, decided_by: null, decided_at: null };

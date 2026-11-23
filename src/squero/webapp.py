@@ -41,7 +41,7 @@ from squero.console import (
     scenario_file,
     set_cookie,
 )
-from squero.contracts import Contract, Jira
+from squero.contracts import Contract, Jira, ServiceNow
 from squero.models import Answer, CheckResult, Investigation, TriageReport
 from squero.safety import redact, redact_capped
 from squero.store import Store
@@ -777,6 +777,16 @@ class JiraState(BaseModel):
     since: float | None  # being filed (or Jira never answered) since then
 
 
+class ServiceNowState(BaseModel):
+    """The Contract's ServiceNow for this Report (slice 19.5b): its incident once filed,
+    who is filing it while there is none yet, or nothing: it can be filed."""
+
+    incident: str | None  # its number
+    url: str | None  # the incident's page
+    by: str | None
+    since: float | None  # being filed (or ServiceNow never answered) since then
+
+
 class InvestigationPage(Brief):
     """One Investigation in full: its Report, Answer or Check verdict as fields (the
     app shows each as text), what waits for a decision, and what it did."""
@@ -797,6 +807,7 @@ class InvestigationPage(Brief):
     taught: list[Taught]
     scenario: bool  # finished, with its input recorded: it downloads as a Scenario
     jira: JiraState | None  # a finished Report of a Contract with Jira
+    servicenow: ServiceNowState | None  # a finished Report of a Contract with ServiceNow
     can_judge: bool  # a finished Triage's or Check's Report: right or wrong
     can_follow_up: bool  # a Question no longer answering (slice 11.7a)
     asked: str | None  # a Question's latest question, which the Answer answers
@@ -1220,6 +1231,9 @@ def router(
     health: Health,
     hub_config: dict[str, Any],
     ask: Ask,
+    *,
+    file_servicenow: FileJira,
+    servicenow_of: Callable[[Investigation], ServiceNow | None],
 ) -> APIRouter:
     """decide, file_jira, jira_of, feedback and decide_teaching: the Jinja console's, so
     both consoles record the same thing (`console:<login>`). health and hub_config: the
@@ -1394,6 +1408,16 @@ def router(
             project=j.project, issue=t.jira_issue, url=url, by=t.jira_by, since=t.jira_at
         )
 
+    def servicenow_state(t: Investigation) -> ServiceNowState | None:
+        s = servicenow_of(t)
+        if s is None or t.report is None or t.status != "done":
+            return None
+        filed = t.servicenow_incident and t.servicenow_id
+        url = f"{s.url.rstrip('/')}/incident.do?sys_id={t.servicenow_id}" if filed else None
+        return ServiceNowState(
+            incident=t.servicenow_incident, url=url, by=t.servicenow_by, since=t.servicenow_at
+        )
+
     @api.get("/investigations/{investigation_id}")
     async def investigation(investigation_id: str) -> InvestigationPage:
         t = await investigation_of(investigation_id)
@@ -1430,6 +1454,7 @@ def router(
                 "taught": [x for x in await st.teachings(t.contract_id) if x["source_id"] == t.id],
                 "scenario": t.status == "done" and t.input is not None,
                 "jira": jira_state(t),
+                "servicenow": servicenow_state(t),
                 "can_judge": judged(t),
                 "can_follow_up": t.kind == "question" and t.status in ("done", "failed"),
                 "asked": questions[-1][0] if t.kind == "question" else None,
@@ -1498,6 +1523,17 @@ def router(
         t = await investigation_of(investigation_id)
         key, message = await file_jira(t, login)
         if key is None:
+            raise HTTPException(409, message)
+        return await investigation(t.id)
+
+    @api.post("/investigations/{investigation_id}/servicenow")
+    async def servicenow_incident(
+        investigation_id: str, login: str = Depends(changing)
+    ) -> InvestigationPage:
+        """The Report into the Contract's ServiceNow assignment group, once."""
+        t = await investigation_of(investigation_id)
+        number, message = await file_servicenow(t, login)
+        if number is None:
             raise HTTPException(409, message)
         return await investigation(t.id)
 
@@ -1652,7 +1688,6 @@ def openapi() -> str:
     it: `make console-types`)."""
     app = FastAPI(title="squero console", version="1")
     never: Any = None  # the schema needs no behaviour
-    app.include_router(
-        router(set(), {}, never, "x", never, never, never, never, never, never, never, {}, never)
-    )
+    args = (set(), {}, never, "x", *[never] * 7, {}, never)
+    app.include_router(router(*args, file_servicenow=never, servicenow_of=never))
     return json.dumps(app.openapi(), indent=2, sort_keys=True) + "\n"

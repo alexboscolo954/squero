@@ -462,6 +462,8 @@ Actions on the page. Each one is a change, recorded as `console:<login>`. Each n
   - The agent drafts a Teaching from it.
 - **File it into Jira** once, when the Contract has Jira.
   - After that, the page links the issue.
+- **File it into ServiceNow** once, when the Contract has ServiceNow.
+  - After that, the page links the incident.
 
 **Approver token** (`/app/?view=token`) earns the browser its cookie. It does this through `POST /api/v1/token`. That call works only from your identity and the app's own page. A call without the cookie links to the token page.
 

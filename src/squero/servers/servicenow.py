@@ -1,5 +1,6 @@
 """ServiceNow MCP server: past incidents of one assignment group as Evidence, read-only
-(slice 19.5a).
+(slice 19.5a). Below it, the Operator's Create ServiceNow incident (slice 19.5b): Hub
+code behind a button, never a tool.
 
 ServiceNow's Table API with the Contract's own user and password. The server writes
 every query itself, inside the Contract's assignment group; the model passes only
@@ -18,7 +19,8 @@ from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import SecretStr
 
-from squero.safety import truncate
+from squero.models import TriageReport
+from squero.safety import redact, truncate
 from squero.servers import Access
 
 log = logging.getLogger(__name__)
@@ -174,3 +176,122 @@ def build_server(
         }
 
     return mcp
+
+
+# Creating an incident is the Operator's action, from a button: Hub code, never a tool.
+
+SHORT_LIMIT = 160  # ServiceNow's short description
+TEXT_LIMIT = 4000  # ServiceNow's description
+CUT = "\n[cut: the full Report is in squero]"
+
+
+class Refused(Exception):
+    """ServiceNow answered no: nothing was created, a retry may work."""
+
+
+class Unknown(Exception):
+    """No usable answer (a timeout, a 5xx, a 2xx without the incident): ServiceNow may
+    have created the incident."""
+
+
+def incident_summary(report: TriageReport) -> str:
+    """ServiceNow's short description: one line, at most 160 characters."""
+    line = " ".join(redact(report.summary).split())
+    return line if len(line) <= SHORT_LIMIT else line[: SHORT_LIMIT - 1] + "…"
+
+
+def report_text(report: TriageReport, executed: list[str], investigation_id: str) -> str:
+    """The full Report as plain text, for ServiceNow's description: redacted like
+    Slack, then cut to fit. The last line, which Investigation it is, is never cut."""
+
+    def section(title: str, items: list[str]) -> list[str]:
+        return ["", title, *items] if items else []
+
+    lines = [
+        report.summary,
+        "",
+        f"Root cause ({report.confidence} confidence, {report.category}): "
+        f"{report.probable_root_cause}",
+        f"Severity: {report.severity}. Affected: {', '.join(report.affected) or '-'}",
+        *section(
+            "Evidence",
+            [
+                f"- {e.source}: {e.finding}" + (f" ({e.link})" if e.link else "")
+                for e in report.evidence
+            ],
+        ),
+        *section(
+            "Recommendations", [f"{i}. {a}" for i, a in enumerate(report.recommended_actions, 1)]
+        ),
+        *section("Executed actions", [f"- {a}" for a in executed]),
+    ]
+    body = redact("\n".join(lines))  # before the cut: half a secret passes no pattern
+    foot = f"\n\nFiled by squero from Investigation {investigation_id}."
+    room = TEXT_LIMIT - len(foot)
+    if len(body) > room:
+        body = body[: room - len(CUT)] + CUT
+    return body + foot
+
+
+def _why(resp: httpx.Response) -> str:
+    """A refusal on one line: ServiceNow's message and its detail (a missing field is
+    named in either), or the status' own words."""
+    try:
+        error = resp.json().get("error")
+    except (ValueError, AttributeError):
+        error = None
+    parts = [error.get(k) for k in ("message", "detail")] if isinstance(error, dict) else []
+    said = " ".join(" ".join(p for p in parts if isinstance(p, str)).split())
+    return said[:300] or resp.reason_phrase
+
+
+async def create_incident(
+    http: httpx.AsyncClient,
+    url: str,
+    user: str,
+    password: SecretStr,
+    group: str,
+    short_description: str,
+    description: str,
+) -> tuple[str, str, bool]:
+    """POST the incident with this Contract's own Basic auth, set on the request alone
+    (the client is shared with Slack). Its number, its sys_id and whether ServiceNow
+    put it in the Contract's group (it can drop a field the user may not set); or
+    Refused / Unknown, by one question: can ServiceNow have created it?"""
+    body = {
+        "short_description": short_description,
+        "description": description,
+        "assignment_group": group,
+    }
+    try:
+        resp = await http.post(
+            f"{url.rstrip('/')}{TABLE}",
+            params={"sysparm_fields": "number,sys_id,assignment_group"},
+            json=body,
+            auth=(user, password.get_secret_value()),
+            headers={"Accept": "application/json"},
+            timeout=20,
+            follow_redirects=False,  # whatever the shared client does: a POST is sent once
+        )
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:  # nothing was sent
+        raise Refused(f"could not connect ({type(e).__name__})") from None
+    except httpx.HTTPError as e:
+        raise Unknown(type(e).__name__) from None
+    if 300 <= resp.status_code < 500:  # a redirect is never followed: nothing was created
+        raise Refused(f"{resp.status_code} {_why(resp)}")
+    if resp.status_code >= 500:  # a gateway timeout or a late failure: maybe created
+        raise Unknown(f"HTTP {resp.status_code}")
+    try:
+        made = resp.json().get("result")
+    except (ValueError, AttributeError):
+        made = None
+    made = made if isinstance(made, dict) else {}
+    number, sys_id = actual(made.get("number")), actual(made.get("sys_id"))
+    # A third party's answer: only a number and an id go into Slack and the link.
+    if (
+        resp.status_code != 201
+        or not re.fullmatch(NUMBER, number)
+        or not re.fullmatch(SYS_ID, sys_id)
+    ):
+        raise Unknown(f"HTTP {resp.status_code} without an incident's number and id")
+    return number, sys_id, actual(made.get("assignment_group")) == group

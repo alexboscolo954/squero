@@ -1,8 +1,8 @@
 # Phase 19: Integrations breadth
 
-**In short:** Phase 19 adds the alert sources, paging tools and outbound channels that clients use. It starts with managed Prometheus logins, so the optimizer works for clients on managed clouds. 19.1a, 19.1b, 19.1c, 19.2, 19.3, 19.4 and 19.5a are built so far.
+**In short:** Phase 19 adds the alert sources, paging tools and outbound channels that clients use. It starts with managed Prometheus logins, so the optimizer works for clients on managed clouds. 19.1a, 19.1b, 19.1c, 19.2, 19.3, 19.4, 19.5a and 19.5b are built so far.
 
-**Status:** grilled 2026-11-21. 7 of 9 slices built (19.1a, 2026-11-21; 19.1b, 19.1c and 19.2, 2026-11-22; 19.3, 19.4 and 19.5a, 2026-11-23).
+**Status:** grilled 2026-11-21. 8 of 9 slices built (19.1a, 2026-11-21; 19.1b, 19.1c and 19.2, 2026-11-22; 19.3, 19.4, 19.5a and 19.5b, 2026-11-23).
 
 **Goal:** integrations only, through the Phase 4 framework: managed Prometheus logins, PagerDuty, outbound webhooks, Microsoft Teams and Google Chat, ServiceNow, and Datadog and New Relic.
 
@@ -17,7 +17,7 @@
 | [19.3](#193-outbound-webhooks) | Outbound webhooks | ✅ built |
 | [19.4](#194-microsoft-teams-and-google-chat) | Microsoft Teams and Google Chat | ✅ built, live check owed |
 | [19.5a](#195a-past-incidents-as-evidence) | ServiceNow: past incidents as Evidence | ✅ built, live check, Scenario and eval owed |
-| [19.5b](#195b-the-create-servicenow-incident-button) | ServiceNow: the Create ServiceNow incident button | Not built |
+| [19.5b](#195b-the-create-servicenow-incident-button) | ServiceNow: the Create ServiceNow incident button | ✅ built, live check owed |
 | 19.6 | Datadog and New Relic | Not built |
 
 ## Decisions (grill, 2026-11-21)
@@ -306,7 +306,32 @@ Two rounds, all answers the recommended ones.
 
 ### 19.5b The Create ServiceNow incident button
 
-Not built. Its decisions are above.
+**What:** the Operator files a finished Report as an incident in the Contract's assignment group, once, from Slack or the console.
+
+**Built (2026-11-23):**
+- `file_servicenow`, one path for both surfaces, as `file_jira`: claim (`servicenow_at`, migration 0048), create, record the number and the `sys_id`, update the Slack thread.
+- **Three fields and nothing else:** the short description (the summary on one line, 160 characters), the description (the full Report as plain text, redacted before it is cut at 4,000 characters, its last line never cut) and the assignment group.
+- **One question sorts every answer: can ServiceNow have created it?**
+  - No (a connection that never opened, any 3xx or 4xx): the claim is freed, and the message shows ServiceNow's `message` and `detail` on one line.
+  - Maybe (a timeout, a 5xx, a 2xx without a usable number and id): the claim stays.
+- **A redirect is never followed**, whatever the shared HTTP client does. *Why:* followed, the create would go elsewhere with the Contract's password.
+- **An incident created outside the group is kept.** ServiceNow may drop a field the user may not set. The thread says to move it; freeing the claim would invite a duplicate.
+- Only a number and an id of the expected form reach Slack and the link.
+- Slack: a Create ServiceNow incident button with a confirm dialog, beside Create Jira issue. Each files only its own, and the parent shows both tickets.
+- API and console: `servicenow` on an Investigation's page (the incident, its link, who is filing since when), `POST /api/v1/investigations/{id}/servicenow`, and the button on the page.
+- `incidents_read` names the incident only when one was filed. Its description is unchanged.
+
+**Tests:** 48 in `test_servicenow_incident.py`, and 2 in the console app: one Contract with Jira and ServiceNow where each button files only its own, the exact request, a double click, a refusal retried and no answer not, 20 answers sorted by whether a retry is safe, an incident left outside the group, a redirect not followed, the text (plain, redacted before the cut, its last line kept), the claim in the store, the console's page and route, and `incidents_read`. Isolation: bank's button clicked in acme's channel files nothing, and each Contract uses its own instance, user, password and group. 101 mutations, all caught. No eval rerun: no tool's name, description or schema changed. `make console-check` passes with the regenerated API types.
+
+**Known limits:**
+- No real instance has been written to. Unconfirmed, for the developer instance: whether a create can leave the group unset, the error body, the link to an incident, and ServiceNow's lengths for the two text fields (160 and 4,000).
+- A refusal shown in the console is escaped as for Slack (`&lt;` for `<`), as Jira's is.
+- An answer the Hub can't read as a new incident (a sign-in page with a 200) keeps the claim. Clearing `servicenow_at` in the database is the only reset.
+- An incident left outside the group is said in the Slack thread and the log only, not in the console.
+- No Contract field yet for a caller or a category an instance makes mandatory: the refusal says which.
+- Filing sends no Outbound webhook event, as with Jira.
+
+**Checked:** when the owner has a Personal Developer Instance.
 
 ## 19.6 Datadog and New Relic
 
@@ -319,4 +344,4 @@ Not built. Its decisions are above.
 
 - Grafana Cloud with `basic` auth (19.1a): owed, needs the owner's free account.
 - Teams and Google Chat (19.4): owed, needs a Microsoft 365 or Google Workspace account.
-- ServiceNow (19.5a): owed, needs the owner's free Personal Developer Instance. Then the recorded Scenario and its eval (a cost estimate and the owner's yes first).
+- ServiceNow (19.5a and 19.5b): owed, needs the owner's free Personal Developer Instance. Then the recorded Scenario and its eval (a cost estimate and the owner's yes first).

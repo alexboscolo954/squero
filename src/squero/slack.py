@@ -217,7 +217,11 @@ def status(t: Investigation) -> str:
 
 def parent_text(t: Investigation) -> str:
     sent = " · :outbox_tray: sent to the client" if t.client_sent_at else ""
-    filed = f" · :ticket: {clean(t.jira_issue, 40)}" if t.jira_issue else ""
+    filed = "".join(
+        f" · :ticket: {clean(ticket, 40)}"
+        for ticket in (t.jira_issue, t.servicenow_incident)
+        if ticket
+    )
     return f"*[{clean(t.contract_id)}] {clean(t.title, 300)}*\n{status(t)} · `{t.id}`{sent}{filed}"
 
 
@@ -275,6 +279,7 @@ def parent_blocks(
     jira: str | None = None,
     noted: bool = False,
     channels: Sequence[str] = (),
+    servicenow: bool = False,
 ) -> list[dict[str, Any]]:
     """Always sent in full, so no stale buttons survive an update. Each button
     names its pause (the deadline): a late click can't decide a later pause.
@@ -282,7 +287,9 @@ def parent_blocks(
     jira: the Contract's Jira project, for the Create Jira issue button.
     noted: the Client report also goes on its PagerDuty incident as a note (19.2).
     channels: the Contract's Teams and Google Chat channels it also goes to, each by
-    its label (19.4): the dialog names every destination, since the click is the consent."""
+    its label (19.4): the dialog names every destination, since the click is the consent.
+    servicenow: the Contract has ServiceNow, for the Create ServiceNow incident button
+    (19.5b)."""
     places = [
         *([f"to the client channel {client}"] if client else []),
         *(["on its PagerDuty incident as a note"] if noted else []),
@@ -327,6 +334,24 @@ def parent_blocks(
             },
         }
         done.append(file)
+    if buttons and servicenow and t.report and t.status == "done" and not t.servicenow_at:
+        incident = {
+            "type": "button",
+            "action_id": "create_servicenow",
+            "text": {"type": "plain_text", "text": "Create ServiceNow incident"},
+            "value": json.dumps({"id": t.id}),
+            "confirm": {
+                "title": {"type": "plain_text", "text": "Create a ServiceNow incident?"},
+                "text": {
+                    "type": "plain_text",
+                    "text": "The full Report, with Evidence, goes to the Contract's "
+                    "ServiceNow assignment group.",
+                },
+                "confirm": {"type": "plain_text", "text": "Create"},
+                "deny": {"type": "plain_text", "text": "Cancel"},
+            },
+        }
+        done.append(incident)
     if done:
         blocks.append({"type": "actions", "elements": done})
     if buttons and t.status == "awaiting_approval":

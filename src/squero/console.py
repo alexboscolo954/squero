@@ -41,7 +41,8 @@ Ask = Callable[[str, str, str | None], Awaitable[str | None]]
 QUESTION_LIMIT = 4000
 # health(contract) -> one {name, ok, ms, detail} per integration check
 Health = Callable[[Contract], Awaitable[list[dict[str, Any]]]]
-# (investigation, the Operator's login) -> (the issue key, or None and why)
+# (investigation, the Operator's login) -> (the Jira issue's key or the ServiceNow
+# incident's number, or None and why)
 FileJira = Callable[[Investigation, str], Awaitable[tuple[str | None, str]]]
 # (a finished Triage, right, the correction when wrong, login)
 Feedback = Callable[[Investigation, bool, str | None, str], Awaitable[None]]

@@ -101,6 +101,8 @@ def build_server(
             "report": report.to_markdown(row["executed_actions"]),
             "decisions": decisions,
             "jira_issue": row["jira_issue"],
+            # only when one was filed (slice 19.5b): nothing changes for the others
+            **({"servicenow_incident": n} if (n := row["servicenow_incident"]) else {}),
         }
 
     return mcp

@@ -56,7 +56,8 @@ ACTUATION_FIELDS = (
 COLUMNS = (
     "id, kind, contract_id, title, group_key, group_resolved, status, started, report, "
     "pending, executed_actions, error, deadline, slack_channel, slack_ts, client_sent_at, "
-    "client_sent_by, answer, last_mention_ts, input, jira_issue, jira_by, jira_at, check_result"
+    "client_sent_by, answer, last_mention_ts, input, jira_issue, jira_by, jira_at, check_result, "
+    "servicenow_incident, servicenow_id, servicenow_by, servicenow_at"
 )
 
 
@@ -123,6 +124,10 @@ def _row(t: Investigation) -> tuple[Any, ...]:
         t.jira_by,
         t.jira_at,
         _json(t.check_result),
+        t.servicenow_incident,
+        t.servicenow_id,
+        t.servicenow_by,
+        t.servicenow_at,
     )
 
 
@@ -223,6 +228,35 @@ class Store:
         await self._exec(
             "update investigations set jira_at = null, jira_by = null "
             "where id = %s and jira_at = %s and jira_issue is null",
+            (investigation_id, at),
+        )
+
+    async def claim_servicenow(self, investigation_id: str, by: str) -> float | None:
+        """Take the one ServiceNow incident of a finished Report (slice 19.5b), as
+        claim_jira does: its time, or None when it was already claimed or isn't finished."""
+        at = now()
+        row = await self._one(
+            "update investigations set servicenow_at = %s, servicenow_by = %s "
+            "where id = %s and status = 'done' and report is not null "
+            "and servicenow_at is null returning id",
+            (at, by, investigation_id),
+        )
+        return at if row else None
+
+    async def set_servicenow_incident(
+        self, investigation_id: str, at: float, number: str, sys_id: str
+    ) -> None:
+        await self._exec(
+            "update investigations set servicenow_incident = %s, servicenow_id = %s "
+            "where id = %s and servicenow_at = %s",
+            (number, sys_id, investigation_id, at),
+        )
+
+    async def release_servicenow(self, investigation_id: str, at: float) -> None:
+        """ServiceNow refused it: free the claim for a retry, unless it was claimed again."""
+        await self._exec(
+            "update investigations set servicenow_at = null, servicenow_by = null "
+            "where id = %s and servicenow_at = %s and servicenow_incident is null",
             (investigation_id, at),
         )
 
@@ -1508,7 +1542,7 @@ class Store:
     async def past_report(self, contract_id: str, investigation_id: str) -> dict[str, Any] | None:
         """One finished Triage Report, only if it is this Contract's."""
         return await self._one(
-            "select id, started, title, report, executed_actions, jira_issue "
+            "select id, started, title, report, executed_actions, jira_issue, servicenow_incident "
             "from investigations where id = %s and contract_id = %s "
             "and kind = 'triage' and status = 'done' and report is not null",
             (investigation_id, contract_id),

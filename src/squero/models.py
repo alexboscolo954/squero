@@ -226,6 +226,10 @@ class Investigation(BaseModel):
     jira_issue: str | None = None  # its key in the Contract's Jira project
     jira_by: str | None = None
     jira_at: float | None = None  # claimed; with no key yet: being filed, or unknown
+    servicenow_incident: str | None = None  # its number in the Contract's ServiceNow
+    servicenow_id: str | None = None  # its sys_id: the link
+    servicenow_by: str | None = None
+    servicenow_at: float | None = None  # claimed; with no number yet: being filed, or unknown
     # A Question's last @mention (Slack ts): a follow-up must be newer.
     last_mention_ts: str | None = None
     # What started it, as received (written once): the Alert group, or

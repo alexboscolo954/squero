@@ -105,6 +105,7 @@ The Operator's Revert (`revert_sizing`) puts a container's pods back to their te
 - A Contract's [Outbound webhook](contracts.md#outbound-webhook) sends what its Operator channel gets to one URL the Contract names, signed with that Contract's own secret. It carries Reports with their Evidence, so it is for an Operator-side system only. One Contract's events never go to another's URL.
 - The Client report reaches a client's [Teams or Google Chat channel](contracts.md#client-channels-teams-and-google-chat) only when the Operator presses Send, to the channels the Contract names. What the model wrote can make no link and no mention there.
 - Each Contract's alerts arrive on their own URL with their own token ([Contracts](contracts.md)). [PagerDuty](contracts.md#pagerduty)'s arrive on the Contract's own URL too, checked by a signature made with that Contract's own secret.
+- A finished Report becomes a ServiceNow incident only when the Operator presses the button, once, in the Contract's own instance and group with its own password. It is Hub code, never a tool the agent has.
 - A [ServiceNow](contracts.md#servicenow) read stays inside the Contract's one assignment group. The Hub writes the query, and checks the group on every row that comes back: ServiceNow drops a query part it can't read.
 - The Hub's own Prometheus reads for Sizings name the Contract's namespaces in every query.
 - **One exception:** a node's Room ([Nodes](optimizer.md#nodes)) needs every pod on the node. Pods outside the Contract's namespaces are read as one sum and one count per node:

@@ -1,7 +1,7 @@
 // Investigations (slice 11.5a): a Contract's list, one Investigation in full, and the
 // approver token page. Reports, Answers and tool output are model and client text: each
 // field is rendered as text, line breaks kept, never as markup, and an Evidence link
-// stays text too. Deciding, Report feedback and Jira filing (slice 11.5b), and asking
+// stays text too. Deciding, Report feedback and Jira filing (slice 11.5b), ServiceNow filing (19.5b), and asking
 // or following up a Question (slice 11.7a), post to the API and show the Investigation as
 // it is after. The page pattern (slice 21.6e): figures and filter chips over the list, and a
 // header card with figures on an Investigation's own page.
@@ -331,7 +331,7 @@ export function InvestigationPage({ id }: { id: string }) {
           <span className="hint">The agent keeps this Question's earlier exchange.</span>
         </section>
       )}
-      {(t.jira || t.scenario) && (
+      {(t.jira || t.servicenow || t.scenario) && (
         <section className="panel">
       {t.jira && (
         <p>
@@ -346,6 +346,23 @@ export function InvestigationPage({ id }: { id: string }) {
             <>
               <button onClick={() => act(api.fileJira(t.id))}>Create Jira issue</button>{" "}
               <span className="hint">The full Report, with Evidence, goes to Jira project {t.jira.project}.</span>
+            </>
+          )}
+        </p>
+      )}
+      {t.servicenow && (
+        <p>
+          ServiceNow:{" "}
+          {t.servicenow.incident && t.servicenow.url ? (
+            <>
+              <a href={t.servicenow.url}>{t.servicenow.incident}</a>, filed by {t.servicenow.by}.
+            </>
+          ) : t.servicenow.since ? (
+            `being filed by ${t.servicenow.by} since ${when(t.servicenow.since)}, or ServiceNow didn't answer: check the assignment group's incidents before filing it by hand.`
+          ) : (
+            <>
+              <button onClick={() => act(api.fileServiceNow(t.id))}>Create ServiceNow incident</button>{" "}
+              <span className="hint">The full Report, with Evidence, goes to the Contract's ServiceNow assignment group.</span>
             </>
           )}
         </p>

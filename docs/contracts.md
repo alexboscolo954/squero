@@ -239,7 +239,7 @@ Only the wire is masked. One model-call middleware does this:
 What stays real:
 
 - Tools run on the real names.
-- The state, checkpoints, stored tool calls, Reports, Slack, Client reports, Jira and the console hold the real values.
+- The state, checkpoints, stored tool calls, Reports, Slack, Client reports, Jira, ServiceNow and the console hold the real values.
 
 Also masked the same way:
 
@@ -388,7 +388,7 @@ The agent never files. Creating is Hub code behind the button, not a tool.
 
 A builtin integration gives the agent the past incidents of **one assignment group** in the client's ServiceNow, as Evidence. That means an earlier incident with the same cause, and how it was resolved.
 
-It reads only. A Create ServiceNow incident button is the next slice (19.5b).
+The agent reads only. The Operator can file a finished Report as an incident: see [Create ServiceNow incident](#create-servicenow-incident).
 
 ### Config
 
@@ -408,7 +408,7 @@ integrations:
 | `password_secret` | `servicenow-password` | A name in `secrets.sops.yaml` |
 | `group` | 32 characters, `0-9` and `a-f` | The assignment group's `sys_id`. Every read stays inside it |
 
-A Contract can have ServiceNow and [Jira](#jira) together.
+A Contract can have ServiceNow and [Jira](#jira) together. Each has its own button, and filing into one leaves the other's button there.
 
 ### Set it up
 
@@ -416,7 +416,7 @@ A Contract can have ServiceNow and [Jira](#jira) together.
    - open the Users list (in the app's menu, **User Administration**, then **Users**) and press **New**;
    - set a **User ID** (this is `user`) and a **Password**;
    - set **Identity type** to **Machine**. That ticks **Web service access only**: the user can call the API and can't sign in to the app;
-   - give it a role that reads incidents of the group, and nothing else you'd mind the agent reading.
+   - give it a role that reads incidents of the group, and nothing else you'd mind the agent reading. For the Create ServiceNow incident button it must also be allowed to create incidents and to set their assignment group.
 2. **Find the group's `sys_id`.** Ask the instance, signed in as that user (curl asks for the password; it is not in the command):
 
    ```bash
@@ -432,6 +432,8 @@ A Contract can have ServiceNow and [Jira](#jira) together.
 **Not confirmed from ServiceNow's pages** (they did not load, and there is no instance to try yet):
 
 - the menu path in step 1, and which role the user needs. `itil` is the usual one for reading incidents;
+- what the user needs to create an incident and set its assignment group, and whether ServiceNow creates the incident without the group when it may not set it;
+- ServiceNow's own lengths for the two text fields (160 and 4,000 characters). If its description is shorter, the last line naming the Investigation is what gets lost;
 - the table name `sys_user_group` in step 2. In the ServiceNow app, the same id is on the group's form: its menu has **Copy sys_id**.
 
 ### What the agent can read
@@ -452,7 +454,35 @@ Each incident comes with its number, state, when it was opened and resolved, and
 
 These are the client's own tickets. The Hub's own past Reports are [Similar incidents](#similar-incidents), with other tools.
 
-### If something goes wrong
+### Create ServiceNow incident
+
+A finished Report has a **Create ServiceNow incident** button. It appears on its Slack thread and on its console page.
+
+What gets filed, as three fields and nothing else:
+
+| Field | What goes in |
+|---|---|
+| Short description | The Report's summary on one line, cut at 160 characters |
+| Description | The full Report, Evidence and executed actions as plain text, redacted like Slack, cut at 4,000 characters. Its last line names the Investigation and is never cut |
+| Assignment group | The Contract's `group` |
+
+Who can file, and how often:
+
+- Only the Operator can file.
+- Once per Investigation.
+- The Hub claims it first. So a double click, or a redelivered click, files nothing more.
+
+If something goes wrong:
+
+- **ServiceNow refuses** (a field your instance makes mandatory, a user who may not create): the message shows ServiceNow's reason, and the button works again. A Contract field for a mandatory caller or category comes when an instance needs one.
+- **ServiceNow doesn't answer**, or answers without the incident's number: it may have created the incident. The Hub keeps the claim and asks you to check the group's incidents before filing by hand.
+- **The incident was created outside the group:** ServiceNow may drop a field the user may not set. The incident exists, so the Hub keeps it and the thread says to move it. The agent's searches won't find it until it is in the group.
+
+After filing, the thread and the console show the incident's number and link.
+
+The agent never files. Creating is Hub code behind the button, not a tool.
+
+### If a read goes wrong
 
 | What you see | What it means |
 |---|---|
@@ -470,6 +500,9 @@ An error shows ServiceNow's status and its message on one line, cut at 200 chara
 - Comments and work notes are not read. The resolution notes carry how it was fixed.
 - A search needs every word in the short description or the description. Fewer words find more.
 - Two Contracts may name the same instance and group. Nothing refuses it, as with Jira.
+- An answer the Hub can't read as a new incident (a sign-in page with a 200, say) keeps the claim: the button is gone for that Report. Clearing `servicenow_at` in the database is the only reset, after checking ServiceNow.
+- When ServiceNow leaves the incident outside the group, only the Slack thread and the Hub's log say so. The console shows the incident.
+- The link to an incident (`incident.do?sys_id=`) is not confirmed from ServiceNow's pages.
 - Built on ServiceNow's documented answers. A real instance has not been read yet.
 
 ## PagerDuty
@@ -771,7 +804,7 @@ A Check runs on a schedule, with no alert.
 
 The console's Checks table still shows each Check's next time, last Run, Open failure and last skip.
 
-**The first failure** posts a thread, like a Triage's. The thread has Report, Feedback, Jira and Send to client. That first failure becomes the Check's **Open failure**.
+**The first failure** posts a thread, like a Triage's. The thread has Report, Feedback, Jira, ServiceNow and Send to client. That first failure becomes the Check's **Open failure**.
 
 **Each later failing Run** replies *still failing* in that thread. The exception is a Run that proposes an action:
 
@@ -934,7 +967,7 @@ integrations:
 | Tool | What it does |
 |---|---|
 | `incidents_search` | Postgres full-text search over the title and every string in the Report. Best match first. The last 90 days by default, at most 365 |
-| `incidents_read` | One Report in full, with the actions the Operator approved or rejected and why, what ran, and its Jira issue |
+| `incidents_read` | One Report in full, with the actions the Operator approved or rejected and why, what ran, its Jira issue, and its ServiceNow incident when one was filed |
 
 ### What can be found
 

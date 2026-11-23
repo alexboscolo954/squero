@@ -477,6 +477,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/investigations/{investigation_id}/servicenow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Servicenow Incident
+         * @description The Report into the Contract's ServiceNow assignment group, once.
+         */
+        post: operations["servicenow_incident_api_v1_investigations__investigation_id__servicenow_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/overview": {
         parameters: {
             query?: never;
@@ -1467,6 +1487,7 @@ export interface components {
             report: components["schemas"]["TriageReport"] | null;
             /** Scenario */
             scenario: boolean;
+            servicenow: components["schemas"]["ServiceNowState"] | null;
             /** Started */
             started: number;
             /** Status */
@@ -1838,6 +1859,21 @@ export interface components {
             /** Note */
             note?: string | null;
             now: components["schemas"]["CouldGo"];
+        };
+        /**
+         * ServiceNowState
+         * @description The Contract's ServiceNow for this Report (slice 19.5b): its incident once filed,
+         *     who is filing it while there is none yet, or nothing: it can be filed.
+         */
+        ServiceNowState: {
+            /** By */
+            by: string | null;
+            /** Incident */
+            incident: string | null;
+            /** Since */
+            since: number | null;
+            /** Url */
+            url: string | null;
         };
         /**
          * Share
@@ -3111,6 +3147,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    servicenow_incident_api_v1_investigations__investigation_id__servicenow_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                investigation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestigationPage"];
+                };
             };
             /** @description Validation Error */
             422: {

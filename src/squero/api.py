@@ -71,11 +71,11 @@ from squero import (
     webhooks,
 )
 from squero.config import Settings
-from squero.contracts import Jira, Kubernetes
+from squero.contracts import Jira, Kubernetes, ServiceNow
 from squero.models import AlertGroup, GrafanaAlertGroup, Investigation
 from squero.observability import PENDING_APPROVALS, TRIAGE_SECONDS, TRIAGES
 from squero.safety import redact, redact_capped
-from squero.servers import jira
+from squero.servers import jira, servicenow
 from squero.sizing import utc
 from squero.slack import (
     STATUS,
@@ -878,7 +878,15 @@ def create_app(
         client one names every place the Client report would go."""
         labels = [c.label for c in chat_channels(t)]
         incidents = bool(await noted(t))
-        return parent_blocks(t, buttons, client_channel(t), jira_project(t), incidents, labels)
+        return parent_blocks(
+            t,
+            buttons,
+            client_channel(t),
+            jira_project(t),
+            incidents,
+            labels,
+            servicenow=servicenow_of(t) is not None,
+        )
 
     def jira_of(t: Investigation) -> Jira | None:
         """From the loaded Contract, never from a click."""
@@ -889,6 +897,60 @@ def create_app(
     def jira_project(t: Investigation) -> str | None:
         j = jira_of(t)
         return j.project if j else None
+
+    def servicenow_of(t: Investigation) -> ServiceNow | None:
+        """From the loaded Contract, never from a click."""
+        contract = by_id.get(t.contract_id)
+        found = [i for i in contract.integrations if isinstance(i, ServiceNow)] if contract else []
+        return found[0] if found else None
+
+    async def file_servicenow(t: Investigation, by: str, who: str) -> tuple[str | None, str]:
+        """The Report as an incident in the Contract's ServiceNow assignment group, once
+        (slice 19.5b), as file_jira does: claim, create, record. A refusal frees the
+        claim for a retry; no usable answer keeps it, since ServiceNow may have created
+        the incident. Returns (number, what to tell the Operator).
+        ponytail: an unknown outcome keeps the claim for good (no duplicate incident);
+        clearing servicenow_at in the database is the only reset, after checking."""
+        s = servicenow_of(t)
+        at = await store().claim_servicenow(t.id, by) if s and t.report else None
+        if s is None or t.report is None or at is None:
+            return None, "Already filed (or being filed), or nothing to file."
+        password = by_id[t.contract_id].secret(s.password_secret)
+        short = servicenow.incident_summary(t.report)
+        text = servicenow.report_text(t.report, t.executed_actions, t.id)
+        try:
+            number, sys_id, grouped = await servicenow.create_incident(
+                db["http"], s.url, s.user, password, s.group, short, text
+            )
+        except servicenow.Refused as e:
+            await store().release_servicenow(t.id, at)
+            why = clean(str(e), 500)
+            return None, f"ServiceNow refused the incident ({why}): nothing was created."
+        except servicenow.Unknown as e:
+            log.warning("investigation %s: ServiceNow create got no usable answer: %s", t.id, e)
+            return None, (
+                f"ServiceNow didn't answer ({e}): it may have created the incident. "
+                "Check the assignment group's incidents before filing it by hand."
+            )
+        await store().set_servicenow_incident(t.id, at, number, sys_id)
+        t.servicenow_incident, t.servicenow_id = number, sys_id
+        t.servicenow_by, t.servicenow_at = by, at
+        log.info("investigation %s filed as %s by %s", t.id, number, by)
+        # It exists, so the claim stays; the Operator is told it isn't where it should be.
+        stray = (
+            "" if grouped else " ServiceNow did not put it in the assignment group: move it there."
+        )
+        if not grouped:
+            log.warning("investigation %s: %s is not in the Contract's group", t.id, number)
+        if t.slack_channel and t.slack_ts and settings.slack_bot_token:
+            slack: Slack = db["slack"]
+            blocks = await parent(t)
+            await slack.update(t.slack_channel, t.slack_ts, parent_text(t), blocks)
+            url = f"{s.url.rstrip('/')}/incident.do?sys_id={sys_id}"
+            await slack.post(
+                t.slack_channel, f":ticket: Filed as {number} by {who}: {url}{stray}", t.slack_ts
+            )
+        return number, f"Filed as {number}.{stray}"
 
     async def file_jira(t: Investigation, by: str, who: str) -> tuple[str | None, str]:
         """The Report as an issue in the Contract's Jira project, once, from the Slack
@@ -985,7 +1047,9 @@ def create_app(
         t.client_sent_at, t.client_sent_by = at, f"slack:{user}"
         log.info("investigation %s client report sent by %s", t.id, t.client_sent_by)
         assert t.slack_ts is not None  # the click came from this thread's parent
-        blocks = parent_blocks(t, buttons, client, jira_project(t))  # sent: no button now
+        blocks = parent_blocks(  # sent: no Send button now
+            t, buttons, client, jira_project(t), servicenow=servicenow_of(t) is not None
+        )
         await slack.update(channel, t.slack_ts, parent_text(t), blocks)
         said = f":outbox_tray: Sent to the client by <@{user}>."
         if "PagerDuty" in took:
@@ -1132,6 +1196,11 @@ def create_app(
         if action["action_id"] == "create_jira":
             key, message = await file_jira(t, f"slack:{user}", f"<@{user}>")
             if key is None:
+                await slack.ephemeral(channel, user, message)
+            return
+        if action["action_id"] == "create_servicenow":
+            number, message = await file_servicenow(t, f"slack:{user}", f"<@{user}>")
+            if number is None:
                 await slack.ephemeral(channel, user, message)
             return
         deadline = pause["deadline"]
@@ -1843,6 +1912,9 @@ def create_app(
     async def console_file_jira(t: Investigation, login: str) -> tuple[str | None, str]:
         return await file_jira(t, f"console:{login}", login)
 
+    async def console_file_servicenow(t: Investigation, login: str) -> tuple[str | None, str]:
+        return await file_servicenow(t, f"console:{login}", login)
+
     if settings.console_operators:  # off by default: 404, not a login page
         app.include_router(console.redirects())  # the Jinja console's old addresses
         app.include_router(
@@ -1860,6 +1932,8 @@ def create_app(
                 health,
                 shown_settings(settings),
                 console_ask,
+                file_servicenow=console_file_servicenow,  # by name: FileJira's type too
+                servicenow_of=servicenow_of,
             )
         )
 
