@@ -303,7 +303,9 @@ wrong place or stored.
 
 **Add a vendor integration.** Add a `Spec` to `servers/vendors.py` (command in the Hub's
 code, allowed environment variables, which are secrets), a snapshot of its tool schemas
-(`make snapshots`), and a recorded Scenario if the agent will use it.
+(`make snapshots`), and a recorded Scenario if the agent will use it. A remote vendor
+has `urls` and an `auth` instead of a command; behind a login it sets `login`, and its
+snapshot is taken with its own variables (`docs/contracts.md`, Schema snapshots).
 
 ## 11. Git and releases
 

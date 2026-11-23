@@ -1133,6 +1133,13 @@ integrations:
 - A tool not listed in `tools` is invisible.
 - A tool needs approval if its list entry says `write`, or if the server doesn't mark it read-only.
 
+A remote vendor runs nothing in the Hub. The Hub calls the vendor's own https servers.
+
+- The urls come from the Hub's registry, never from the contracts repo.
+- A url may take one of the Contract's variables, such as a vendor's site. The registry fixes the values it accepts.
+  - Set it in plain `env`. In `env_secrets` it is refused.
+  - *Why:* the Contract's token follows the url, so a Contract can't send it to a host of its choosing.
+
 Give each Contract its own vendor credentials, scoped to that client.
 
 *Why:* the Hub keeps Contracts apart. But it can't see inside a vendor account that several clients share.
@@ -1157,6 +1164,14 @@ Drift checks:
 - Drift can't make the Hub less safe there. A new tool stays hidden until a Contract lists it. A tool that stops claiming read-only needs approval. Production always uses the live schemas.
 - Only a replay sees an old snapshot, until `make snapshots` runs.
 - The vendor runs with no Contract and no variables for this. So no credential can end up in the file.
+
+A vendor that lists nothing without its login is the exception:
+
+- Set the vendor's own variables in your shell, then run `squero integrations snapshot <vendor>`.
+- Only that vendor's variables are passed on. Nothing else in your environment is.
+- A snapshot that holds one of its secrets is refused and not written.
+- Read the file before committing it: a signed-in tool list may name an org.
+- CI has no login, so it can't check this snapshot for drift. Run `--check` yourself.
 
 ### The grafana vendor
 

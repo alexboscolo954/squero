@@ -1,12 +1,12 @@
 # Phase 19: Integrations breadth
 
-**In short:** Phase 19 adds the alert sources, paging tools and outbound channels that clients use. It starts with managed Prometheus logins, so the optimizer works for clients on managed clouds. 19.1a, 19.1b, 19.1c, 19.2, 19.3, 19.4, 19.5a and 19.5b are built so far.
+**In short:** Phase 19 adds the alert sources, paging tools and outbound channels that clients use. It starts with managed Prometheus logins, so the optimizer works for clients on managed clouds. Every slice is built except 19.6b, Datadog's entry, which waits for the owner's trial. New Relic is Deferred.
 
-**Status:** grilled 2026-11-21. 8 of 9 slices built (19.1a, 2026-11-21; 19.1b, 19.1c and 19.2, 2026-11-22; 19.3, 19.4, 19.5a and 19.5b, 2026-11-23).
+**Status:** grilled 2026-11-21. 9 of 10 slices built (19.1a, 2026-11-21; 19.1b, 19.1c and 19.2, 2026-11-22; 19.3, 19.4, 19.5a, 19.5b and 19.6a, 2026-11-23).
 
-**Goal:** integrations only, through the Phase 4 framework: managed Prometheus logins, PagerDuty, outbound webhooks, Microsoft Teams and Google Chat, ServiceNow, and Datadog and New Relic.
+**Goal:** integrations only, through the Phase 4 framework: managed Prometheus logins, PagerDuty, outbound webhooks, Microsoft Teams and Google Chat, ServiceNow, and Datadog. New Relic was in the goal until 19.6's grill moved it to Deferred.
 
-**Done when:** every integration has a probe and fixtures captured from a real free or dev account, through the Phase 4 framework. A recorded Scenario and a passing eval only where the agent gains tools (Datadog, New Relic, ServiceNow's past incidents). A Teams post or an outbound webhook changes nothing the model sees.
+**Done when:** every integration has a probe and fixtures captured from a real free or dev account, through the Phase 4 framework. A recorded Scenario and a passing eval only where the agent gains tools (Datadog, ServiceNow's past incidents). A Teams post or an outbound webhook changes nothing the model sees.
 
 | Slice | What | Status |
 |---|---|---|
@@ -18,7 +18,8 @@
 | [19.4](#194-microsoft-teams-and-google-chat) | Microsoft Teams and Google Chat | ✅ built, live check owed |
 | [19.5a](#195a-past-incidents-as-evidence) | ServiceNow: past incidents as Evidence | ✅ built, live check, Scenario and eval owed |
 | [19.5b](#195b-the-create-servicenow-incident-button) | ServiceNow: the Create ServiceNow incident button | ✅ built, live check owed |
-| 19.6 | Datadog and New Relic | Not built |
+| [19.6a](#196a-a-remote-vendor-behind-a-login) | A remote vendor behind a login | ✅ built |
+| 19.6b | Datadog | Not built: waits for the owner's 14-day trial |
 
 ## Decisions (grill, 2026-11-21)
 
@@ -335,13 +336,53 @@ Two rounds, all answers the recommended ones.
 
 ## 19.6 Datadog and New Relic
 
-**What:** triage only, through their official MCP servers, as remote vendor servers in the registry.
+**What:** triage only, through Datadog's official MCP server, as a remote vendor in the registry. New Relic is Deferred.
 
 **Decided:**
 - Sizings from their metrics would be a second metrics engine beside PromQL (`usage.py` is PromQL). That is Deferred until a client without Prometheus appears.
+
+**Decided while building (grill, 2026-11-23, all recommended):**
+- **What the grill found.** Both vendors' servers answer 401 to everything without a login, their tool list included (checked on both). The Hub took a schema snapshot with no credentials, and a vendor can't be in the registry without a snapshot.
+- **Two slices.** 19.6a is what those facts already fix. 19.6b is Datadog's entry, on the snapshot from the owner's trial.
+  - *Why:* the trial lasts 14 days. They go to the snapshot, the live check and the Scenario.
+- **New Relic is Deferred**, until a client uses it. Its docs say:
+  - "MCP isn't available to Free plan accounts";
+  - a key login needs a toggle that is off by default, and the setup page warns that a key setup won't work as documented;
+  - several tools are OAuth-only, and how a tool picks an account isn't said.
+- **Datadog's login is one bearer token:** a personal or a service account's access token. Not the API key and application key pair.
+- **Datadog's toolset is `core` only**, fixed in the registry. Another is added when a Scenario shows a gap.
+- **For 19.6b, decided:**
+  - The site is one of Datadog's seven documented ones.
+  - Write tools are left out in the url, and a Contract may list the vendor's tools only as `read`.
+- **For 19.6b, open until the snapshot exists:** the guide, the health check's tool, links, and what happens if Datadog's tools don't claim read-only. Every call would then need approval, and changing that is the owner's decision.
+
+### 19.6a A remote vendor behind a login
+
+**What:** what a vendor's remote server behind a login needs from the registry: a url for the Contract's site, the token as a header, and a snapshot taken with a login.
+
+**Built (2026-11-23):**
+- **A registry url may take `{VARIABLE}`.** Only a required, non-secret one, so the registry fixes its form.
+  - The form is checked when the Contract loads and again when the url is built.
+  - In a Contract it must be in plain `env`, never in `env_secrets`.
+  - *Why:* the token follows the url, so a Contract never names a host freely.
+- **`Bearer`:** the Contract's token as `Authorization: Bearer`.
+- **`login` on a registry entry.** Its snapshot is taken with the vendor's own variables, out of the environment of whoever runs `squero integrations snapshot`.
+  - Nothing else of that environment is passed on.
+  - A snapshot that holds one of the vendor's secrets is refused.
+  - A missing variable or a site of another form is one line and exit code 1, before any call.
+- No vendor uses it yet: Datadog's entry is 19.6b.
+
+**Tests:** 30 in `test_vendor_login.py`: the registry's rules for a url, 6 sites of another form, the Contract's rules, the header on the wire and a refused login that never shows the token, a redirect to another host that is not followed, the snapshot's variables, a snapshot holding its token, the command. Isolation: two Contracts each reach their own site with their own token. 32 mutations, all caught. No eval rerun: nothing the model sees changed. No API change for the console.
+
+**Known limits:**
+- No registry vendor uses this yet, so nothing real has been called through it.
+- A refused login shows as the vendor offering no tools, not as a 401. Health then fails on the missing tools.
+- CI can't check a login vendor's snapshot for drift: it has no credentials. Only `--check` run by the owner does.
+- The refusal of a secret in a snapshot matches the secret's exact value only. The owner still reads a snapshot before it is committed: a signed-in tool list may name an org.
 
 ## Live checks and owed items
 
 - Grafana Cloud with `basic` auth (19.1a): owed, needs the owner's free account.
 - Teams and Google Chat (19.4): owed, needs a Microsoft 365 or Google Workspace account.
 - ServiceNow (19.5a and 19.5b): owed, needs the owner's free Personal Developer Instance. Then the recorded Scenario and its eval (a cost estimate and the owner's yes first).
+- Datadog (19.6b): the snapshot, the build, a live read, then the recorded Scenario and its eval (a cost estimate and the owner's yes first). All inside the owner's 14-day trial. Whether a trial may use the MCP server is not said in Datadog's docs.

@@ -10,13 +10,13 @@ This page says where the project is and what comes next. Each phase has its own 
 - **Phases 0 to 8, 10 to 13, 15 and 18:** complete.
 - **Phases 9, 14 and 16:** built, with some live checks owed.
 - **Phase 17 (GPU and LLM inference):** built on fixtures; the paid GPU check is deferred.
-- **Phase 19 (Integrations breadth):** grilled; 8 of 9 slices built (19.1a to 19.1c, 19.2, 19.3, 19.4, 19.5a, 19.5b).
+- **Phase 19 (Integrations breadth):** grilled; 9 of 10 slices built (19.1a to 19.1c, 19.2, 19.3, 19.4, 19.5a, 19.5b, 19.6a). New Relic moved to Deferred.
 - **Phase 20 (JVM, Spark and batch):** not grilled yet.
 - **Phase 21 (Console design):** 21.1 to 21.4 in 0.64.0, 21.5 in 0.65.0 (2026-11-22); 21.6 (the page pattern on every page) in 0.66.0 (2026-11-22).
 
 ## Next
 
-1. **19.6:** Datadog and New Relic, the last slice of [Phase 19](roadmap/phase-19.md).
+1. **19.6b:** Datadog's registry entry, the last slice of [Phase 19](roadmap/phase-19.md). It waits for the owner's 14-day Datadog trial: the snapshot is taken with its login.
 2. The paid GPU check when the quota allows, and the phase's done-when on real GPUs (see [Phase 17](roadmap/phase-17.md)).
 
 ## Live checks still owed
@@ -29,6 +29,7 @@ This page says where the project is and what comes next. Each phase has its own 
 | PagerDuty's webhook, alerts and note | 19.2 | The owner's free PagerDuty account; for the webhook, Caddy on the mini PC with the owner's OK |
 | The Client report in Teams and in Google Chat | 19.4 | A Microsoft 365 account with Workflows, or a Google Workspace one |
 | ServiceNow's past incidents and a filed incident, then a recorded Scenario and its eval | 19.5a, 19.5b | The owner's free Personal Developer Instance; for the eval, a cost estimate and the owner's yes |
+| Datadog: the snapshot, a live read, then a recorded Scenario and its eval | 19.6b | The owner's 14-day Datadog trial; for the eval, a cost estimate and the owner's yes |
 | Spot list prices on GCP | 16.4a | Left for later by the Operator (procedure in the slice) |
 | A Weekly profile's Backtest | 14.4 | Four stored weeks on the lab (12 December if it runs without gaps) |
 | The Monday steps of the Need reads (08:00 and 09:00 UTC) | 14.1a | Still to look at |
@@ -62,7 +63,7 @@ This page says where the project is and what comes next. Each phase has its own 
 | [Audit](roadmap/audit.md) | Audit fixes A1 to A14 | ✅ done (A14 in 0.61.0) |
 | [17](roadmap/phase-17.md) | GPU and LLM inference | ✅ built on fixtures; paid GPU check deferred |
 | [18](roadmap/phase-18.md) | Platform: signed chart, Protocol, Fleet | ✅ done (0.62.0, 0.63.0; 18.1d after 0.63.0) |
-| [19](roadmap/phase-19.md) | Integrations breadth | 🔨 8 of 9 slices |
+| [19](roadmap/phase-19.md) | Integrations breadth | 🔨 9 of 10 slices |
 | [20](roadmap/phase-20.md) | JVM, Spark and batch | ⏳ grill before building |
 | [21](roadmap/phase-21.md) | Console design: sidebar, Overview, ScaleOps-style pages | ✅ done (0.64.0, 0.65.0, 0.66.0) |
 
@@ -99,7 +100,8 @@ Parked on purpose, each with what would bring it back.
 | Fix PRs on GitHub/GitLab (HolmesGPT) | Needs code access per Contract | After Jira, when a Contract grants repo access |
 | Splunk and other log sources | Phase 19 covers the metric and paging integrations first | After Phase 19 |
 | Opsgenie | Atlassian stopped selling it in June 2025 and ends its support in April 2027 (Phase 19's grill) | A client asks: then Jira Service Management's operations alerts |
-| Sizings from Datadog or New Relic metrics | A second metrics engine beside PromQL; Phase 19 adds them for triage only | A client without Prometheus |
+| Sizings from Datadog or New Relic metrics | A second metrics engine beside PromQL; Phase 19 adds Datadog for triage only | A client without Prometheus |
+| New Relic for triage | Its MCP server isn't on the Free plan, a key login is off by default and its docs warn against one, and several tools are OAuth-only (19.6's grill, 2026-11-23) | A client on New Relic |
 | KWOK load test of the Actuator (thousands of fake Workloads) | No Contract has that many Workloads yet | A Contract nears a thousand automated Workloads |
 | The Actuator writing a Floor to an HPA or ScaledObject (Phase 14 only recommends) | A wrong minimum costs availability, GitOps puts a patched HPA back, and it is a new Actuator write | Backtests within budget on a real Contract four weeks in a row; then its own grill and an ADR |
 | Compaction by the Actuator: evicting pods to empty a node (15.5) | The autoscaler's own drain does it once its setting is right, the default scheduler spreads an evicted pod back, and two controllers emptying nodes can work against each other | A cluster where the proposed autoscaler setting was applied and the nodes still stay |

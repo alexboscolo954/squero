@@ -7,19 +7,25 @@ may set only the variables its vendor's entry lists: `LD_PRELOAD`, `PATH`,
 `NODE_OPTIONS` and the like would run code all the same. Each binary ships in the
 image, pinned and checksum-verified like sops (versions in the Dockerfile). A
 remote vendor (Google's MCP servers) runs nothing here: the Hub calls its fixed
-https URLs with a token it mints from the Contract's key.
+https URLs with a token it mints from the Contract's key. A URL may take a variable
+of the Contract's (a vendor's site), only one whose form the registry fixes: a
+Contract never names a host its credential goes to (slice 19.6a).
 
 Each vendor's tool schemas are snapshotted into snapshots/<name>.json (slice 4.2):
 Scenarios replay against them with no binary, and `squero integrations snapshot
-<name> --check` fails when the pinned server's tools drift from the snapshot.
+<name> --check` fails when the pinned server's tools drift from the snapshot. A
+vendor that lists nothing without its login is snapshotted with its own variables,
+from the environment of whoever takes it (19.6a).
 """
 
 import asyncio
 import base64
 import difflib
 import json
+import re
+import string
 import time
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -51,7 +57,8 @@ class Spec:
     # Allowed variables that hold credentials: only from secrets.sops.yaml (env_secrets).
     secret_env: frozenset[str] = frozenset()
     # A remote vendor instead of a command: its https servers, merged into one, and
-    # the auth the Hub builds from the Contract's variables for them.
+    # the auth the Hub builds from the Contract's variables for them. A url may hold
+    # {VARIABLE}: a required, non-secret one, so its form is checked (url_vars).
     urls: tuple[str, ...] = ()
     auth: Callable[[dict[str, str]], httpx2.Auth] | None = None
     # Variables a Contract must set, and the form each must have (checked at load:
@@ -60,6 +67,9 @@ class Spec:
     # The health check when the Contract sets none: a tool it must list as read, and
     # its arguments, formatted with the Contract's variables.
     probe: tuple[str, dict[str, str]] | None = None
+    # Its servers answer nothing without the login, not even their tool list: a
+    # snapshot is taken with the vendor's own variables (login_env).
+    login: bool = False
 
     def __post_init__(self) -> None:
         if bool(self.command) == bool(self.urls):
@@ -70,6 +80,46 @@ class Spec:
             raise ValueError(f"remote vendor urls must be https: {self.urls}")
         if overlap := sorted(self.env & set(self.fixed_env)):
             raise ValueError(f"the registry fixes these, a Contract can't set them: {overlap}")
+        # A secret never goes into a url, and a host is never a Contract's free text.
+        if free := sorted(url_vars(self) - (set(self.required_env) - self.secret_env)):
+            raise ValueError(f"a url takes only required, non-secret variables: {free}")
+        if self.login and not (self.urls and self.auth):
+            raise ValueError("only a remote vendor with an auth lists its tools with a login")
+
+
+def url_vars(spec: Spec) -> set[str]:
+    """The variables a vendor's urls take."""
+    fields = (f for u in spec.urls for _, f, _, _ in string.Formatter().parse(u))
+    return {f for f in fields if f is not None}
+
+
+def urls(spec: Spec, env: Mapping[str, str]) -> tuple[str, ...]:
+    """A remote vendor's urls for one Contract's variables. Each variable's form is
+    checked here too, whatever the caller checked: the credential follows the url."""
+    for var in sorted(url_vars(spec)):
+        if not re.fullmatch(spec.required_env[var], env.get(var, "")):
+            raise ValueError(f"{var}: {env.get(var)!r} doesn't match {spec.required_env[var]}")
+    return tuple(u.format(**env) for u in spec.urls)
+
+
+def login_env(spec: Spec, environ: Mapping[str, str]) -> dict[str, str]:
+    """The variables a snapshot of a login vendor is taken with: only the vendor's
+    own, out of `environ` (whoever takes it), never another Contract's or the Hub's."""
+    env = {k: environ[k] for k in sorted(spec.env) if k in environ}
+    if missing := sorted(set(spec.required_env) - set(env)):
+        raise ValueError(f"set {', '.join(missing)}: this vendor lists no tools without its login")
+    return env
+
+
+class Bearer(httpx2.Auth):
+    """A token the Contract holds, as `Authorization: Bearer`."""
+
+    def __init__(self, token: str) -> None:
+        self.token = token
+
+    def auth_flow(self, request: httpx2.Request) -> Any:
+        request.headers["Authorization"] = f"Bearer {self.token}"
+        yield request
 
 
 AZURE_TOOLS = (
@@ -397,17 +447,25 @@ def server(spec: Spec, env: dict[str, str], name: str) -> FastMCP:
         return create_proxy(client(spec, env), name=name)
     assert spec.auth
     auth, merged = spec.auth(env), FastMCP(name)
-    for url in spec.urls:
+    for url in urls(spec, env):
         merged.mount(create_proxy(remote(url, auth)))
     return merged
 
 
-async def capture(spec: Spec) -> str:
+async def capture(spec: Spec, environ: Mapping[str, str] | None = None) -> str:
     """The vendor's tool schemas as stable JSON. Started with no Contract and no
     variables at all, so no credential can end up in a file this public repo commits.
-    A remote vendor lists its tools without auth."""
+    A remote vendor lists its tools without auth; one that needs its login to list
+    them gets its own variables out of `environ`, and a snapshot that holds one of
+    its secrets is refused."""
+    env = login_env(spec, environ or {}) if spec.login else {}
+    if spec.command:
+        clients: list[Client[Any]] = [client(spec, {})]
+    else:
+        auth = spec.auth(env) if spec.login and spec.auth else None
+        clients = [remote(u, auth) for u in urls(spec, env)]
     tools = []
-    for c in [client(spec, {})] if spec.command else [remote(u) for u in spec.urls]:
+    for c in clients:
         async with c:
             tools += await c.list_tools()
     names = [t.name for t in tools]
@@ -415,14 +473,17 @@ async def capture(spec: Spec) -> str:
         raise ValueError(f"two of the vendor's servers offer {clash}: which one answers?")
     dumped = [t.model_dump(mode="json", by_alias=True, exclude_none=True) for t in tools]
     kept = [{k: t[k] for k in SNAPSHOT_FIELDS if k in t} for t in dumped]
-    return json.dumps(sorted(kept, key=lambda t: t["name"]), indent=2, sort_keys=True) + "\n"
+    text = json.dumps(sorted(kept, key=lambda t: t["name"]), indent=2, sort_keys=True) + "\n"
+    if held := sorted(v for v in spec.secret_env if env.get(v) and env[v] in text):
+        raise ValueError(f"the vendor's tool list holds {', '.join(held)}: not written")
+    return text
 
 
-async def drift(name: str) -> str:
+async def drift(name: str, environ: Mapping[str, str] | None = None) -> str:
     """A unified diff from the saved snapshot to the running vendor; empty if none."""
     path = SNAPSHOTS / f"{name}.json"
     saved = path.read_text() if path.exists() else ""
-    live = await capture(VENDORS[name])
+    live = await capture(VENDORS[name], environ)
     diff = difflib.unified_diff(
         saved.splitlines(keepends=True), live.splitlines(keepends=True), str(path), "live"
     )

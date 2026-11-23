@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -582,9 +583,19 @@ async def sizing_digest(contract_id: str, post: bool) -> int:
 
 def snapshot(vendor: str, check: bool, out: str | None = None) -> int:
     """Save the pinned vendor's tool schemas, or with check, fail if they drifted.
-    out "-": print it instead (from the image, where the pinned binary is)."""
+    out "-": print it instead (from the image, where the pinned binary is). A vendor
+    that lists nothing without its login takes its own variables from this
+    environment."""
+    try:
+        return _snapshot(vendor, check, out)
+    except ValueError as e:  # a missing variable, a site of the wrong form
+        print(f"{vendor}: {e}", file=sys.stderr)
+        return 1
+
+
+def _snapshot(vendor: str, check: bool, out: str | None) -> int:
     if not check:
-        text = asyncio.run(vendors.capture(vendors.VENDORS[vendor]))
+        text = asyncio.run(vendors.capture(vendors.VENDORS[vendor], os.environ))
         if out == "-":
             print(text, end="")
             return 0
@@ -592,7 +603,7 @@ def snapshot(vendor: str, check: bool, out: str | None = None) -> int:
         path.write_text(text)
         print(f"wrote {path}", file=sys.stderr)
         return 0
-    diff = asyncio.run(vendors.drift(vendor))
+    diff = asyncio.run(vendors.drift(vendor, os.environ))
     if not diff:
         print(f"{vendor}: snapshot matches")
         return 0

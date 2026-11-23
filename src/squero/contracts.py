@@ -480,7 +480,7 @@ class Vendor(Strict):
 
     @model_validator(mode="after")
     def _known(self) -> "Vendor":
-        from squero.servers.vendors import VENDORS
+        from squero.servers.vendors import VENDORS, url_vars
 
         if self.vendor not in VENDORS:
             known = ", ".join(sorted(VENDORS)) or "none yet"
@@ -504,6 +504,9 @@ class Vendor(Strict):
         for var, form in spec.required_env.items():
             if var in self.env and not re.fullmatch(form, self.env[var]):
                 raise ValueError(f"{var}: {self.env[var]!r} doesn't match {form}")
+        # What goes into the vendor's url is plain and checked: never a secret's value.
+        if hidden := sorted(url_vars(spec) & set(self.env_secrets)):
+            raise ValueError(f"{', '.join(hidden)} go into the vendor's url: set them in env")
         if spec.probe and not self.probe and self.tools.get(spec.probe[0]) != "read":
             raise ValueError(
                 f"list {spec.probe[0]!r} in tools as read: it's the {self.vendor} health check"
