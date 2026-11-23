@@ -1,8 +1,8 @@
 # Phase 19: Integrations breadth
 
-**In short:** Phase 19 adds the alert sources, paging tools and outbound channels that clients use. It starts with managed Prometheus logins, so the optimizer works for clients on managed clouds. 19.1a and 19.1b are built so far.
+**In short:** Phase 19 adds the alert sources, paging tools and outbound channels that clients use. It starts with managed Prometheus logins, so the optimizer works for clients on managed clouds. 19.1a, 19.1b and 19.1c are built so far.
 
-**Status:** grilled 2026-11-21. 2 of 8 slices built (19.1a, 2026-11-21; 19.1b, 2026-11-22).
+**Status:** grilled 2026-11-21. 3 of 8 slices built (19.1a, 2026-11-21; 19.1b and 19.1c, 2026-11-22).
 
 **Goal:** integrations only, through the Phase 4 framework: managed Prometheus logins, PagerDuty, outbound webhooks, Microsoft Teams and Google Chat, ServiceNow, and Datadog and New Relic.
 
@@ -12,7 +12,7 @@
 |---|---|---|
 | [19.1a](#191a-bearer-and-basic-one-helper) | `bearer` and `basic` through one Prometheus auth helper | ✅ built, Grafana Cloud check owed |
 | [19.1b](#191b-sigv4-for-amp) | `sigv4` for Amazon Managed Prometheus | ✅ built, AWS check owed |
-| 19.1c | `azure` and `google` Prometheus auth | Not built |
+| [19.1c](#191c-azure-and-google) | `azure` and `google` Prometheus auth | ✅ built, Azure and Google checks owed |
 | 19.2 | PagerDuty | Not built |
 | 19.3 | Outbound webhooks | Not built |
 | 19.4 | Microsoft Teams and Google Chat | Not built |
@@ -100,6 +100,35 @@ Two rounds, all answers the recommended ones.
 ## 19.1c `azure` and `google`
 
 **What:** `azure` for Azure Monitor (the `azure` integration's Entra app) and `google` for Google Managed Prometheus (the `gcp` integration's service account).
+
+**Decided (grill, 2026-11-22, all recommended):**
+- **Only each cloud's own URL shape.** Azure: `https://<workspace>.<region>.prometheus.monitor.azure.com`. Google: `https://monitoring.googleapis.com/v1/projects/<project>/location/global/prometheus`. *Why:* a token taken with a client's app or key can then go to no other host. Sovereign clouds come when a client needs one.
+- **Google's project is the URL's**, not the integration's: with a metrics scope it is the scoping project.
+- **Azure's 32-day limit:** Needs and HPA bounds are read 31 days back at most, and a policy in use with a longer `window` is refused at load. *Why:* the first read of Needs spans 8 weeks and repeats until it succeeds, so on Azure it would never succeed.
+- **`active_alerts` stays** and answers that the store serves no alerts. *Why:* hiding it changes what the model sees and costs an eval run.
+- **A refused token** shows the host and the cloud's code, never its description (Entra's quotes the tenant and the app). **A refused query** shows the cloud's code and message, cut at 300 characters.
+- **Two isolation rules for Azure:** a workspace is told apart by its hostname, never by its addresses; label values that differ only by case count as the same.
+
+**Built (2026-11-22):**
+- `usage.Minted`, an `httpx.Auth` that asks the cloud for a token through the reader's own client before its first query, and keeps it until a minute before it expires. Each reader has its own; nothing is stored or shared between Contracts.
+- Azure: Entra's client credentials, for `https://prometheus.monitor.azure.com/.default`. The tenant is escaped into the login path. Google: the JWT bearer grant signed by the existing `GoogleKey`, for `monitoring.read` only, sent to Google's token URL and never the key file's own.
+- The key is parsed when a token is first asked for, never at load: one Contract's bad key stops only its own reads.
+- It serves the same three readers as 19.1a and 19.1b: `Prom`, the agent's `prometheus` tools (with and without clusters) and `ask_stores`, which never asks these stores who they are.
+- The token request carries the reader's own timeout: httpx gives a request made inside an auth flow none.
+- The health check of these stores asks `count(up)`, not `vector(1)`: both clouds answer only a query that names a metric.
+- `contracts.auth_rules` holds the shape rules for all three clouds in one table; `Contract._consistent` checks the integration, the app's three variables and the windows.
+- `Target.longest` carries Azure's 31 days to the hourly read. `_shared_metrics` folds label values on an Azure workspace.
+- `usage.refusal` reads Azure's and Google's `{"error": {...}}` as code and message.
+
+**Tests:** 57 in `test_prometheus_minted.py`: the 24 refusals, the exact token request for each cloud (with its timeout) and the assertion checked against the key, a token reused and renewed, a reply read whole, 7 refused tokens, 5 keys that aren't one, the token from where the URL is, two Contracts each with its own app and its own key, the agent's tools, the health check's query, a refused query in each cloud's shape, stores never asked and told apart, labels by case, the window rule, and the 31-day reads. 71 mutations: 70 caught, 1 equivalent (`^` under `re.match`). No eval rerun: the tools' names, descriptions and schemas are unchanged. No API change.
+
+**Known limits:**
+- Not proven against Entra, Azure Monitor or Google. The v2.0 token endpoint with `.default` stands in for the v1 `resource=` form Microsoft's page shows.
+- A token per reader: each read of a cluster asks for its own. One per store if a cloud ever throttles them.
+- Azure throttles queries by the hours they span (30,000 query-hours in 30 seconds for one app; a 31-day query counts 744). Not measured against a real cluster's hourly read.
+- Azure's other limits aren't checked at load: one metric name per selector (the Hub's own queries name one; the agent's PromQL may not) and a 60-second step over 48 hours.
+- Google answers PromQL from its own backend: no staleness, and `rate()` on a gauge is refused.
+- A Google project is taken by its id, not its number.
 
 **Live check (planned):** in the sandboxes, about $1 each, after a cost estimate and the owner's yes.
 

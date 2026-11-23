@@ -847,6 +847,7 @@ What Reader does and doesn't cover:
 - Its `*/read` usually covers Log Analytics queries too.
 - A workspace that uses table-level (granular) access also needs **Log Analytics Data Reader** on it. See [Manage access to Log Analytics workspaces](https://learn.microsoft.com/azure/azure-monitor/logs/manage-access#azure-rbac).
 - Reader can't list keys or read app settings. Those are actions, not reads.
+- Reader doesn't query an Azure Monitor workspace's Prometheus metrics: that is a data action. Where a Prometheus uses `auth: azure`, also give the app **Monitoring Data Reader** on that workspace: this app takes the token for it (slice 19.1c). See [Azure Monitor and Google Managed Prometheus](optimizer.md#azure-monitor-and-google-managed-prometheus-azure-google).
 
 Known gaps under Reader:
 
@@ -902,6 +903,8 @@ Make a service account in the client's project. Give it these four roles:
 | Monitoring Viewer | `roles/monitoring.viewer` |
 | Cloud Trace User | `roles/cloudtrace.user` |
 | MCP Tool User (allows calling MCP tools) | `roles/mcp.toolUser` |
+
+Monitoring Viewer also covers a Prometheus with `auth: google` (slice 19.1c). It must then be granted on the project in that Prometheus's URL, which with a metrics scope is the scoping project. See [Azure Monitor and Google Managed Prometheus](optimizer.md#azure-monitor-and-google-managed-prometheus-azure-google).
 
 Then create a JSON key:
 

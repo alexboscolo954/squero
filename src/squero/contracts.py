@@ -152,8 +152,9 @@ class Cluster(Strict):
     # store shared by several clusters (Thanos, Mimir), added to every query.
     prometheus_url: str | None = None
     prometheus_token_secret: str | None = None
-    # how the token is sent (19.1a); sigv4: none, signed with the aws key (19.1b)
-    prometheus_auth: Literal["bearer", "basic", "sigv4"] = "bearer"
+    # how the token is sent (19.1a); none for a cloud's own store: signed with the aws key
+    # (sigv4, 19.1b), or a token minted with the azure or gcp integration's (19.1c)
+    prometheus_auth: Literal["bearer", "basic", "sigv4", "azure", "google"] = "bearer"
     prometheus_user: str | None = None  # basic's user id (Grafana Cloud's), not a secret
     prometheus_labels: dict[Annotated[str, Field(pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")], str] = {}
     prices: ClusterPrices | None = None  # else the Contract's
@@ -227,24 +228,68 @@ def amp_region(url: str | None) -> str | None:
     return found.group(1) if found else None
 
 
+# An Azure Monitor workspace's query endpoint and Google Managed Prometheus (19.1c): only
+# these hosts ever get a token minted with a Contract's azure app or gcp key. Public
+# clouds only: a sovereign cloud's host comes when a client needs one.
+AZURE_MONITOR = re.compile(
+    r"^https://[a-z0-9][a-z0-9-]*\.[a-z0-9]+\.prometheus\.monitor\.azure\.com/?$"
+)
+GMP = re.compile(
+    r"^https://monitoring\.googleapis\.com/v1/projects/[a-z][a-z0-9-]{4,28}[a-z0-9]"
+    r"/location/global/prometheus/?$"
+)
+# Azure answers no query that spans more than 32 days: what the Hub asks of it at most
+AZURE_MONITOR_SPAN = 31 * 86400
+
+
+def azure_monitor(url: str | None) -> bool:
+    """Whether a URL is an Azure Monitor workspace's: its host names the workspace, it
+    compares labels without case, and it answers 32 days at most."""
+    return bool(AZURE_MONITOR.match(url or ""))
+
+
+def gmp(url: str | None) -> bool:
+    """Whether a URL is Google Managed Prometheus, for one project."""
+    return bool(GMP.match(url or ""))
+
+
+# auth -> what holds its credential, whether a URL is its store's, what that is, its form
+MANAGED: dict[str, tuple[str, Callable[[str | None], Any], str, str]] = {
+    "sigv4": (
+        "signs with the aws integration's key",
+        amp_region,
+        "an Amazon Managed Prometheus workspace",
+        "https://aps-workspaces.<region>.amazonaws.com/workspaces/<id>",
+    ),
+    "azure": (
+        "takes its token with the azure integration's app",
+        azure_monitor,
+        "an Azure Monitor workspace's query endpoint as",
+        "https://<workspace>.<region>.prometheus.monitor.azure.com",
+    ),
+    "google": (
+        "takes its token with the gcp integration's key",
+        gmp,
+        "Google Managed Prometheus as",
+        "https://monitoring.googleapis.com/v1/projects/<project>/location/global/prometheus",
+    ),
+}
+
+
 def auth_rules(
     auth: str, user: str | None, secret: str | None, url: str | None, p: str = ""
 ) -> None:
     """How a Prometheus's token is sent (19.1a): `bearer`, or `basic` with a user id
-    (Grafana Cloud), never over plain http; or no token at all, each request signed with
-    the aws integration's key (`sigv4`, 19.1b: Amazon Managed Prometheus). p: the cluster
-    fields' prefix."""
-    if auth == "sigv4":
+    (Grafana Cloud), never over plain http; or no token at all for a cloud's own store, by
+    its URL and no other: each request signed with the aws integration's key (`sigv4`,
+    19.1b), or a token minted with the azure or gcp integration's (`azure`, `google`,
+    19.1c). p: the cluster fields' prefix."""
+    if auth in MANAGED:
+        how, is_its, what, form = MANAGED[auth]
         if user or secret:
-            raise ValueError(
-                f"{p}auth: sigv4 signs with the aws integration's key: "
-                f"no {p}user or {p}token_secret"
-            )
-        if not amp_region(url):
-            raise ValueError(
-                f"{p}auth: sigv4 needs an Amazon Managed Prometheus workspace {p}url: "
-                "https://aps-workspaces.<region>.amazonaws.com/workspaces/<id>"
-            )
+            raise ValueError(f"{p}auth: {auth} {how}: no {p}user or {p}token_secret")
+        if not is_its(url):
+            raise ValueError(f"{p}auth: {auth} needs {what} {p}url: {form}")
     elif auth == "basic":
         if not (user and secret):
             raise ValueError(f"{p}auth: basic needs {p}user and {p}token_secret")
@@ -264,8 +309,9 @@ class Prometheus(Strict):
     name: Literal["prometheus"]
     url: str
     token_secret: str | None = None
-    # how the token is sent (19.1a); sigv4: none, signed with the aws key (19.1b)
-    auth: Literal["bearer", "basic", "sigv4"] = "bearer"
+    # how the token is sent (19.1a); none for a cloud's own store: signed with the aws key
+    # (sigv4, 19.1b), or a token minted with the azure or gcp integration's (19.1c)
+    auth: Literal["bearer", "basic", "sigv4", "azure", "google"] = "bearer"
     user: str | None = None  # basic's user id (Grafana Cloud's), not a secret
 
     @model_validator(mode="after")
@@ -1012,16 +1058,16 @@ class Contract(Strict):
         for i, t in enumerate(self.allocation.teams):
             if t.cluster is not None and t.cluster not in groups["cluster"]:
                 raise ValueError(f"team rule {i + 1}: no cluster {t.cluster!r}")
-        # sigv4 (19.1b): the aws integration's key signs, for a region it lists
-        signed = [
-            (f"cluster {c.name!r}", c.prometheus_url)
-            for c in self.clusters
-            if c.prometheus_auth == "sigv4"
+        # a cloud's own store is read with that cloud's integration: its credential
+        stores = [
+            (f"cluster {c.name!r}", c.prometheus_url, c.prometheus_auth) for c in self.clusters
         ] + [
-            ("the prometheus integration", i.url)
+            ("the prometheus integration", i.url, i.auth)
             for i in self.integrations
-            if isinstance(i, Prometheus) and i.auth == "sigv4"
+            if isinstance(i, Prometheus)
         ]
+        # sigv4 (19.1b): the aws integration's key signs, for a region it lists
+        signed = [(who, url) for who, url, how in stores if how == "sigv4"]
         if signed:
             aws = next((i for i in self.integrations if isinstance(i, Aws)), None)
             if aws is None:
@@ -1033,6 +1079,33 @@ class Contract(Strict):
                         f"{who}: its workspace is in {region}, not one of the aws "
                         f"integration's regions {aws.regions}: add it there"
                     )
+        # azure (19.1c): the azure integration's Entra app takes the token
+        if ones := ", ".join(who for who, _, how in stores if how == "azure"):
+            app = self.azure_vendor()
+            has = {*app.env, *app.env_secrets} if app else set()
+            if not {"AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET"} <= has:
+                raise ValueError(
+                    f"auth: azure on {ones}: it needs the azure integration's app "
+                    "(AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET)"
+                )
+        # google (19.1c): the gcp integration's service account key (it can't lack it)
+        if (ones := ", ".join(who for who, _, how in stores if how == "google")) and (
+            not self.gcp_vendor()
+        ):
+            raise ValueError(f"auth: google on {ones}: it needs the gcp integration's key")
+        # Azure Monitor answers 32 days at most (19.1c), and every window is read on every
+        # cluster: a longer one would fail that cluster's Sizings each hour
+        shared_url = next((url for who, url, _ in stores if who.startswith("the ")), None)
+        used = {self.sizing.default, "batch", *(r.policy for r in self.sizing.rules)}
+        long = sorted(
+            n for n in used if (p := self.sizing.policy(n)) and p.window > AZURE_MONITOR_SPAN
+        )
+        for c in self.clusters:
+            if long and c.via == "direct" and azure_monitor(c.prometheus_url or shared_url):
+                raise ValueError(
+                    f"cluster {c.name!r} reads Azure Monitor, which answers 31 days at most: "
+                    f"policy {long[0]!r} has a longer window"
+                )
         shared = any(isinstance(i, Prometheus) for i in self.integrations)
         if any(isinstance(i, Sizings) for i in self.integrations) and not any(
             shared or c.prometheus_url for c in self.clusters
@@ -1296,7 +1369,10 @@ def _shared_metrics(directory: Path, loaded: Any, key: Callable[[str], str] = _s
             url = cl.prometheus_url or shared
             if not url:
                 continue
-            here = (key(url), cl.prometheus_labels, set(cl.namespaces), f"{c.id}/{cl.name}")
+            labels = cl.prometheus_labels
+            if azure_monitor(url):  # it compares values without case (19.1c)
+                labels = {k: v.casefold() for k, v in labels.items()}
+            here = (key(url), labels, set(cl.namespaces), f"{c.id}/{cl.name}")
             for store, labels, spaces, name in seen:
                 if store == here[0] and _could_match_the_same(labels, here[1]) and spaces & here[2]:
                     problems.append(

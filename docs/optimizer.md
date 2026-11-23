@@ -74,6 +74,7 @@ On a store shared by several clusters or Contracts (Thanos, Mimir), `prometheus_
 - One ingress address often fronts several stores.
 - Replicas behind one name answer each for itself. So two names for an HA pair can still look like two.
 - A Relay's cluster isn't asked.
+- A cloud's own store (`sigv4`, `azure`, `google`) isn't asked either. An Azure Monitor workspace is told apart by its hostname alone.
 
 ### Which Prometheus a cluster uses
 
@@ -94,7 +95,7 @@ clusters:
 | `prometheus_url` | the `prometheus` integration's URL | The cluster's own Prometheus. Optional. |
 | `prometheus_token_secret` | the integration's token | A name in `secrets.sops.yaml`. Optional. |
 | `prometheus_labels` | not set | Labels added to every query. Optional. |
-| `prometheus_auth` | `bearer` | `bearer`, `basic` or `sigv4` (Amazon Managed Prometheus). |
+| `prometheus_auth` | `bearer` | `bearer`, `basic`, `sigv4` (Amazon Managed Prometheus), `azure` (Azure Monitor) or `google` (Google Managed Prometheus). |
 | `prometheus_user` | not set | Basic only: the user id. It is not a secret. |
 
 The `prometheus` integration takes the same `auth` and `user` beside its `url` and `token_secret`.
@@ -111,7 +112,7 @@ The `prometheus` integration takes the same `auth` and `user` beside its `url` a
 
 ```yaml
     prometheus_url: https://prometheus-prod-01.grafana.example/api/prom
-    prometheus_auth: basic                           # optional: bearer (the default), basic or sigv4
+    prometheus_auth: basic                           # optional: bearer (the default), basic, sigv4, azure or google
     prometheus_user: "123456"                        # basic only: the user id
     prometheus_token_secret: grafana-cloud-token     # the access policy token
 ```
@@ -157,6 +158,70 @@ What a Contract with `sigv4` is refused for, at load:
 - A refusal from AWS is shown by its type only (for example `AccessDeniedException`), or as "refused" when AWS names none. AWS's own message is never shown: it can quote the signed request.
 - A workspace is never asked who it is: AMP has no such page. Two workspaces in one region stay two stores, told apart by their path.
 - Not checked against a real workspace yet.
+
+#### Azure Monitor and Google Managed Prometheus (azure, google)
+
+Neither store takes a token from the Contract. The Hub asks the cloud for one, with the credential the Contract's `azure` or `gcp` integration already holds. This is slice 19.1c.
+
+```yaml
+clusters:
+  - name: prod-az
+    context: prod-az
+    namespaces: [shop]
+    prometheus_url: https://acme-metrics-a1b2.eastus.prometheus.monitor.azure.com
+    prometheus_auth: azure
+  - name: prod-gke
+    context: prod-gke
+    namespaces: [shop]
+    prometheus_url: https://monitoring.googleapis.com/v1/projects/acme-metrics/location/global/prometheus
+    prometheus_auth: google
+    prometheus_labels: {cluster: prod-gke}            # one project holds every cluster's series
+```
+
+| | `azure` | `google` |
+|---|---|---|
+| The URL | The workspace's **Query endpoint**, on its Overview page in the Azure portal | `https://monitoring.googleapis.com/v1/projects/<project>/location/global/prometheus` |
+| The credential | The [`azure` integration](contracts.md#azure)'s Entra app: tenant, app id and secret | The [`gcp` integration](contracts.md#google-cloud)'s service account key |
+| What it needs | **Monitoring Data Reader** on the Azure Monitor workspace | **Monitoring Viewer** (`roles/monitoring.viewer`) on the project in the URL |
+| The token's reach | `https://prometheus.monitor.azure.com/.default` | `monitoring.read`, and nothing else |
+
+- **Only these two URL shapes are accepted.** A token taken with a client's app or key goes to that cloud's own host and nowhere else. The sovereign clouds (Azure Government, China) aren't accepted yet.
+- **Google's project** is the one in the URL. With a metrics scope it is the scoping project, which can differ from the integration's `GOOGLE_CLOUD_PROJECT`.
+- **The token** is asked for before a reader's first query, with that reader's own timeout, and kept in memory until a minute before it expires. It is never stored. Each read of a cluster asks for its own.
+- **The agent's `active_alerts`** answers that the store serves no alerts. Neither has that page. Its `query` and `query_range` work as on any store.
+
+What a Contract with `azure` or `google` is refused for, at load:
+
+| Refused | Why |
+|---|---|
+| No `azure` integration, or one without its tenant, app id or secret (`azure`) | Its app takes the token. |
+| No `gcp` integration (`google`) | Its key takes the token. |
+| Any other URL, a path after it, or `http://` | A token never goes to another host. |
+| A `prometheus_token_secret` or a `prometheus_user` beside it | Nothing else is sent. |
+| A Relay's cluster | Its Relay's own Prometheus takes a Bearer token or none. |
+
+**Azure's own limits**, which the Hub follows:
+
+| Azure Monitor | What the Hub does |
+|---|---|
+| Answers no query that spans more than 32 days | A [policy](#your-own-policies) in use with a `window` over 31 days is refused at load, naming the cluster. Needs and HPA bounds are read 31 days back at most; the Hub then keeps Needs for its usual 8 weeks. |
+| Compares label values without case | On one workspace, `prometheus_labels` that differ only by case (`cluster: Prod`, `cluster: prod`) count as the same, and are [refused](#shared-stores-and-prometheus_labels) with a namespace in common. |
+| One hostname per workspace | A workspace is told apart by its hostname, never by its addresses: a region's workspaces can share them. |
+
+What a refusal shows:
+
+- **A refused token:** the host and the cloud's error code, for example `no token for Azure Monitor: HTTP 401 from login.microsoftonline.com: invalid_client`. Never the cloud's description: Entra's quotes the tenant and the app.
+- **A refused query:** the cloud's code and message, cut at 300 characters. It names the missing permission.
+- **A key that isn't a service account key** stops only its own cluster's reads, when they are first made.
+
+Known limits:
+
+- Neither store is asked who it is: they have no such page. Two Google projects stay two stores, told apart by their path.
+- Azure's managed scraping keeps a small set of metrics by default (its minimal ingestion profile). `squero sizing usage` names the ones a cluster lacks ([Required metrics](#required-metrics)).
+- Azure throttles queries by the hours they span: 30,000 query-hours in 30 seconds for one app. A 31-day query counts 744, so a long `window` on many Workloads can reach it.
+- The health check of these stores asks `count(up)`, not `vector(1)`: both answer only a query that names a metric.
+- Google answers PromQL from its own backend: it has no staleness, and it refuses `rate()` on a gauge.
+- Not checked against a real workspace or project yet.
 
 ### Prometheus for the agent's tools
 

@@ -19,7 +19,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from squero.servers import Access
-from squero.usage import SigV4, refusal
+from squero.usage import Minted, SigV4, refusal
 
 READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 MAX_SERIES = 30
@@ -121,6 +121,8 @@ def build_server(
         return trimmed(data["result"], rows)
 
     def active_alerts(cluster: str) -> list[dict[str, Any]]:
+        if isinstance(by := client(cluster).auth, Minted):  # slice 19.1c: neither has the page
+            raise ToolError(f"{by.store} serves no alerts: none can be read from this store")
         alerts = api(cluster, "/api/v1/alerts", {})["alerts"]
         return [
             {

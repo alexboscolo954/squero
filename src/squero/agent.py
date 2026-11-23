@@ -375,6 +375,11 @@ def build_mcp(
     return Toolbox(root, access, guides, link_tools)
 
 
+# Azure Monitor and Google Managed Prometheus answer only a query that names a metric
+# (slice 19.1c): their health check asks one every scraper has, and none is still healthy
+MANAGED_PROBE = "count(up)"
+
+
 def probes(contract: Contract) -> list[tuple[str, str | None, dict[str, Any]]]:
     """Each integration's health check: (label, tool, args), one cheap read through
     the same tools and credentials the agent uses. Kubernetes: one per cluster. A
@@ -387,11 +392,13 @@ def probes(contract: Contract) -> list[tuple[str, str | None, dict[str, Any]]]:
                 where = {"cluster": c.name, "namespace": sorted(c.namespaces)[0]}
                 checks.append((f"kubernetes {c.name}", "kubernetes_list_deployments", where))
         elif isinstance(i, Prometheus) and not contract.clusters:
-            checks.append(("prometheus", "prometheus_query", {"promql": "vector(1)"}))
+            ask = MANAGED_PROBE if i.auth in ("azure", "google") else "vector(1)"
+            checks.append(("prometheus", "prometheus_query", {"promql": ask}))
         elif isinstance(i, Prometheus):  # one per cluster with PromQL tools
             for t in usage.targets(contract):
                 if not t.labels and t.cluster not in contract.shared_stores:
-                    where = {"cluster": t.cluster, "promql": "vector(1)"}
+                    ask = MANAGED_PROBE if isinstance(t.signer, usage.Minted) else "vector(1)"
+                    where = {"cluster": t.cluster, "promql": ask}
                     checks.append((f"prometheus {t.cluster}", "prometheus_query", where))
         elif isinstance(i, Runbooks):
             checks.append(("runbooks", "runbooks_search_runbooks", {"keywords": "health"}))
@@ -446,7 +453,7 @@ def integration_server(
             server = prometheus.build_server(stores, True, shared=shared, relayed=relayed)
             return server, prometheus.ACCESS
         token = contract.secret(integration.token_secret) if integration.token_secret else None
-        signer = usage.sigv4(contract, integration.url) if integration.auth == "sigv4" else None
+        signer = usage.signer(contract, integration.auth, integration.url)
         store = {"": (integration.url, usage.auth(token, integration.user, signer))}
         return prometheus.build_server(store, False), prometheus.ACCESS
     if isinstance(integration, Runbooks):

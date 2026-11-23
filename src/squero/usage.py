@@ -29,17 +29,21 @@ import httpx
 from pydantic import SecretStr
 
 from squero.contracts import (
+    AZURE_MONITOR_SPAN,
     Aws,
     Cluster,
     Contract,
     Prometheus,
+    Vendor,
     _store,
     amp_region,
+    azure_monitor,
     ksm_label,
     regroup,
 )
 from squero.listprices import SAFE, why
 from squero.servers.aws import authorization
+from squero.servers.vendors import GOOGLE_TOKEN_URL, GoogleKey
 
 log = logging.getLogger(__name__)
 
@@ -106,9 +110,10 @@ class Target:
     ksm_namespace: str = "namespace"
     relay: tuple[str, str] | None = None  # (contract, cluster): read through its Relay
     user: str | None = None  # with the token: Basic auth (slice 19.1a), else Bearer
-    # sigv4 (slice 19.1b): no token, each request signed. Not compared: two reads of one
-    # Contract's targets stay equal, as before.
+    # sigv4 (slice 19.1b): no token, each request signed; azure and google (19.1c): one
+    # minted. Not compared: two reads of one Contract's targets stay equal, as before.
     signer: httpx.Auth | None = field(default=None, compare=False)
+    longest: int | None = None  # seconds a query may span here (Azure Monitor's 32 days)
 
 
 class Bearer(httpx.Auth):
@@ -167,11 +172,120 @@ def sigv4(contract: Contract, url: str) -> SigV4:
     return SigV4(aws.access_key_id, contract.secret(aws.secret_access_key_secret), region)
 
 
+class TokenRefused(httpx.HTTPError):
+    """A cloud gave no token: what every reader of a store already reports."""
+
+
+# What the Hub mints for (slice 19.1c): read-only, and good for these two stores only
+ENTRA_LOGIN = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
+AZURE_MONITOR_SCOPE = "https://prometheus.monitor.azure.com/.default"
+MONITORING_READ = "https://www.googleapis.com/auth/monitoring.read"
+Grant = Callable[[], tuple[str, dict[str, str]]]  # where a token is asked, and with what
+
+
+class Minted(httpx.Auth):
+    """A Bearer token the Hub takes from the cloud itself (slice 19.1c), for Azure Monitor
+    and Google Managed Prometheus: asked for through the reader's own client before its
+    first query, kept until a minute before it expires, and never stored. A refusal names
+    the host and the cloud's error code, never its description: Entra's quotes the tenant
+    and the app.
+    ponytail: a token per reader (a few an hour, and two when two threads start at once);
+    share one per store if a cloud ever throttles them."""
+
+    requires_response_body = True
+
+    def __init__(self, store: str, grant: Grant, now: Callable[[], float] = time.time) -> None:
+        self.store, self.grant, self.now = store, grant, now
+        self.token, self.expires = "", 0.0
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+        if self.now() > self.expires - 60:
+            url, data = self.grant()
+            # the reader's own timeout: a request made in here gets none by itself, and a
+            # login that never answers would hold the hourly read
+            waits = {k: v for k, v in request.extensions.items() if k == "timeout"}
+            reply = yield httpx.Request("POST", url, data=data, extensions=waits)
+            try:
+                body = reply.json()
+                body = body if isinstance(body, dict) else {}
+            except ValueError:
+                body = {}
+            token, lasts = body.get("access_token"), body.get("expires_in")
+            if reply.status_code != 200 or not isinstance(token, str) or not token:
+                code = body.get("error")
+                said = f": {code}" if isinstance(code, str) and SAFE.fullmatch(code) else ""
+                raise TokenRefused(
+                    f"no token for {self.store}: HTTP {reply.status_code} from "
+                    f"{httpx.URL(url).host}{said}"
+                )
+            try:
+                self.expires = self.now() + float(str(lasts))
+            except ValueError:
+                self.expires = self.now() + 300  # a reply that doesn't say: asked again soon
+            self.token = token
+        request.headers["Authorization"] = f"Bearer {self.token}"
+        yield request
+
+
+def _var(c: Contract, v: Vendor, name: str) -> SecretStr:
+    """A vendor integration's variable, plain or from the Contract's secrets."""
+    return SecretStr(v.env[name]) if name in v.env else c.secret(v.env_secrets[name])
+
+
+def minted(contract: Contract, how: str) -> Minted:
+    """The token for a Contract's Azure Monitor workspace, taken with its azure
+    integration's Entra app (client credentials), or for its Google Managed Prometheus,
+    with its gcp integration's service account key (the Contract's rules checked both)."""
+    if how == "azure":
+        app = contract.azure_vendor()
+        assert app is not None
+        tenant, client, secret = (
+            _var(contract, app, n)
+            for n in ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET")
+        )
+
+        def entra() -> tuple[str, dict[str, str]]:
+            # the tenant can't change the path it is put in
+            return ENTRA_LOGIN.format(tenant=quote(tenant.get_secret_value(), safe="")), {
+                "grant_type": "client_credentials",
+                "client_id": client.get_secret_value(),
+                "client_secret": secret.get_secret_value(),
+                "scope": AZURE_MONITOR_SCOPE,
+            }
+
+        return Minted("Azure Monitor", entra)
+    gcp = contract.gcp_vendor()
+    assert gcp is not None
+    key = _var(contract, gcp, "GOOGLE_SERVICE_ACCOUNT_KEY")
+
+    def google() -> tuple[str, dict[str, str]]:
+        # read when first asked, never at load: one Contract's bad key stops no other's
+        try:
+            signed = GoogleKey(key.get_secret_value(), MONITORING_READ).assertion(int(time.time()))
+        except (ValueError, KeyError, TypeError):  # never its own words: they can quote it
+            raise TokenRefused(
+                "no token for Google Managed Prometheus: the gcp integration's key isn't "
+                "a service account key"
+            ) from None
+        grant = {"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "assertion": signed}
+        return GOOGLE_TOKEN_URL, grant
+
+    return Minted("Google Managed Prometheus", google)
+
+
+def signer(contract: Contract, how: str, url: str) -> httpx.Auth | None:
+    """What stands in for a token on a cloud's own store; none for `bearer` and `basic`."""
+    if how == "sigv4":
+        return sigv4(contract, url)
+    return minted(contract, how) if how in ("azure", "google") else None
+
+
 def auth(
     token: SecretStr | None, user: str | None = None, signer: httpx.Auth | None = None
 ) -> httpx.Auth | None:
-    """How a Prometheus is authenticated: signed (slice 19.1b), else its token sent Basic
-    with its user id (Grafana Cloud) or Bearer (slice 19.1a); none without either."""
+    """How a Prometheus is authenticated: signed (slice 19.1b) or with a token the Hub
+    mints (19.1c), else its token sent Basic with its user id (Grafana Cloud) or Bearer
+    (slice 19.1a); none without either."""
     if signer is not None:
         return signer
     if token is None:
@@ -181,10 +295,15 @@ def auth(
 
 def refusal(resp: httpx.Response, body: Any) -> str:
     """What a store's error says. An AWS-shaped refusal (Amazon Managed Prometheus) is
-    named by its type only: its message can quote the signed request."""
+    named by its type only: its message can quote the signed request. Azure's and
+    Google's own shape (slice 19.1c) by its code and message: they name the permission
+    that is missing."""
     if kind := resp.headers.get("x-amzn-errortype"):
         return str(kind).split(":")[0]
-    return str(body.get("error", "")) if isinstance(body, dict) else ""
+    said = body.get("error", "") if isinstance(body, dict) else ""
+    if isinstance(said, dict):
+        said = f"{said.get('status') or said.get('code') or ''}: {said.get('message', '')}"
+    return str(said)[:300]
 
 
 def targets(contract: Contract) -> list[Target]:
@@ -214,8 +333,11 @@ def targets(contract: Contract) -> list[Target]:
         if url:
             token = contract.secret(secret) if secret else None
             labels, spaces = dict(c.prometheus_labels), list(c.namespaces)
-            signer = sigv4(contract, url) if how == "sigv4" else None
-            out.append(Target(c.name, url, token, labels, spaces, user=user, signer=signer))
+            by = signer(contract, how, url)
+            longest = AZURE_MONITOR_SPAN if azure_monitor(url) else None
+            out.append(
+                Target(c.name, url, token, labels, spaces, user=user, signer=by, longest=longest)
+            )
     return out
 
 
@@ -325,7 +447,7 @@ def ask_stores(
     def who(ask: tuple[str, Target]) -> str | None:
         cid, t = ask
         if t.signer is not None:
-            return None  # Amazon Managed Prometheus serves no runtime info: never asked
+            return None  # a cloud's own store serves no runtime info: never asked
         try:
             url = f"{t.url.rstrip('/')}/api/v1/status/runtimeinfo"
             r = client.get(url, auth=auth(t.token, t.user))
@@ -348,9 +470,12 @@ def ask_stores(
         host[_store(t.url)] = (u.hostname or "", port)
         rest[_store(t.url)] = (scheme, port, u.path.rstrip("/"))
     keys = sorted(host)
+    # An Azure Monitor workspace is its host (slice 19.1c): a region's workspaces can
+    # share addresses, which would make two Contracts' own workspaces look like one store
+    named = {_store(t.url) for _, t in asks if azure_monitor(t.url)}
     with ThreadPoolExecutor(max_workers=8) as pool:
         said = list(pool.map(who, asks))
-        found = list(pool.map(lambda k: resolve(*host[k]), keys))
+        found = list(pool.map(lambda k: set() if k in named else resolve(*host[k]), keys))
     if http is None:
         client.close()
     ids: dict[str, set[str]] = defaultdict(set)
@@ -1581,7 +1706,8 @@ def collect(
         if needs_since is not None:
             # ponytail: a cluster whose HPAs never give a Need (no target series) is
             # read 8 weeks back every hour; keep a per-cluster read mark if that costs
-            start = max(needs_since.get(t.cluster, 0.0), end - NEEDS_FOR)
+            far = min(NEEDS_FOR, t.longest or NEEDS_FOR)  # Azure Monitor: 31 days
+            start = max(needs_since.get(t.cluster, 0.0), end - far)
             try:
                 out.needs[t.cluster] = needs(prom, t, start, end)
             except UsageError as e:
@@ -1597,7 +1723,7 @@ def collect(
         except UsageError as e:
             log.warning("%s/%s: its HPAs' targets not read: %s", c.id, t.cluster, e)
         try:
-            back = min(max(windows), NEEDS_FOR)
+            back = min(max(windows), NEEDS_FOR, t.longest or NEEDS_FOR)
             out.bounds[t.cluster] = bounds(prom, t, end, back)
             # slice 17.4b: a GPU Workload without an HPA, by its replica count; its Floor
             # comes only with stored Needs (a vLLM one's)
