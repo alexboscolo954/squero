@@ -1729,6 +1729,26 @@ class Store:
         )
         return (row["started"], row["investigation_id"], set(row["seen"])) if row else None
 
+    async def groups_since(self, contract_id: str, since: float) -> list[tuple[str, str]]:
+        """The Contract's Alert groups remembered since `since`, newest first, each with
+        its Investigation (slice 19.2: a PagerDuty incident is matched to one by hash)."""
+        rows = await self._all(
+            "select group_key, investigation_id from alert_groups "
+            "where contract_id = %s and started >= %s order by started desc, group_key",
+            (contract_id, since),
+        )
+        return [(r["group_key"], r["investigation_id"]) for r in rows]
+
+    async def groups_of(self, contract_id: str, investigation_id: str, prefix: str) -> list[str]:
+        """The keys of the Contract's remembered Alert groups that are this
+        Investigation's and start with `prefix` (slice 19.2: its PagerDuty incidents)."""
+        rows = await self._all(
+            "select group_key from alert_groups where contract_id = %s "
+            "and investigation_id = %s and starts_with(group_key, %s) order by group_key",
+            (contract_id, investigation_id, prefix),
+        )
+        return [r["group_key"] for r in rows]
+
     async def remember_group(
         self,
         contract_id: str,

@@ -10,13 +10,13 @@ This page says where the project is and what comes next. Each phase has its own 
 - **Phases 0 to 8, 10 to 13, 15 and 18:** complete.
 - **Phases 9, 14 and 16:** built, with some live checks owed.
 - **Phase 17 (GPU and LLM inference):** built on fixtures; the paid GPU check is deferred.
-- **Phase 19 (Integrations breadth):** grilled; 3 of 8 slices built (19.1a, 19.1b, 19.1c).
+- **Phase 19 (Integrations breadth):** grilled; 4 of 8 slices built (19.1a, 19.1b, 19.1c, 19.2).
 - **Phase 20 (JVM, Spark and batch):** not grilled yet.
 - **Phase 21 (Console design):** 21.1 to 21.4 in 0.64.0, 21.5 in 0.65.0 (2026-11-22); 21.6 (the page pattern on every page) in 0.66.0 (2026-11-22).
 
 ## Next
 
-1. **19.2:** PagerDuty as an alert source, then 19.3, … in [Phase 19](roadmap/phase-19.md)'s order.
+1. **19.3:** outbound webhooks, then 19.4, … in [Phase 19](roadmap/phase-19.md)'s order.
 2. The paid GPU check when the quota allows, and the phase's done-when on real GPUs (see [Phase 17](roadmap/phase-17.md)).
 
 ## Live checks still owed
@@ -26,6 +26,7 @@ This page says where the project is and what comes next. Each phase has its own 
 | Grafana Cloud with `basic` auth | 19.1a | The owner's free Grafana Cloud account |
 | Amazon Managed Prometheus with `sigv4` | 19.1b | A cost estimate (about $1) and the owner's yes |
 | Azure Monitor with `azure`, Google Managed Prometheus with `google` | 19.1c | A cost estimate (about $1 each) and the owner's yes |
+| PagerDuty's webhook, alerts and note | 19.2 | The owner's free PagerDuty account; for the webhook, Caddy on the mini PC with the owner's OK |
 | Spot list prices on GCP | 16.4a | Left for later by the Operator (procedure in the slice) |
 | A Weekly profile's Backtest | 14.4 | Four stored weeks on the lab (12 December if it runs without gaps) |
 | The Monday steps of the Need reads (08:00 and 09:00 UTC) | 14.1a | Still to look at |
@@ -59,7 +60,7 @@ This page says where the project is and what comes next. Each phase has its own 
 | [Audit](roadmap/audit.md) | Audit fixes A1 to A14 | ✅ done (A14 in 0.61.0) |
 | [17](roadmap/phase-17.md) | GPU and LLM inference | ✅ built on fixtures; paid GPU check deferred |
 | [18](roadmap/phase-18.md) | Platform: signed chart, Protocol, Fleet | ✅ done (0.62.0, 0.63.0; 18.1d after 0.63.0) |
-| [19](roadmap/phase-19.md) | Integrations breadth | 🔨 3 of 8 slices |
+| [19](roadmap/phase-19.md) | Integrations breadth | 🔨 4 of 8 slices |
 | [20](roadmap/phase-20.md) | JVM, Spark and batch | ⏳ grill before building |
 | [21](roadmap/phase-21.md) | Console design: sidebar, Overview, ScaleOps-style pages | ✅ done (0.64.0, 0.65.0, 0.66.0) |
 

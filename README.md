@@ -11,7 +11,7 @@
 
 An SRE Hub for Kubernetes that serves several clients at once. Each client is a **Contract**: its clusters, integrations, Slack channel and secrets, kept apart from every other client's.
 
-- **Triage.** Alertmanager or Grafana sends an alert group (one notification holding one or more alerts). An agent investigates with read-only tools (pods, events, logs, rollout history, recent changes, Prometheus, runbooks, the clouds) and returns a structured Report: root cause, evidence, confidence and recommendations for the on-call engineer.
+- **Triage.** Alertmanager, Grafana or PagerDuty sends an alert group (one notification holding one or more alerts). An agent investigates with read-only tools (pods, events, logs, rollout history, recent changes, Prometheus, runbooks, the clouds) and returns a structured Report: root cause, evidence, confidence and recommendations for the on-call engineer.
 - **Resource optimizer.** The Hub reads each cluster's usage, sizes every container, prices it, and reports waste, cost by team, and Savings, checked against the cloud bill.
 - **Changes wait for a human.** A fix is only ever a *Proposed action*, and it **does not run until a human approves it**. It is rejected automatically if nobody decides in time or the alert group resolves first.
 

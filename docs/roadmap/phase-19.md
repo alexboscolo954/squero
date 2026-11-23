@@ -1,8 +1,8 @@
 # Phase 19: Integrations breadth
 
-**In short:** Phase 19 adds the alert sources, paging tools and outbound channels that clients use. It starts with managed Prometheus logins, so the optimizer works for clients on managed clouds. 19.1a, 19.1b and 19.1c are built so far.
+**In short:** Phase 19 adds the alert sources, paging tools and outbound channels that clients use. It starts with managed Prometheus logins, so the optimizer works for clients on managed clouds. 19.1a, 19.1b, 19.1c and 19.2 are built so far.
 
-**Status:** grilled 2026-11-21. 3 of 8 slices built (19.1a, 2026-11-21; 19.1b and 19.1c, 2026-11-22).
+**Status:** grilled 2026-11-21. 4 of 8 slices built (19.1a, 2026-11-21; 19.1b, 19.1c and 19.2, 2026-11-22).
 
 **Goal:** integrations only, through the Phase 4 framework: managed Prometheus logins, PagerDuty, outbound webhooks, Microsoft Teams and Google Chat, ServiceNow, and Datadog and New Relic.
 
@@ -13,7 +13,7 @@
 | [19.1a](#191a-bearer-and-basic-one-helper) | `bearer` and `basic` through one Prometheus auth helper | ✅ built, Grafana Cloud check owed |
 | [19.1b](#191b-sigv4-for-amp) | `sigv4` for Amazon Managed Prometheus | ✅ built, AWS check owed |
 | [19.1c](#191c-azure-and-google) | `azure` and `google` Prometheus auth | ✅ built, Azure and Google checks owed |
-| 19.2 | PagerDuty | Not built |
+| [19.2](#192-pagerduty) | PagerDuty | ✅ built, live check owed |
 | 19.3 | Outbound webhooks | Not built |
 | 19.4 | Microsoft Teams and Google Chat | Not built |
 | 19.5 | ServiceNow | Not built |
@@ -138,12 +138,46 @@ Two rounds, all answers the recommended ones.
 
 **Decided:**
 - A V3 webhook on the Contract's own URL becomes an Alert group, as Grafana's does.
-- The webhook is checked by PagerDuty's signature (`X-PagerDuty-Signature`, an HMAC with the subscription's secret in SOPS). *Why:* PagerDuty can't send the Hub's token header.
+- The webhook is checked by PagerDuty's signature (`X-PagerDuty-Signature`, an HMAC with the subscription's secret in SOPS). *Why:* the signature covers the body, which a token header doesn't. (The grill's reason, that PagerDuty can't send a header, was wrong: a subscription takes custom headers.)
 - An incident whose alerts' `dedup_key` is the SHA-256 of a known Alertmanager group key joins that Triage instead of starting a second one. This costs one API call per incident.
 - The Client report goes on the incident as a note, only when the Operator sends it (the same button, the same sender recorded), never on its own.
   - *Why:* the client's on-call sees PagerDuty, and a wrong Report there costs trust.
 - A REST API key and the `From` email are SOPS secrets.
 - Never acknowledge or resolve an incident. *Why:* that is a write to someone else's paging system.
+
+**Decided while building (grill, 2026-11-22, all recommended):**
+- **A top-level `pagerduty:` block**, beside `slack:`. *Why:* everything under `integrations:` starts a tool server; this has none.
+- **Only the signing secret is required.** The API key adds the alerts' details and a second way to join; the `From` email, with the key, adds the note. *Why:* a note needs a full-access key, which some clients won't hand over.
+- **The agent sees an Alertmanager-shaped group.** No prompt or tool change, so no eval rerun.
+- **A note that fails:** Slack first. A refusal frees the claim only while nothing was sent; after that the thread names it and nothing is sent twice. No answer keeps the claim, as with Jira.
+- **Built before the owner has an account**, on the documented shapes; a free live check follows.
+
+**Built (2026-11-22):**
+- `POST /contracts/<id>/pagerduty`, public through Caddy. It takes the raw body, checks the signature (any of its `v1=` values, in constant time, never with an empty secret), then reads the event leniently.
+- **A signed delivery is never refused**, whatever it holds: PagerDuty drops a 4xx for good and disables the subscription after three. An unknown event or shape answers 202 "ignored".
+- **It answers after the work**, not before: a restart can't lose an incident, and a resolve can't overtake its start. The alerts call has 3 seconds, inside PagerDuty's 5; when it fails the incident is triaged alone.
+- `incident.triggered` and `incident.reopened` start; `incident.resolved` ends; the rest are ignored. The group key is `pagerduty:<incident id>`, so a repeat is a duplicate before any API call.
+- **The join:** the incident's own `incident_key` and its alerts' `alert_key` values against the SHA-256 of each Alert group the Contract sent in the last 30 minutes (Alertmanager's `Key.Hash`; Grafana's key without the Hub's prefix). A joined incident is remembered under that Triage, so its end resolves nothing.
+- **No migration:** an Investigation's incidents are its remembered groups with the `pagerduty:` prefix.
+- **The note:** `Send to client` shows when the Contract has a client channel or the Triage has an incident with a `From`. Both get the same words; the note as plain text (`slack.client_note`), since Slack's escaping would show there as `&gt;`.
+- **The alerts read has 3 seconds in all** (`asyncio.timeout`), not httpx's per-phase limit.
+- **Health:** a `pagerduty` row when a key is set (`GET /abilities`).
+- Two Contracts with one signing secret are refused at load. PagerDuty's link is shown in Slack as text, never as a link.
+- Only an id of PagerDuty's own shape reaches a URL; a refusal shows its status and code, never its message.
+
+**Tests:** 93 in two files. `test_pagerduty.py` (65): the signature, the events read and the 12 ignored, 17 unknown shapes, the group and its caps, the dedup key against a known SHA-256, the exact alerts, note and Health requests, 18 refusals by status and code, the 3 seconds in all, the note as plain text, and the Contract rules. `test_pagerduty_hub.py` (28): the signature gate (another Contract's secret on this URL, and the reverse), 8 signed deliveries never refused, one Triage per incident, an API that fails, the join (by the incident's key, by an alert's, Grafana's), the window, a joined incident resolving, the note in each failure case, and Health. Isolation: the same group key and the same incident id in two Contracts, each read with its own key; one Contract's note never on another's incident. 109 mutations, all caught; one more was equivalent and its code was removed. No eval rerun: nothing the model is told changes. No API change for the console.
+
+**Known limits:**
+- Built on documented shapes: the docs show no `incident.triggered` example, and don't state that `incident_key` equals the alert's dedup key. The alerts' keys are the second way in.
+- If PagerDuty's delivery arrives before Alertmanager's own, or the incident is created more than 30 minutes after its Alert group, there are two Triages.
+- Without a Slack thread, a join shows only in the Hub's log.
+- A delivery replayed after 30 minutes starts a new Triage: PagerDuty signs no timestamp.
+- US accounts only; one signing secret per Contract; the first 10 alerts of an incident.
+- An Investigation whose incident later reopens into a new Triage no longer has it for a note.
+- PagerDuty's page doesn't say a read-only key may call `/abilities` (the Health row). It is a GET, which is what a read-only key is limited to.
+- Caddy's route was checked by `make hub-smoke` only for a refused delivery; a signed one through Caddy waits for the live check.
+
+**Live check (planned, free):** in two halves, once the owner has an account. The API calls need only a key. The webhook needs the Hub reachable from the internet: Caddy on the mini PC, with the owner's OK.
 
 ## 19.3 Outbound webhooks
 

@@ -1,4 +1,5 @@
-# The Hub's only public routes: each Contract's Alertmanager or Grafana posting alerts,
+# The Hub's only public routes: each Contract's Alertmanager, Grafana or PagerDuty posting
+# alerts (PagerDuty's by its signature, the others with the Contract's token),
 # Relays dialing in (a websocket; the Hub refuses one without a Relay token), and
 # Actuators pulling and reporting (the Hub refuses either without an Actuator token).
 # Investigations, decisions, metrics and the API docs stay on 127.0.0.1, reached
@@ -10,7 +11,7 @@
 	}
 	@alerts {
 		method POST
-		path_regexp ^/contracts/[a-z0-9-]+/(alertmanager|grafana)$
+		path_regexp ^/contracts/[a-z0-9-]+/(alertmanager|grafana|pagerduty)$
 	}
 	handle @alerts {
 		reverse_proxy hub:8080

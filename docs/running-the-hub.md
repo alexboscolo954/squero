@@ -79,19 +79,21 @@ tailscale serve --bg 8080
 
 ### 7. Alert sources
 
-Each Contract has two alert sources, both with that Contract's token:
+Each Contract has three alert sources. The first two take that Contract's token. PagerDuty's is checked by its signature:
 
 | Source | Address |
 |---|---|
 | Alertmanager | `https://<domain>/contracts/<id>/alertmanager` |
 | Grafana Alerting | `https://<domain>/contracts/<id>/grafana` |
+| [PagerDuty](contracts.md#pagerduty) | `https://<domain>/contracts/<id>/pagerduty` |
 
 ### What is public
 
-Only two routes are public:
+Only three alert routes are public:
 
 - `POST /contracts/<id>/alertmanager`
 - `POST /contracts/<id>/grafana`
+- `POST /contracts/<id>/pagerduty`
 
 Their bodies are up to 1 MB. See the [`Caddyfile`](../deploy/hub/Caddyfile).
 
@@ -960,6 +962,7 @@ The test payloads were captured from Grafana 13.2. See [`tests/fixtures/grafana-
 |---|---|---|
 | `POST /contracts/{id}/alertmanager` | that Contract's webhook token | Starts a triage when an alert not seen before is firing in the group. An unknown Contract gets the same 401 as a wrong token. Duplicates are checked per Contract, so two Contracts can send the same group key. Anything else within 30 min (a repeat, or a group that shrank) returns the existing triage. A resolved group makes its proposed actions stale. |
 | `POST /contracts/{id}/grafana` | that Contract's webhook token | Grafana Alerting's webhook contact point, normalized into the same Alert group, then exactly as above |
+| `POST /contracts/{id}/pagerduty` | PagerDuty's signature, with that Contract's signing secret | [PagerDuty](contracts.md#pagerduty)'s V3 webhook: an incident starting or ending as an Alert group, then as above. A wrong signature gets 401; a signed delivery is never refused |
 | `GET /investigations`, `GET /investigations/{id}` | approver | Status, kind (`triage` for now), Contract, report, proposed and executed actions |
 | `POST /investigations/{id}/decision` | approver | `{"approve": true}` or `{"approve": false, "message": "..."}` |
 | `GET /metrics`, `GET /healthz` | none | `squero_triages_total`, `squero_triage_seconds`, `squero_tool_calls_total`, `squero_pending_approvals` |

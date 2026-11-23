@@ -9,7 +9,7 @@ repeating them.
 `squero` is the **Hub**: a Python 3.12 service (FastAPI, LangChain 1.x with MCP
 tools, Postgres) that does two jobs for several clients at once.
 
-- **Triage.** Alertmanager or Grafana sends an alert group. The agent investigates with
+- **Triage.** Alertmanager, Grafana or PagerDuty sends an alert group. The agent investigates with
   read-only tools (pods, events, logs, rollouts, Prometheus, runbooks, clouds) and returns a
   structured Report. A fix is only ever a *Proposed action*, and **nothing that changes a
   cluster runs without a human approval**.
@@ -100,6 +100,8 @@ src/squero/
                    its own and the one before, a refusal's wording, what each part last said.
   notices.py       Stale notices (audit A14): a read failing 3 hours, posted, reminded daily,
                    closed when it reads again; the Agenda's source of failing reads too.
+  pagerduty.py     PagerDuty (19.2): a V3 webhook's incident as an Alert group, checked by its
+                   signature; an incident's alerts read; the Client report as a note.
   billing.py       Cloud bills (AWS Cost Explorer, Azure Cost Management, GCP's BigQuery
                    billing export) vs the estimate.
   evals.py         Scenario replay and scoring.

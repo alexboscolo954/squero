@@ -221,12 +221,12 @@ def parent_text(t: Investigation) -> str:
     return f"*[{clean(t.contract_id)}] {clean(t.title, 300)}*\n{status(t)} · `{t.id}`{sent}{filed}"
 
 
-def client_text(t: Investigation) -> str:
-    """The Client report: no Evidence, Executed actions, Runbook, ids or controls.
-    The model's own prose can still name pods or quote a log line."""
+def _client_report(t: Investigation) -> str:
+    """The Client report, as markdown: no Evidence, Executed actions, Runbook, ids or
+    controls. The model's own prose can still name pods or quote a log line."""
     assert t.report is not None
     r = t.report
-    md = "\n".join(
+    return "\n".join(
         [
             f"## {t.title}: {r.summary}",
             "",
@@ -237,21 +237,44 @@ def client_text(t: Investigation) -> str:
             *[f"{i}. {a}" for i, a in enumerate(r.recommended_actions, 1)],
         ]
     )
-    return clean(mrkdwn(md))  # no Evidence here: no link stays
+
+
+def client_text(t: Investigation) -> str:
+    """The Client report for Slack: its markup, and Slack's escaping."""
+    return clean(mrkdwn(_client_report(t)))  # no Evidence here: no link stays
+
+
+def client_note(t: Investigation) -> str:
+    """The same Client report as plain text, for a place that isn't Slack (a PagerDuty
+    note, slice 19.2): the same words, redacted and capped, with none of Slack's markup
+    or escaping, which would show there as `&gt;` and stray asterisks."""
+    plain = re.sub(r"(?m)^#{1,6}\s+", "", _client_report(t)).replace("**", "")
+    return redact_capped(plain, TEXT_LIMIT)
 
 
 def parent_blocks(
-    t: Investigation, buttons: bool, client: str | None = None, jira: str | None = None
+    t: Investigation,
+    buttons: bool,
+    client: str | None = None,
+    jira: str | None = None,
+    noted: bool = False,
 ) -> list[dict[str, Any]]:
     """Always sent in full, so no stale buttons survive an update. Each button
     names its pause (the deadline): a late click can't decide a later pause.
     client: the Contract's client channel, for the Send to client button.
-    jira: the Contract's Jira project, for the Create Jira issue button."""
+    jira: the Contract's Jira project, for the Create Jira issue button.
+    noted: the Client report also goes on its PagerDuty incident as a note (19.2)."""
+    where = " and ".join(
+        [
+            *([f"to the client channel {client}"] if client else []),
+            *(["on its PagerDuty incident as a note"] if noted else []),
+        ]
+    )
     blocks: list[dict[str, Any]] = [
         {"type": "section", "text": {"type": "mrkdwn", "text": parent_text(t)}}
     ]
     done: list[dict[str, Any]] = []  # buttons on a finished Report
-    if buttons and client and t.report and not t.client_sent_at:  # a Report: done
+    if buttons and where and t.report and not t.client_sent_at:  # a Report: done
         send = {
             "type": "button",
             "action_id": "send_to_client",
@@ -261,7 +284,7 @@ def parent_blocks(
                 "title": {"type": "plain_text", "text": "Send to the client?"},
                 "text": {
                     "type": "plain_text",
-                    "text": f"The Report, without Evidence, goes to the client channel {client}.",
+                    "text": f"The Report, without Evidence, goes {where}.",
                 },
                 "confirm": {"type": "plain_text", "text": "Send"},
                 "deny": {"type": "plain_text", "text": "Cancel"},

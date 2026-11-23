@@ -3,6 +3,8 @@
 POST /contracts/{id}/alertmanager  That Contract's Alertmanager (its own webhook token).
 POST /contracts/{id}/grafana       That Contract's Grafana Alerting, same token, normalized
                                    into the same Alert group.
+POST /contracts/{id}/pagerduty     That Contract's PagerDuty (its signature, not a token): an
+                                   incident starting or ending, as an Alert group.
                                 Starts a triage, or makes a resolved group's
                                 proposed actions stale. Unknown id = wrong token = 401.
 GET  /investigations[/{id}]     Status, report, pending actions (approver token).
@@ -55,6 +57,7 @@ from squero import (
     listprices,
     masking,
     notices,
+    pagerduty,
     proposals,
     protocol,
     related,
@@ -75,6 +78,7 @@ from squero.slack import (
     STATUS,
     Slack,
     clean,
+    client_note,
     client_text,
     feedback_blocks,
     parent_blocks,
@@ -398,7 +402,7 @@ def create_app(
                 status = reply_text(t) or f"{STATUS[t.status]} · `{t.id}`"
                 await slack.post(channel, status, thread_ts=t.slack_ts)
             return
-        blocks = parent_blocks(t, buttons, client_channel(t), jira_project(t))
+        blocks = parent_blocks(t, buttons, client_channel(t), jira_project(t), bool(await noted(t)))
         if t.slack_ts is None:
             ts = await slack.post(channel, parent_text(t), blocks=blocks)
             if ts and await store().set_slack_thread(t.id, channel, ts):
@@ -803,6 +807,17 @@ def create_app(
         contract = by_id.get(t.contract_id)
         return contract.slack.client_channel if contract and contract.slack else None
 
+    async def noted(t: Investigation) -> list[str]:
+        """The PagerDuty incidents the Client report goes on as a note (slice 19.2):
+        this Investigation's own, where its Contract's PagerDuty has a key and a `From`.
+        From the loaded Contract and the Hub's own memory, never from a click."""
+        contract = by_id.get(t.contract_id)
+        pd = contract.pagerduty if contract else None
+        if not pd or not pd.from_secret:
+            return []
+        found = await store().groups_of(t.contract_id, t.id, pagerduty.PREFIX)
+        return [k.removeprefix(pagerduty.PREFIX) for k in found]
+
     def jira_of(t: Investigation) -> Jira | None:
         """From the loaded Contract, never from a click."""
         contract = by_id.get(t.contract_id)
@@ -845,7 +860,7 @@ def create_app(
         log.info("investigation %s filed as %s by %s", t.id, key, by)
         if t.slack_channel and t.slack_ts and settings.slack_bot_token:
             slack: Slack = db["slack"]
-            blocks = parent_blocks(t, buttons, client_channel(t), j.project)
+            blocks = parent_blocks(t, buttons, client_channel(t), j.project, bool(await noted(t)))
             await slack.update(t.slack_channel, t.slack_ts, parent_text(t), blocks)
             url = f"{j.url.rstrip('/')}/browse/{key}"
             await slack.post(
@@ -855,24 +870,54 @@ def create_app(
 
     async def send_to_client(t: Investigation, channel: str, user: str) -> None:
         """The Client report, once: claim, post as plain text (no blocks, so no
-        controls), then take the button away. ponytail: a crash between the claim
+        controls), then take the button away. Then the same text as a note on its
+        PagerDuty incidents (slice 19.2). The claim is one for both: a refusal frees it
+        only while nothing has been sent; after that the thread names what PagerDuty
+        didn't take, and nothing is sent twice. ponytail: a crash between the claim
         and the post leaves it marked sent but unsent; check the client channel."""
         slack: Slack = db["slack"]
-        client = client_channel(t)
-        at = await store().claim_client_report(t.id, f"slack:{user}") if client else None
-        if not client or at is None:
+        client, incidents = client_channel(t), await noted(t)
+        wanted = client or incidents
+        at = await store().claim_client_report(t.id, f"slack:{user}") if wanted else None
+        if not wanted or at is None:
             await slack.ephemeral(channel, user, "Already sent, or nothing to send.")
             return
-        if await slack.post(client, client_text(t)) is None:
+        if client and await slack.post(client, client_text(t)) is None:
             await store().release_client_report(t.id, at)
             await slack.ephemeral(channel, user, "Slack refused the post: nothing was sent.")
             return
+        sent, missed = bool(client), []
+        if incidents:
+            pd = by_id[t.contract_id].pagerduty
+            assert pd and pd.api_key_secret and pd.from_secret  # noted() checked
+            secret = by_id[t.contract_id].secret
+            key, sender = secret(pd.api_key_secret), secret(pd.from_secret)
+        for incident in incidents:
+            try:
+                await pagerduty.note(db["http"], key, sender, incident, client_note(t))
+                sent = True
+            except pagerduty.Refused as e:
+                if not sent:  # nothing has gone anywhere: a retry may work
+                    await store().release_client_report(t.id, at)
+                    text = f"PagerDuty refused the note ({e}): nothing was sent."
+                    await slack.ephemeral(channel, user, text)
+                    return
+                missed.append(f"PagerDuty refused the note on incident {incident} ({e}).")
+            except pagerduty.Unknown as e:
+                sent = True  # it may be there: never a second one
+                missed.append(
+                    f"PagerDuty didn't answer for incident {incident} ({e}): "
+                    "it may have the note. Check the incident."
+                )
         t.client_sent_at, t.client_sent_by = at, f"slack:{user}"
         log.info("investigation %s client report sent by %s", t.id, t.client_sent_by)
         assert t.slack_ts is not None  # the click came from this thread's parent
-        blocks = parent_blocks(t, buttons, client, jira_project(t))
+        blocks = parent_blocks(t, buttons, client, jira_project(t))  # sent: no button now
         await slack.update(channel, t.slack_ts, parent_text(t), blocks)
-        await slack.post(channel, f":outbox_tray: Sent to the client by <@{user}>.", t.slack_ts)
+        said = f":outbox_tray: Sent to the client by <@{user}>."
+        if len(incidents) > len(missed):
+            said += " A note is on its PagerDuty incident."
+        await slack.post(channel, " ".join([said, *missed]), t.slack_ts)
 
     async def triage_separately(
         t: Investigation, related_id: int, channel: str, user: str, message_ts: str | None
@@ -1465,6 +1510,62 @@ def create_app(
         its Bearer credentials: from here on the same path as Alertmanager's."""
         return await alertmanager(contract_id, payload.normalized(), creds)
 
+    @app.post("/contracts/{contract_id}/pagerduty", status_code=202)
+    async def pagerduty_webhook(contract_id: str, request: Request) -> dict[str, Any]:
+        """PagerDuty's V3 webhook (slice 19.2), checked by its signature over the raw
+        body: an incident starting or ending is an Alert group, from here on the same
+        path as Alertmanager's. One whose key is the hash of a group this Contract sent
+        itself is that group again: it joins its Triage. A signed delivery is never
+        refused, whatever it holds: PagerDuty drops a refused one for good."""
+        body = await request.body()
+        contract = by_id.get(contract_id)
+        pd = contract.pagerduty if contract else None
+        signature = request.headers.get(pagerduty.SIGNATURE, "")
+        if not (contract and pd) or not pagerduty.verified(
+            contract.secret(pd.webhook_secret), body, signature
+        ):
+            raise HTTPException(401, "invalid signature")  # also for an unknown Contract
+        found = pagerduty.incident(body)
+        if found is None:
+            return {"status": "ignored", "reason": "not an incident starting or ending"}
+        if not found.firing:
+            return await accept(contract_id, pagerduty.group(found, []))
+        started = now()
+        remembered = await store().alert_group(contract_id, found.group_key)
+        if remembered and started - remembered[0] <= DEDUP_SECONDS:
+            # before the API call: PagerDuty's retries and repeats cost none
+            return {"status": "duplicate", "investigation": remembered[1]}
+        listed: list[dict[str, Any]] = []
+        if pd.api_key_secret:
+            try:
+                key = contract.secret(pd.api_key_secret)
+                listed = await pagerduty.alerts(db["http"], key, found.id)
+            except (pagerduty.Refused, pagerduty.Unknown) as e:  # the incident alone
+                log.warning(
+                    "%s: PagerDuty incident %s: alerts not read: %s", contract_id, found.id, e
+                )
+        wanted = pagerduty.keys(found, listed)
+        for group_key, tid in await store().groups_since(contract_id, started - DEDUP_SECONDS):
+            if group_key.startswith(pagerduty.PREFIX) or pagerduty.digest(group_key) not in wanted:
+                continue
+            # Remembered under the Triage it is: its re-sends are duplicates of it, and
+            # its end resolves nothing (no Triage has its key).
+            await store().remember_group(contract_id, found.group_key, started, tid, {found.id})
+            log.info("PagerDuty incident %s is alert group of investigation %s", found.id, tid)
+            t = await store().get(tid)
+            if t and t.slack_channel and t.slack_ts and settings.slack_bot_token:
+                number = f" #{found.number}" if found.number else ""
+                link = f": {found.url}" if found.url else ""
+                text = f":pager: PagerDuty incident{number} is this alert group{link}"
+                await db["slack"].post(t.slack_channel, clean(text), t.slack_ts)
+                if t.kind != "question":  # its button may be new: the note has somewhere to go
+                    blocks = parent_blocks(
+                        t, buttons, client_channel(t), jira_project(t), bool(await noted(t))
+                    )
+                    await db["slack"].update(t.slack_channel, t.slack_ts, parent_text(t), blocks)
+            return {"status": "joined", "investigation": tid}
+        return await accept(contract_id, pagerduty.group(found, listed))
+
     @app.get("/investigations", dependencies=[Depends(approver_auth)])
     async def list_investigations() -> list[Investigation]:
         return await store().recent(50)
@@ -1646,6 +1747,11 @@ def create_app(
                     else:
                         text += f", Protocol {seen.protocol}"
                 states.append({"name": f"actuator {cl.name}", "ok": ok, "ms": 0, "detail": text})
+        if c.pagerduty and c.pagerduty.api_key_secret:  # slice 19.2: its key still works
+            start = time.monotonic()
+            detail = await pagerduty.reachable(db["http"], c.secret(c.pagerduty.api_key_secret))
+            ms = round(1000 * (time.monotonic() - start))
+            states.append({"name": "pagerduty", "ok": not detail, "ms": ms, "detail": detail})
         for s in states:
             s["detail"] = redact_capped(s["detail"], 300)
         try:

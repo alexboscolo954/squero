@@ -102,7 +102,7 @@ The Operator's Revert (`revert_sizing`) puts a container's pods back to their te
 ## Contract scope
 
 - Every tool checks its `cluster` and `namespace` against its own Contract server-side, on top of RBAC.
-- Each Contract's alerts arrive on their own URL with their own token ([Contracts](contracts.md)).
+- Each Contract's alerts arrive on their own URL with their own token ([Contracts](contracts.md)). [PagerDuty](contracts.md#pagerduty)'s arrive on the Contract's own URL too, checked by a signature made with that Contract's own secret.
 - The Hub's own Prometheus reads for Sizings name the Contract's namespaces in every query.
 - **One exception:** a node's Room ([Nodes](optimizer.md#nodes)) needs every pod on the node. Pods outside the Contract's namespaces are read as one sum and one count per node:
   - added up by Prometheus, never listed by name or namespace;

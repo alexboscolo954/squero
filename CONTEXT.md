@@ -89,6 +89,8 @@ This file is the glossary. Each entry gives the term in bold, its definition, th
 - It belongs to exactly one Contract, so two Contracts never share an Alert group.
 - A re-sent Alert group starts a new Triage only when an Alert not seen before starts firing.
 - A group that shrinks, or comes back unchanged, is a duplicate.
+- Grafana Alerting's notification is an Alert group too. So is a PagerDuty incident ("incident" is PagerDuty's word, used only for theirs).
+- A PagerDuty incident whose key is the hash of an Alert group the Contract sent itself is that same group, seen a second way. It joins that group's Triage and never starts another.
 - _Avoid_: Notification, alert batch
 
 **Related alert group**: An Alert group that joined an open Triage of the same Contract instead of starting its own.

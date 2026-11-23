@@ -299,6 +299,24 @@ def auth_rules(
         raise ValueError(f"{p}user is for {p}auth: basic")
 
 
+class PagerDuty(Strict):
+    """The Contract's PagerDuty (slice 19.2): its incidents arrive as Alert groups on the
+    Contract's own URL, checked by the webhook subscription's signing secret. With a REST
+    API key the Hub also reads an incident's alerts; with the `From` email too, the Client
+    report goes on the incident as a note when the Operator sends it. The Hub never
+    acknowledges or resolves an incident. Each a name in secrets.sops.yaml."""
+
+    webhook_secret: str
+    api_key_secret: str | None = None  # read-only is enough without `from_secret`
+    from_secret: str | None = None  # a user of the account: a note is written as them
+
+    @model_validator(mode="after")
+    def _noted(self) -> "PagerDuty":
+        if self.from_secret and not self.api_key_secret:
+            raise ValueError("pagerduty: from_secret needs api_key_secret: the key adds the note")
+        return self
+
+
 class Kubernetes(Strict):
     name: Literal["kubernetes"]
     enable_actions: bool = False
@@ -992,6 +1010,7 @@ class Contract(Strict):
     clusters: list[Cluster] = []
     integrations: list[Integration] = Field(min_length=1)
     slack: Slack | None = None  # where the Operator follows this Contract's Investigations
+    pagerduty: PagerDuty | None = None  # its incidents as Alert groups (slice 19.2)
     # The Hub's SQUERO_MODEL unless set; through the Hub's gateway and key (same prefix).
     model: str | None = None
     monthly_budget_usd: float | None = Field(None, gt=0)  # calendar month, UTC
@@ -1231,7 +1250,7 @@ class Contract(Strict):
         """Every `*_secret` field and every value of a `*_secrets` map, so a new
         integration's credentials are checked without being listed here."""
         refs: set[str] = set()
-        for item in (*self.clusters, *self.integrations):
+        for item in (*self.clusters, *self.integrations, *filter(None, [self.pagerduty])):
             for field in type(item).model_fields:
                 value = getattr(item, field)
                 if field.endswith("_secret") and value is not None:
@@ -1276,6 +1295,7 @@ def load(directory: Path) -> dict[str, Contract]:
                 f"{directory}: {', '.join(ids)} share a webhook token; "
                 "one Contract's Alertmanager could post as another"
             )
+    problems += _shared_signing(directory, contracts.values())
     by_channel: dict[str, list[str]] = defaultdict(list)
     for c in contracts.values():
         if c.slack:  # operator and client channels alike: a channel names one Contract
@@ -1302,6 +1322,22 @@ def load(directory: Path) -> dict[str, Contract]:
     if problems:
         raise ContractError(problems)
     return contracts
+
+
+def _shared_signing(directory: Path, loaded: Any) -> list[str]:
+    """Two Contracts with one PagerDuty signing secret (slice 19.2): a delivery signed
+    for one would pass on the other's URL."""
+    by_signing: dict[str, list[str]] = defaultdict(list)
+    for c in loaded:
+        if c.pagerduty and c.has_secret(c.pagerduty.webhook_secret):
+            signing = c.secret(c.pagerduty.webhook_secret).get_secret_value()
+            by_signing[token_hash(signing)].append(c.id)
+    return [
+        f"{directory}: {', '.join(ids)} share a PagerDuty signing secret; "
+        "one Contract's PagerDuty could post as another"
+        for ids in by_signing.values()
+        if len(ids) > 1
+    ]
 
 
 def _store(url: str) -> str:

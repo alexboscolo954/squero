@@ -383,6 +383,102 @@ After filing, the thread and the console show the issue's key and link.
 
 The agent never files. Creating is Hub code behind the button, not a tool.
 
+## PagerDuty
+
+A Contract's PagerDuty is an alert source, and a place the Client report can go. This is slice 19.2. It gives the agent no tools.
+
+```yaml
+pagerduty:
+  webhook_secret: pagerduty-signing     # required: the webhook subscription's signing secret
+  api_key_secret: pagerduty-api-key     # optional: a REST API key
+  from_secret: pagerduty-from           # optional, needs the key: a user's email
+```
+
+| Field | Needed | What it adds |
+|---|---|---|
+| `webhook_secret` | Always | Incidents arrive as Alert groups. Every delivery is checked by its signature. |
+| `api_key_secret` | Optional | Each incident's alerts: their summary and details for the agent, and a second way to join. A read-only key is enough. A row on the Health page. |
+| `from_secret` | Optional, with the key | The Client report as a note on the incident. The key must then be a full-access one. |
+
+Each value is a name in `secrets.sops.yaml`. A `from_secret` without an `api_key_secret` is refused. Two Contracts with the same signing secret are refused.
+
+### Setting it up in PagerDuty
+
+The webhook, as PagerDuty's [Webhooks](https://docs.pagerduty.com/integrations/webhooks) page describes it:
+
+1. Open **Integrations**, then **Generic Webhooks (v3)**. On newer accounts the menu is **Configuration**, then **Integrations**, then **Generic Webhooks (v3)**.
+   - For one service only, start from the service instead: **Services**, **Service Directory**, the service, its **Integrations** tab, the **Webhooks** section, **Add or manage webhooks for this service**.
+2. Click **New Webhook**.
+3. **Webhook URL**: `https://<domain>/contracts/<id>/pagerduty`.
+4. **Event Subscription**: `incident.triggered`, `incident.reopened` and `incident.resolved`. The Hub ignores any other.
+5. Click **Add Webhook**. A confirmation shows the signing secret. Copy it then: PagerDuty's page doesn't say it can be read again.
+6. Put the secret in `secrets.sops.yaml`, under the name `webhook_secret` gives.
+7. To check it: open the webhook, and under **Test** click **Send Test Event**. The Hub answers 202 and ignores it. A 401 means the secret is wrong.
+
+Who can do this: a Manager, an Admin or the Account Owner.
+
+The key, as PagerDuty's [API Access Keys](https://docs.pagerduty.com/account-admin/api-access-keys) page describes it:
+
+1. Open **Integrations**, then **Developer Tools**, then **API Access Keys**.
+2. Click **Create New API Key** and type a **Description**.
+3. Tick **Read-only API Key**, unless you want notes: a note needs a key that can write.
+4. Click **Create Key**. The key is shown in full only this once. Put it under the name `api_key_secret` gives.
+
+Who can do this: an Admin or the Account Owner.
+
+For notes, put the email of a PagerDuty user of that account under the name `from_secret` gives. A note is written as that user.
+
+The Hub must be reachable from the internet for the webhook: see [What is public](running-the-hub.md#what-is-public).
+
+### What an incident becomes
+
+- An incident that starts (`incident.triggered`, `incident.reopened`) is a firing Alert group. One that ends (`incident.resolved`) resolves it, and makes its Proposed actions Stale.
+- From there it follows Alertmanager's path: the same dedup, budget and resolve rules, and the [Related alert group](#related-alert-groups) rules. Two incidents of one PagerDuty service are related by their `service` label.
+- The agent sees an Alertmanager-shaped group:
+
+  | Where | What |
+  |---|---|
+  | `alertname` | The incident's title |
+  | Labels | `source: pagerduty`, and its `service`, `urgency` and `priority` |
+  | Each alert (10 at most, with a key) | Its `severity` as a label; its summary (500 characters) and details (2,000) as annotations |
+  | `incident` annotation | The incident's link |
+
+- With no key, or when PagerDuty doesn't answer within 3 seconds, the incident is triaged alone, without its alerts' text.
+
+### An incident that is an Alert group you already send
+
+Alertmanager and Grafana give PagerDuty the SHA-256 of the group key they send the Hub. So the Hub can tell that an incident is a group it already has.
+
+- An incident whose key, or one of its alerts' keys, is the hash of an Alert group this Contract sent in the last 30 minutes joins that group's Triage. No second Triage starts.
+- The Triage's Slack thread says so, with the incident's number and link.
+- A joined incident resolving changes nothing. Only the Triage's own Alert group makes its Proposed actions Stale.
+- If PagerDuty's delivery arrives before Alertmanager's own, there are two Triages. So are there when the incident is created more than 30 minutes after its Alert group.
+- Without a Slack thread, a join shows only in the Hub's log.
+
+### The Client report as a note
+
+- **Send to client** also puts the Client report on the Triage's PagerDuty incidents as a note. It needs `from_secret`.
+- The note has the same words as the client's Slack message, as plain text.
+- Only the Operator's press sends it, once, with the sender recorded. Never on its own.
+- With no Slack client channel, the button still shows for a Triage that has an incident.
+- **PagerDuty refuses the note:**
+  - If nothing was sent yet, the claim is freed and you can press again.
+  - If the client's Slack channel already has the report, the thread names the refusal and nothing is sent twice.
+- **PagerDuty doesn't answer:** it may have the note. The Hub keeps the claim and asks you to check the incident.
+- A refusal shows PagerDuty's status and code only. Its message can quote the `From` email.
+
+### What the Hub never does
+
+- It never acknowledges or resolves an incident. That is a write to someone else's paging system.
+- It calls two endpoints with the key: list an incident's alerts, and add a note. And one more for the Health page (`/abilities`).
+- A signed delivery is never refused, whatever it holds. PagerDuty drops a refused delivery for good, and disables the webhook after three.
+
+Known limits:
+
+- Built on the shapes PagerDuty documents. Not checked against a real account yet.
+- US accounts only. The EU service region has another host.
+- One signing secret per Contract. While PagerDuty rotates a secret it sends two signatures, and the Hub accepts the one it knows.
+
 ## Scheduled Checks
 
 A Check runs on a schedule, with no alert.

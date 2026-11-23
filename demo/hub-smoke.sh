@@ -90,9 +90,16 @@ grafana=(-H 'Content-Type: application/json' --data-binary @"$root/tests/fixture
 curl -sfk -X POST "$public/contracts/demo-shop/grafana" -H "Authorization: Bearer $token" \
   "${grafana[@]}" | grep -q '"accepted"' || fail "Grafana alert refused"
 echo "ok   Grafana Alerting webhook accepted through Caddy"
+# PagerDuty's route is public too, and takes only a signed delivery (slice 19.2): the
+# Contract's token is not one, and a Contract without PagerDuty takes none.
+[[ $(code -X POST "$public/contracts/demo-shop/pagerduty" -H "Authorization: Bearer $token" \
+  -H 'X-PagerDuty-Signature: v1=00' -H 'Content-Type: application/json' -d '{"event": {}}') == 401 ]] ||
+  fail "PagerDuty route: an unsigned delivery"
+echo "ok   PagerDuty webhook refused without its signature, through Caddy"
 
 for path in /investigations "/investigations/$id" /metrics /healthz /docs /openapi.json \
-  /contracts/demo-shop/alertmanager/x /contracts/demo-shop/grafana/x; do
+  /contracts/demo-shop/alertmanager/x /contracts/demo-shop/grafana/x \
+  /contracts/demo-shop/pagerduty /contracts/demo-shop/pagerduty/x; do
   [[ $(code -H 'Authorization: Bearer smoke-approver' "$public$path") == 404 ]] || fail "GET $path is public"
 done
 [[ $(code -X POST "$public/investigations/$id/decision" -H 'Authorization: Bearer smoke-approver' \
