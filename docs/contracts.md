@@ -580,6 +580,89 @@ def verified(secret: str, header: str, raw_body: bytes) -> bool:
 - A Check's recovery is tracked through its Slack thread, so its recovery event needs Slack too.
 - The Investigation events (`approval.*`, `action.executed`, `report.finished`, `investigation.failed`) don't depend on Slack.
 
+## Client channels: Teams and Google Chat
+
+**In short:** beside Slack's client channel, a Contract can list Microsoft Teams channels and Google Chat spaces. Each gets the Client report when the Operator presses **Send to client**, and nothing else, ever. They have no buttons: approvals stay in Slack and the console. This is slice 19.4.
+
+```yaml
+client_channels:
+  - kind: teams
+    url_secret: teams-acme-oncall      # the workflow's webhook URL, in secrets.sops.yaml
+  - kind: google_chat
+    url_secret: chat-acme-oncall       # the space's webhook URL, in secrets.sops.yaml
+```
+
+| Field | What it is |
+|---|---|
+| `kind` | `teams` or `google_chat`. It decides the message's shape. |
+| `url_secret` | A name in `secrets.sops.yaml` holding the incoming webhook's URL. *Why a secret:* the URL holds the key. The Operator sees the channel by this name, never by its URL. |
+
+Refused at load, without quoting the URL:
+
+| Refused | Why |
+|---|---|
+| A `google_chat` URL that isn't `https://chat.googleapis.com/v1/spaces/<space>/messages?key=...&token=...` | Google fixes the host and the path. A typo can't send a client's report elsewhere. |
+| A `teams` URL that isn't `https://`, or that carries a user or a password | A workflow's host varies by tenant, so any https host is taken. |
+| A URL with a space or a line break inside it | A long URL wrapped in the secrets file. It would fail at the first send otherwise. |
+| One URL in two Contracts, or twice in one | A client would get another's report, or its own twice. |
+
+### Setting up a Teams channel
+
+As Microsoft's [incoming webhook](https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook) page describes it:
+
+1. In Teams, go to the team and channel that should get the report.
+2. Select **More options (...)** next to the channel, then **Workflows**.
+3. Search for and select the template **Send webhook alerts to a channel**.
+   - Microsoft says each template has a different authentication type. The Hub sends no token, so the workflow must accept a request from anyone who has its URL. The templates named "from specific people" and "from people in an org" are likely not that; this is not confirmed.
+4. Choose the **Team** and **Channel**, then **Save**.
+5. Copy the webhook URL the workflow shows. Put it in `secrets.sops.yaml`, under the name `url_secret` gives. Microsoft's pages don't say it can be read again later.
+
+Good to know:
+
+- A workflow belongs to the person who made it, not to the channel. If that person leaves it can stop. An admin can add co-owners.
+- The old Office 365 connector webhooks were retired in May 2026. Use a workflow.
+
+### Setting up a Google Chat space
+
+As Google's [webhooks quickstart](https://developers.google.com/workspace/chat/quickstart/webhooks) describes it. It needs a Business or Enterprise Google Workspace account that allows incoming webhooks.
+
+1. In a browser (not the mobile app), open Chat and go to the space.
+2. Click the arrow next to the space's title, then **Apps & integrations**, then **Add webhooks**.
+3. Fill in the dialog and save it. Copy the webhook's URL. Put it in `secrets.sops.yaml`, under the name `url_secret` gives.
+
+### What the client gets
+
+- The Client report: the summary, root cause, severity, what is affected and the Recommendations. The same words as Slack's client channel, as plain text. Never Evidence, Executed actions or ids.
+- **Teams:** an Adaptive Card with one text block per line, the first one bold.
+- **Google Chat:** one text message.
+- **No link and no mention can come from the Report.** It is the model's own prose, and neither product documents a way to switch its parsing off. So two things are rewritten:
+
+  | In the Report | What the client sees | Why |
+  |---|---|---|
+  | `https://grafana.acme.example/d/1` | `https[:]//grafana[.]acme[.]example/d/1` | It can't become a clickable link. |
+  | `<` | `＜` (a full-width look-alike) | Chat's link and mention syntax opens with `<`, as in `<users/all>`. |
+
+- A long report is cut to what the product takes (Teams 28 KB, Chat 32,000 bytes), with a line saying so.
+
+### How one press sends
+
+- **Send to client** shows when the Contract has any place to send: Slack's client channel, a PagerDuty incident with a `From`, or a client channel here.
+- Its confirm dialog names every destination, each client channel by its secret's name. The press is the consent. Slack allows that text 300 characters: with many long names it names those that fit, then "and N more".
+- The order is Slack's client channel, then PagerDuty's note, then each client channel in the Contract's order. Each client channel gets 10 seconds.
+- It is sent once. The Hub records one "sent" per Investigation.
+- **A channel refuses** (a 4xx):
+  - If nothing was sent yet, the claim is freed and you can press again.
+  - If something was sent, the thread names the refusal with its status, and nothing is sent twice. The other channels still get theirs.
+- **A channel doesn't answer** (a timeout, a 5xx): it may have the report. The Hub keeps the claim and asks you to check the channel.
+- The thread says **Accepted by** each channel that took it. For Teams that means the workflow took the request: it posts a moment later, and the Hub can't see whether that worked.
+
+Known limits:
+
+- Built on the payloads the two products document. Not checked against a real Teams or Google Chat yet.
+- No Health row: an incoming webhook can't be checked without posting to the client's channel.
+- A bare domain with no path (`evil.example`) is not rewritten, as in Slack.
+- In Teams each line is its own text block. Numbered Recommendations may each show as "1." if the card restarts its numbering; not seen yet.
+
 ## Scheduled Checks
 
 A Check runs on a schedule, with no alert.

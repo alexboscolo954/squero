@@ -1,8 +1,8 @@
 # Phase 19: Integrations breadth
 
-**In short:** Phase 19 adds the alert sources, paging tools and outbound channels that clients use. It starts with managed Prometheus logins, so the optimizer works for clients on managed clouds. 19.1a, 19.1b, 19.1c, 19.2 and 19.3 are built so far.
+**In short:** Phase 19 adds the alert sources, paging tools and outbound channels that clients use. It starts with managed Prometheus logins, so the optimizer works for clients on managed clouds. 19.1a, 19.1b, 19.1c, 19.2, 19.3 and 19.4 are built so far.
 
-**Status:** grilled 2026-11-21. 5 of 8 slices built (19.1a, 2026-11-21; 19.1b, 19.1c and 19.2, 2026-11-22; 19.3, 2026-11-23).
+**Status:** grilled 2026-11-21. 6 of 8 slices built (19.1a, 2026-11-21; 19.1b, 19.1c and 19.2, 2026-11-22; 19.3 and 19.4, 2026-11-23).
 
 **Goal:** integrations only, through the Phase 4 framework: managed Prometheus logins, PagerDuty, outbound webhooks, Microsoft Teams and Google Chat, ServiceNow, and Datadog and New Relic.
 
@@ -15,7 +15,7 @@
 | [19.1c](#191c-azure-and-google) | `azure` and `google` Prometheus auth | ✅ built, Azure and Google checks owed |
 | [19.2](#192-pagerduty) | PagerDuty | ✅ built, live check owed |
 | [19.3](#193-outbound-webhooks) | Outbound webhooks | ✅ built |
-| 19.4 | Microsoft Teams and Google Chat | Not built |
+| [19.4](#194-microsoft-teams-and-google-chat) | Microsoft Teams and Google Chat | ✅ built, live check owed |
 | 19.5 | ServiceNow | Not built |
 | 19.6 | Datadog and New Relic | Not built |
 
@@ -228,6 +228,30 @@ Two rounds, all answers the recommended ones.
 - Each goes through the product's incoming webhook (Teams Workflows, or a Chat space's webhook). Its URL is a SOPS secret, because it embeds a key. `https://` only.
 - No buttons. *Why:* a Teams bot would need an Azure Bot registration and a public endpoint, and the Hub is reachable only through `tailscale serve`. Approvals stay in Slack and the console.
 - Built on the payloads the products document.
+
+**Decided while building (grill, 2026-11-23, all recommended):**
+- **No link and no mention from the Report.** A URL's dots and colon go in brackets, and `<` becomes its full-width look-alike. *Why:* the Report is the model's prose, neither product documents a way to switch its parsing off, and there is no account to test a softer way with.
+- **A Teams URL is any `https://` URL.** *Why:* Microsoft documents one host form, and it varies by tenant. Google Chat's is strict: Google fixes its host and path.
+
+**Built (2026-11-23):**
+- `client_channels` on the Contract, each a `kind` and a `url_secret`. Its label for the Operator is the product and the secret's name, never the URL.
+- `clientchannels.send`: one POST of the product's documented body (Teams: an Adaptive Card 1.2, a wrapping `TextBlock` per line; Chat: `{"text": ...}`), 10 seconds in all, no redirect followed, no token sent. A refusal shows its status, and Google's status word, never the reply's text.
+- The text is the plain Client report (`slack.client_note`), made safe (`clientchannels.safe`) and cut by the body's bytes to fit Teams' 28 KB and Chat's 32,000 bytes.
+- **One press, one claim**, as in 19.2: Slack's client channel, then PagerDuty's notes, then each client channel in the Contract's order. A refusal frees the claim only while nothing was sent. PagerDuty's wording is unchanged.
+- The confirm dialog names every destination, inside Slack's 300 characters for that text (those that fit, then "and N more"): a longer one would have Slack refuse the whole message. The thread says "Accepted by" each channel that took it.
+- A URL with a space or a line break inside it is refused at load (the Outbound webhook's too): `urlsplit` drops one silently, and the HTTP client then refuses the URL at the first send.
+- At load, never quoting a URL: a Chat URL that isn't a Chat webhook's, a Teams URL that isn't https, and one URL in two Contracts or twice in one.
+- **The HTTP library's own log line** (every request's whole URL, at INFO) is kept at WARNING where the Hub sets up logging. It was not printed before either, but nothing pinned it; this covers 19.3's webhook URL too.
+
+**Tests:** 64 in two files. `test_client_channels.py` (56): a URL and a `<` that can open nothing, each product's exact body, the cut by bytes, the exact request, 15 outcomes by status only, the 10 seconds in all, 21 URLs accepted or refused unquoted, one channel in two Contracts (by the function and when they load), a broken URL refused at load and at the send, the confirm dialog inside Slack's 300 characters, and the HTTP library's log line. `test_client_channels_hub.py` (8): one press to both products and never on its own, planted links and mentions made harmless, a refusal before and after something was sent, a channel that doesn't answer, PagerDuty's note beside them, and no button with nowhere to send. Isolation: another Contract's channel is never asked, a forged click included. 78 mutations, all caught. No eval rerun: nothing the model is told changes. No API change for the console.
+
+**Known limits:**
+- Built on documented payloads. Whether Teams renders the card as expected, and whether Chat leaves the rewritten text alone, waits for the live check.
+- A Teams 2xx means the workflow took the request, not that it posted.
+- No Health row: an incoming webhook can't be probed without posting to the client's channel.
+- A bare domain with no path is not rewritten, as in Slack.
+- In Teams, numbered Recommendations may each show as "1." (a block per line).
+- Which Teams template takes a request with no token is not confirmed from Microsoft's pages.
 
 **Checked:** when the owner has a Microsoft 365 account with Workflows, or a Google Workspace one. Unknown at the grill.
 

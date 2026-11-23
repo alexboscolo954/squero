@@ -50,6 +50,7 @@ from squero import (
     billing,
     blockers,
     checks,
+    clientchannels,
     console,
     contracts,
     deploys,
@@ -429,7 +430,7 @@ def create_app(
                 status = reply_text(t) or f"{STATUS[t.status]} · `{t.id}`"
                 await slack.post(channel, status, thread_ts=t.slack_ts)
             return
-        blocks = parent_blocks(t, buttons, client_channel(t), jira_project(t), bool(await noted(t)))
+        blocks = await parent(t)
         if t.slack_ts is None:
             ts = await slack.post(channel, parent_text(t), blocks=blocks)
             if ts and await store().set_slack_thread(t.id, channel, ts):
@@ -866,6 +867,19 @@ def create_app(
         found = await store().groups_of(t.contract_id, t.id, pagerduty.PREFIX)
         return [k.removeprefix(pagerduty.PREFIX) for k in found]
 
+    def chat_channels(t: Investigation) -> list[contracts.ClientChannel]:
+        """The Contract's Teams and Google Chat channels (slice 19.4), from the loaded
+        Contract, never from a click."""
+        contract = by_id.get(t.contract_id)
+        return list(contract.client_channels) if contract else []
+
+    async def parent(t: Investigation) -> list[dict[str, Any]]:
+        """The thread's parent, with the buttons this Investigation has now: the Send to
+        client one names every place the Client report would go."""
+        labels = [c.label for c in chat_channels(t)]
+        incidents = bool(await noted(t))
+        return parent_blocks(t, buttons, client_channel(t), jira_project(t), incidents, labels)
+
     def jira_of(t: Investigation) -> Jira | None:
         """From the loaded Contract, never from a click."""
         contract = by_id.get(t.contract_id)
@@ -908,7 +922,7 @@ def create_app(
         log.info("investigation %s filed as %s by %s", t.id, key, by)
         if t.slack_channel and t.slack_ts and settings.slack_bot_token:
             slack: Slack = db["slack"]
-            blocks = parent_blocks(t, buttons, client_channel(t), j.project, bool(await noted(t)))
+            blocks = await parent(t)
             await slack.update(t.slack_channel, t.slack_ts, parent_text(t), blocks)
             url = f"{j.url.rstrip('/')}/browse/{key}"
             await slack.post(
@@ -917,15 +931,17 @@ def create_app(
         return key, f"Filed as {key}."
 
     async def send_to_client(t: Investigation, channel: str, user: str) -> None:
-        """The Client report, once: claim, post as plain text (no blocks, so no
-        controls), then take the button away. Then the same text as a note on its
-        PagerDuty incidents (slice 19.2). The claim is one for both: a refusal frees it
-        only while nothing has been sent; after that the thread names what PagerDuty
-        didn't take, and nothing is sent twice. ponytail: a crash between the claim
-        and the post leaves it marked sent but unsent; check the client channel."""
+        """The Client report, once, to every place the client reads: claim, post to the
+        Slack client channel as plain text (no blocks, so no controls), then a note on
+        its PagerDuty incidents (slice 19.2), then each Teams and Google Chat channel
+        (slice 19.4). The claim is one for all: a refusal frees it only while nothing
+        has been sent; after that the thread names what wasn't taken, and nothing is
+        sent twice. No answer keeps the claim: it may have arrived. ponytail: a crash
+        between the claim and the post leaves it marked sent but unsent; check the
+        client channel."""
         slack: Slack = db["slack"]
-        client, incidents = client_channel(t), await noted(t)
-        wanted = client or incidents
+        client, incidents, chats = client_channel(t), await noted(t), chat_channels(t)
+        wanted = client or incidents or chats
         at = await store().claim_client_report(t.id, f"slack:{user}") if wanted else None
         if not wanted or at is None:
             await slack.ephemeral(channel, user, "Already sent, or nothing to send.")
@@ -934,37 +950,49 @@ def create_app(
             await store().release_client_report(t.id, at)
             await slack.ephemeral(channel, user, "Slack refused the post: nothing was sent.")
             return
-        sent, missed = bool(client), []
+        secret = by_id[t.contract_id].secret
+        # each further place: who it is, its send, and what a refusal or no answer is called
+        sends: list[tuple[str, Any, str, str]] = []
         if incidents:
             pd = by_id[t.contract_id].pagerduty
             assert pd and pd.api_key_secret and pd.from_secret  # noted() checked
-            secret = by_id[t.contract_id].secret
             key, sender = secret(pd.api_key_secret), secret(pd.from_secret)
         for incident in incidents:
+            note = functools.partial(pagerduty.note, db["http"], key, sender, incident)
+            lost = f"for incident {incident} ({{}}): it may have the note. Check the incident."
+            sends.append(("PagerDuty", note, f"the note on incident {incident}", lost))
+        for c in chats:
+            post = functools.partial(clientchannels.send, db["http"], c.kind, secret(c.url_secret))
+            lost = "({}): it may have the report. Check the channel."
+            sends.append((c.label, post, "the report", lost))
+        sent, took, missed = bool(client), [], []
+        for who, send, what, lost in sends:
             try:
-                await pagerduty.note(db["http"], key, sender, incident, client_note(t))
+                await send(client_note(t))
                 sent = True
-            except pagerduty.Refused as e:
+                took.append(who)
+            except (pagerduty.Refused, clientchannels.Refused) as e:
                 if not sent:  # nothing has gone anywhere: a retry may work
                     await store().release_client_report(t.id, at)
-                    text = f"PagerDuty refused the note ({e}): nothing was sent."
+                    first = "the note" if who == "PagerDuty" else what
+                    text = f"{who} refused {first} ({e}): nothing was sent."
                     await slack.ephemeral(channel, user, text)
                     return
-                missed.append(f"PagerDuty refused the note on incident {incident} ({e}).")
-            except pagerduty.Unknown as e:
+                missed.append(f"{who} refused {what} ({e}).")
+            except (pagerduty.Unknown, clientchannels.Unknown) as e:
                 sent = True  # it may be there: never a second one
-                missed.append(
-                    f"PagerDuty didn't answer for incident {incident} ({e}): "
-                    "it may have the note. Check the incident."
-                )
+                missed.append(f"{who} didn't answer {lost.format(e)}")
         t.client_sent_at, t.client_sent_by = at, f"slack:{user}"
         log.info("investigation %s client report sent by %s", t.id, t.client_sent_by)
         assert t.slack_ts is not None  # the click came from this thread's parent
         blocks = parent_blocks(t, buttons, client, jira_project(t))  # sent: no button now
         await slack.update(channel, t.slack_ts, parent_text(t), blocks)
         said = f":outbox_tray: Sent to the client by <@{user}>."
-        if len(incidents) > len(missed):
+        if "PagerDuty" in took:
             said += " A note is on its PagerDuty incident."
+        # a Teams workflow's yes is that it took the request, not that it posted
+        if accepted := [who for who in took if who != "PagerDuty"]:
+            said += f" Accepted by {', '.join(accepted)}."
         await slack.post(channel, " ".join([said, *missed]), t.slack_ts)
 
     async def triage_separately(
@@ -1608,9 +1636,7 @@ def create_app(
                 text = f":pager: PagerDuty incident{number} is this alert group{link}"
                 await db["slack"].post(t.slack_channel, clean(text), t.slack_ts)
                 if t.kind != "question":  # its button may be new: the note has somewhere to go
-                    blocks = parent_blocks(
-                        t, buttons, client_channel(t), jira_project(t), bool(await noted(t))
-                    )
+                    blocks = await parent(t)
                     await db["slack"].update(t.slack_channel, t.slack_ts, parent_text(t), blocks)
             return {"status": "joined", "investigation": tid}
         return await accept(contract_id, pagerduty.group(found, listed))

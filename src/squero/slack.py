@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import httpx
@@ -252,24 +252,43 @@ def client_note(t: Investigation) -> str:
     return redact_capped(plain, TEXT_LIMIT)
 
 
+CONFIRM_TEXT = 300  # Slack's limit for a confirm dialog's text: over it, the message is refused
+GOES = "The Report, without Evidence, goes {}."
+
+
+def destinations(places: list[str], room: int) -> str:
+    """The places joined with "and", as many as fit in `room` characters, then how many
+    more: a dialog Slack refuses would take the whole message, its status with it."""
+    shown = list(places)
+    while True:
+        more = len(places) - len(shown)
+        said = " and ".join([*shown, *([f"{more} more"] if more else [])])
+        if len(said) <= room or len(shown) <= 1:
+            return said[:room]
+        shown.pop()
+
+
 def parent_blocks(
     t: Investigation,
     buttons: bool,
     client: str | None = None,
     jira: str | None = None,
     noted: bool = False,
+    channels: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
     """Always sent in full, so no stale buttons survive an update. Each button
     names its pause (the deadline): a late click can't decide a later pause.
     client: the Contract's client channel, for the Send to client button.
     jira: the Contract's Jira project, for the Create Jira issue button.
-    noted: the Client report also goes on its PagerDuty incident as a note (19.2)."""
-    where = " and ".join(
-        [
-            *([f"to the client channel {client}"] if client else []),
-            *(["on its PagerDuty incident as a note"] if noted else []),
-        ]
-    )
+    noted: the Client report also goes on its PagerDuty incident as a note (19.2).
+    channels: the Contract's Teams and Google Chat channels it also goes to, each by
+    its label (19.4): the dialog names every destination, since the click is the consent."""
+    places = [
+        *([f"to the client channel {client}"] if client else []),
+        *(["on its PagerDuty incident as a note"] if noted else []),
+        *(f"to {label}" for label in channels),
+    ]
+    where = destinations(places, CONFIRM_TEXT - len(GOES.format("")))
     blocks: list[dict[str, Any]] = [
         {"type": "section", "text": {"type": "mrkdwn", "text": parent_text(t)}}
     ]
@@ -284,7 +303,7 @@ def parent_blocks(
                 "title": {"type": "plain_text", "text": "Send to the client?"},
                 "text": {
                     "type": "plain_text",
-                    "text": f"The Report, without Evidence, goes {where}.",
+                    "text": GOES.format(where),
                 },
                 "confirm": {"type": "plain_text", "text": "Send"},
                 "deny": {"type": "plain_text", "text": "Cancel"},

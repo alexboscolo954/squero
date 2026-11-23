@@ -199,6 +199,8 @@ What stays with you:
 
 The client message never has buttons.
 
+The same press also reaches the client's other places, where the Contract has them: a note on its [PagerDuty](contracts.md#the-client-report-as-a-note) incident, and its [Teams and Google Chat channels](contracts.md#client-channels-teams-and-google-chat).
+
 **Read before you send.** Only the Evidence list is held back. The summary and root cause are the model's own words. They can still name a pod or quote a log line.
 
 A channel belongs to one Contract, as operator channel or client channel, never both.

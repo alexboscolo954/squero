@@ -638,6 +638,9 @@ def hub_logging() -> None:
         handler.setFormatter(logging.Formatter("%(levelname)s:     %(name)s %(message)s"))
         hub.addHandler(handler)
     hub.setLevel(logging.INFO)
+    # httpx's INFO line is every request's whole URL, and some hold a key (a webhook's, a
+    # chat space's, slices 19.3 and 19.4): never printed, whatever sets the root's level
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def main(argv: list[str] | None = None) -> int:

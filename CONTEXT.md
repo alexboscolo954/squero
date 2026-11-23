@@ -143,7 +143,9 @@ This file is the glossary. Each entry gives the term in bold, its definition, th
 **Report**: The structured result of a Triage or a failing Check: summary, Category, root cause, Evidence, Assessed severity and Recommendations.
 - _Avoid_: Triage (for the output)
 
-**Client report**: The copy of a Report that goes to the Contract's client channel, only when the Operator clicks to send it.
+**Client report**: The copy of a Report that goes to the Contract's client channels, only when the Operator clicks to send it.
+- A client channel is a place the client reads: the Contract's Slack client channel, a note on its PagerDuty incident, a Microsoft Teams channel or a Google Chat space.
+- One click sends it to all of them, once.
 - It holds the summary, root cause, Assessed severity, what is affected and the Recommendations.
 - It never holds Evidence, Executed actions, the Runbook used, or any approval control.
 - _Avoid_: Client delivery (for the message)

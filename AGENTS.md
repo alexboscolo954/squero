@@ -104,6 +104,8 @@ src/squero/
                    signature; an incident's alerts read; the Client report as a note.
   billing.py       Cloud bills (AWS Cost Explorer, Azure Cost Management, GCP's BigQuery
                    billing export) vs the estimate.
+  clientchannels.py  Client channels beside Slack (19.4): Teams and Google Chat get the Client
+                   report through their incoming webhooks, made safe, when the Operator sends it.
   webhooks.py      Outbound webhooks (19.3): what a Contract's Operator channel gets, as
                    signed JSON events to one URL; in order, retried, never blocking the Hub.
   evals.py         Scenario replay and scoring.

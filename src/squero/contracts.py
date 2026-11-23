@@ -327,9 +327,45 @@ class Webhook(Strict):
     signing_secret: str  # the HMAC key the receiver checks each event with
 
 
+class ClientChannel(Strict):
+    """A place the client reads, beside Slack (slice 19.4): a Microsoft Teams channel or
+    a Google Chat space, through the product's own incoming webhook. It gets the Client
+    report when the Operator sends it, and nothing else, ever. Its URL embeds a key: a
+    name in secrets.sops.yaml."""
+
+    kind: Literal["teams", "google_chat"]
+    url_secret: str
+
+    @property
+    def label(self) -> str:
+        """How the Operator is told of it: its product and its secret's name, never its URL."""
+        return f"{'Teams' if self.kind == 'teams' else 'Google Chat'} ({self.url_secret})"
+
+
+# A Google Chat space's incoming webhook: Google fixes its host and path, and its key and
+# token are in the query. A Teams workflow's host varies by tenant: any https URL.
+GOOGLE_CHAT = re.compile(
+    r"^https://chat\.googleapis\.com/v1/spaces/[A-Za-z0-9_-]+/messages\?[^\s#]*token=[^\s#]+$"
+)
+
+
+def client_channel_refusal(kind: str, url: str) -> str | None:
+    """Why a client channel's URL can't be used, never quoting it (it holds a key)."""
+    if kind == "google_chat" and not GOOGLE_CHAT.fullmatch(url.strip()):
+        return (
+            "its URL must be a Google Chat space's webhook: "
+            "https://chat.googleapis.com/v1/spaces/<space>/messages?key=...&token=..."
+        )
+    return webhook_refusal(url.strip())
+
+
 def webhook_refusal(url: str) -> str | None:
     """Why an Outbound webhook's URL can't be used, never quoting it (it may hold a key):
     https only, a host, and no user or password (httpx would send them as Basic auth)."""
+    # urlsplit drops a tab or a line break inside a URL (a long one wrapped in the
+    # secrets file); the HTTP client refuses one, after the load said it was fine
+    if re.search(r"[\s\x00-\x1f\x7f]", url.strip()):
+        return "its URL has a space or a line break in it"
     try:
         u = urlsplit(url)
         host, _ = u.hostname, u.port  # a port that isn't one raises here
@@ -1037,6 +1073,8 @@ class Contract(Strict):
     slack: Slack | None = None  # where the Operator follows this Contract's Investigations
     pagerduty: PagerDuty | None = None  # its incidents as Alert groups (slice 19.2)
     webhook: Webhook | None = None  # what its Operator channel gets, as events (slice 19.3)
+    # where the Client report goes beside Slack, when the Operator sends it (slice 19.4)
+    client_channels: list[ClientChannel] = []
     # The Hub's SQUERO_MODEL unless set; through the Hub's gateway and key (same prefix).
     model: str | None = None
     monthly_budget_usd: float | None = Field(None, gt=0)  # calendar month, UTC
@@ -1276,7 +1314,7 @@ class Contract(Strict):
         """Every `*_secret` field and every value of a `*_secrets` map, so a new
         integration's credentials are checked without being listed here."""
         refs: set[str] = set()
-        own = filter(None, [self.pagerduty, self.webhook])
+        own = filter(None, [self.pagerduty, self.webhook, *self.client_channels])
         for item in (*self.clusters, *self.integrations, *own):
             for field in type(item).model_fields:
                 value = getattr(item, field)
@@ -1323,6 +1361,7 @@ def load(directory: Path) -> dict[str, Contract]:
                 "one Contract's Alertmanager could post as another"
             )
     problems += _shared_signing(directory, contracts.values())
+    problems += _shared_client_channels(directory, contracts.values())
     by_channel: dict[str, list[str]] = defaultdict(list)
     for c in contracts.values():
         if c.slack:  # operator and client channels alike: a channel names one Contract
@@ -1363,6 +1402,23 @@ def _shared_signing(directory: Path, loaded: Any) -> list[str]:
         f"{directory}: {', '.join(ids)} share a PagerDuty signing secret; "
         "one Contract's PagerDuty could post as another"
         for ids in by_signing.values()
+        if len(ids) > 1
+    ]
+
+
+def _shared_client_channels(directory: Path, loaded: Any) -> list[str]:
+    """One Teams channel or Google Chat space in two Contracts (slice 19.4), or twice in
+    one: a client would get another's Client report, or its own twice."""
+    by_url: dict[str, list[str]] = defaultdict(list)
+    for c in loaded:
+        for channel in c.client_channels:
+            if c.has_secret(channel.url_secret):
+                url = c.secret(channel.url_secret).get_secret_value().strip()
+                by_url[token_hash(url)].append(c.id)
+    return [
+        f"{directory}: {', '.join(ids)} share a client channel's URL; "
+        "one channel per Contract, once"
+        for ids in by_url.values()
         if len(ids) > 1
     ]
 
@@ -1537,6 +1593,10 @@ def _load_one(path: Path) -> tuple[Contract, set[str]]:
         secrets = _decrypt(secrets_path)
     for name in sorted(contract.secret_refs() - secrets.keys()):
         problems.append(f"{path}: secret {name!r} is not in {SECRETS_FILE}")
+    for i, channel in enumerate(contract.client_channels):  # slice 19.4, as the webhook's
+        url = secrets.get(channel.url_secret)
+        if url is not None and (refusal := client_channel_refusal(channel.kind, url)):
+            problems.append(f"{path}: client_channels.{i}: {refusal}")
     hook = contract.webhook  # slice 19.3: its URL is a secret, so checked here, unquoted
     if hook and (refusal := webhook_refusal(secrets.get(hook.url_secret, "https://unset"))):
         problems.append(f"{path}: webhook: {refusal}")
